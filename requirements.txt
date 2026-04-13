@@ -28,6 +28,7 @@ duckduckgo-search>=6.0.0
 trafilatura>=1.12.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+lxml-html-clean>=0.1.0
 
 # JSON Repair
 json-repair>=0.30.0
