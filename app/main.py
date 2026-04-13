@@ -17,7 +17,7 @@ class DefaultUserMiddleware(BaseHTTPMiddleware):
         request.state.user = UserJwtPayload(
             userId="default_user",
             name="Default User",
-            email="user@techsensing.local",
+            email="user@techsensing.com",
         )
         return await call_next(request)
 

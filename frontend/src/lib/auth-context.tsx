@@ -9,7 +9,7 @@ interface AuthContextType {
 const defaultUser: User = {
   userId: 'default_user',
   name: 'Default User',
-  email: 'user@techsensing.local',
+  email: 'user@techsensing.com',
 };
 
 const AuthContext = createContext<AuthContextType>({
