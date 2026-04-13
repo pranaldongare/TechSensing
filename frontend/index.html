@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Knowledge Synthesis Platform</title>
+    <meta name="description" content="Knowledge Synthesis Platform" />
+    <meta name="author" content="Parth Katiyar" />
+
+    <meta property="og:title" content="Knowledge Synthesis Platform" />
+    <meta property="og:type" content="website" />
+    <script>
+      // Apply theme ASAP to avoid FOUC; default to dark
+      (function () {
+        try {
+          var stored = localStorage.getItem("theme");
+          var theme = stored === "light" || stored === "dark" ? stored : "dark";
+          var root = document.documentElement;
+          root.classList.remove("light", "dark");
+          root.classList.add(theme);
+        } catch (e) {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
