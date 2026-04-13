@@ -1,12 +1,25 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 import socketio
 
-from app.middlewares.auth import AuthMiddleware
+from app.middlewares.auth import UserJwtPayload
 from app.routes import sensing
 from app.socket_handler import cancel_all_heartbeats, sio
 
 fastapi_app = FastAPI(title="Tech Sensing Platform")
+
+
+# Default user middleware — no login required
+class DefaultUserMiddleware(BaseHTTPMiddleware):
+    """Injects a default user into every request so routes work without auth."""
+    async def dispatch(self, request: Request, call_next):
+        request.state.user = UserJwtPayload(
+            userId="default_user",
+            name="Default User",
+            email="user@techsensing.local",
+        )
+        return await call_next(request)
 
 
 @fastapi_app.on_event("startup")
@@ -20,12 +33,7 @@ async def shutdown_event():
     await cancel_all_heartbeats()
 
 
-excluded_routes = [("POST", "/user"), ("POST", "/user/login")]
-fastapi_app.add_middleware(
-    AuthMiddleware,
-    included_paths=["/sensing", "/user"],
-    excluded_routes=excluded_routes,
-)
+fastapi_app.add_middleware(DefaultUserMiddleware)
 
 fastapi_app.add_middleware(
     CORSMiddleware,

@@ -1,10 +1,6 @@
 import asyncio
 
-import jwt
 import socketio
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
-
-from core.config import settings
 
 active_connections = set()
 sio = socketio.AsyncServer(
@@ -20,18 +16,6 @@ heartbeat_tasks = {}
 @sio.event
 async def connect(sid, environ, auth=None):
     print(f"[WebSocket] Client connecting: {sid}")
-
-    token = (auth or {}).get("token") if isinstance(auth, dict) else None
-    if not token:
-        print(f"[WebSocket] Rejected {sid}: no auth token provided")
-        raise ConnectionRefusedError("Authentication required")
-
-    try:
-        jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-    except (ExpiredSignatureError, InvalidTokenError, Exception) as e:
-        print(f"[WebSocket] Rejected {sid}: invalid token — {e}")
-        raise ConnectionRefusedError("Invalid or expired token")
-
     active_connections.add(sid)
 
     async def send_heartbeat():
