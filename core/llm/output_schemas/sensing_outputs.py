@@ -58,24 +58,24 @@ class DocumentTopicExtraction(LLMOutputBase):
     refined_domain: str = Field(
         description=(
             "A refined domain description based on document content. "
-            "E.g., if user selected 'Generative AI' but document is about "
-            "'LLM-based code generation', refine to 'AI Code Generation'."
+            "E.g., if user selected 'Robotics' but document is about "
+            "'surgical robot arms', refine to 'Medical Robotics'."
         )
     )
     search_queries: List[str] = Field(
         description=(
             "5-10 DuckDuckGo search queries to find current web articles "
             "related to the document's key themes. Each should be a natural "
-            "language search query like 'retrieval augmented generation "
-            "enterprise adoption 2026'."
+            "language search query like 'autonomous mobile robots "
+            "warehouse logistics 2026'."
         )
     )
     technology_keywords: List[str] = Field(
         description=(
             "3-8 specific technology names, frameworks, or techniques "
             "mentioned or implied in the document. Used for arXiv, GitHub, "
-            "and patent searches. E.g., ['RAG', 'vector databases', "
-            "'LangChain', 'fine-tuning']."
+            "and patent searches. E.g., ['ROS 2', 'SLAM', "
+            "'sim-to-real transfer', 'inverse kinematics']."
         )
     )
     key_entities: List[str] = Field(

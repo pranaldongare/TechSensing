@@ -1045,7 +1045,7 @@ const TechSensing: React.FC = () => {
                         <Input
                           value={queryInput}
                           onChange={(e) => setQueryInput(e.target.value)}
-                          placeholder="e.g., LLM agents framework"
+                          placeholder="e.g., specific technology or framework"
                           className="text-sm"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && queryInput.trim()) {

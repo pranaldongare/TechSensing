@@ -250,7 +250,8 @@ async def generate_report(
 
     # ── Post-processing: dedup, recency, specificity ─────────────────
     filtered_radar, filtered_details = _postprocess_radar(
-        radar.radar_items, details.radar_item_details, classified_articles
+        radar.radar_items, details.radar_item_details, classified_articles,
+        domain=domain,
     )
     radar.radar_items = filtered_radar
     details = RadarDetailsOutput(radar_item_details=filtered_details)
@@ -282,39 +283,94 @@ async def generate_report(
 
 # ── Post-processing helpers ────────────────────────────────────────────
 
-# Generic/broad terms that should NOT be standalone radar items.
-# These are company names, product families, or overly broad categories.
-_GENERIC_BLOCKLIST = {
-    # Company / org names
+# ── Domain-aware blocklists ───────────────────────────────────────────
+# Company / org names that should NEVER be standalone radar items,
+# regardless of domain.  (The *specific technology* is fine — e.g.,
+# "NVIDIA Isaac Sim" is ok but "NVIDIA" alone is not.)
+_COMPANY_BLOCKLIST = {
     "openai", "google", "meta", "microsoft", "anthropic", "nvidia",
     "amazon", "apple", "ibm", "intel", "amd", "qualcomm", "tesla",
     "deepmind", "google deepmind", "hugging face", "huggingface",
     "stability ai", "mistral ai", "cohere", "databricks", "snowflake",
-    "salesforce",
-    # Broad product families (without version specifics)
-    "chatgpt", "gemini", "claude", "copilot", "alexa", "siri",
-    "gpt", "dall-e", "midjourney",
-    "aws", "azure", "gcp", "google cloud",
-    # Overly generic terms
-    "artificial intelligence", "machine learning", "deep learning",
-    "neural network", "neural networks", "large language model",
-    "large language models", "llm", "llms", "generative ai", "gen ai",
-    "ai", "ml",
+    "salesforce", "boston dynamics", "universal robots", "fanuc", "abb",
+    "coinbase", "binance",
 }
 
-# Technologies considered legacy — released/last major update > 6 months ago.
-# Not exhaustive; the LLM prompt handles most, this is a safety net.
-_LEGACY_BLOCKLIST = {
-    "gpt-2", "gpt-3", "gpt2", "gpt3", "bert", "roberta", "albert",
-    "t5", "word2vec", "glove", "elmo", "fasttext",
-    "gpt-3.5", "gpt-3.5-turbo", "gpt3.5",
-    "stable diffusion 1.5", "stable diffusion 2",
-    "dall-e 2", "dalle-2", "dalle 2",
-    "llama", "llama 2", "llama2",
-    "palm", "palm 2", "palm2",
-    "codex", "whisper",
-    "mapreduce", "hadoop",
+# Overly generic terms that are too broad in ANY domain.
+_UNIVERSAL_GENERIC = {
+    "technology", "innovation", "software", "hardware", "platform",
+    "framework", "ecosystem", "startup", "open source",
 }
+
+# Domain-specific generic terms and broad product families.
+# Only applied when the domain matches the key.
+_DOMAIN_GENERIC: dict[str, set[str]] = {
+    "ai": {
+        "chatgpt", "gemini", "claude", "copilot", "gpt", "dall-e", "midjourney",
+        "artificial intelligence", "machine learning", "deep learning",
+        "neural network", "neural networks", "large language model",
+        "large language models", "llm", "llms", "generative ai", "gen ai",
+        "ai", "ml",
+    },
+    "cloud": {
+        "aws", "azure", "gcp", "google cloud", "cloud computing", "cloud",
+        "serverless", "containers",
+    },
+    "blockchain": {
+        "cryptocurrency", "crypto", "blockchain", "web3", "defi",
+        "nft", "token",
+    },
+    "quantum": {
+        "quantum computing", "quantum", "qubit",
+    },
+    "cybersecurity": {
+        "cybersecurity", "security", "hacking", "malware",
+    },
+    "robotics": {
+        "robotics", "robot", "automation",
+    },
+}
+
+# Domain-specific legacy technologies.
+# Only applied when the domain matches the key.
+_DOMAIN_LEGACY: dict[str, set[str]] = {
+    "ai": {
+        "gpt-2", "gpt-3", "gpt2", "gpt3", "bert", "roberta", "albert",
+        "t5", "word2vec", "glove", "elmo", "fasttext",
+        "gpt-3.5", "gpt-3.5-turbo", "gpt3.5",
+        "stable diffusion 1.5", "stable diffusion 2",
+        "dall-e 2", "dalle-2", "dalle 2",
+        "llama", "llama 2", "llama2",
+        "palm", "palm 2", "palm2",
+        "codex", "whisper",
+    },
+    "cloud": {
+        "mapreduce", "hadoop", "mesos",
+    },
+    "blockchain": {
+        "ethereum 1.0", "bitcoin sv",
+    },
+}
+
+
+def _get_generic_blocklist(domain: str) -> set[str]:
+    """Build the effective generic blocklist for a given domain."""
+    blocklist = _COMPANY_BLOCKLIST | _UNIVERSAL_GENERIC
+    domain_lower = domain.lower()
+    for key, terms in _DOMAIN_GENERIC.items():
+        if key in domain_lower:
+            blocklist |= terms
+    return blocklist
+
+
+def _get_legacy_blocklist(domain: str) -> set[str]:
+    """Build the effective legacy blocklist for a given domain."""
+    legacy: set[str] = set()
+    domain_lower = domain.lower()
+    for key, terms in _DOMAIN_LEGACY.items():
+        if key in domain_lower:
+            legacy |= terms
+    return legacy
 
 _DEDUP_SIMILARITY_THRESHOLD = 0.80
 
@@ -335,22 +391,26 @@ def _is_duplicate(name_a: str, name_b: str) -> bool:
     return SequenceMatcher(None, na, nb).ratio() >= _DEDUP_SIMILARITY_THRESHOLD
 
 
-def _is_generic(name: str) -> bool:
+def _is_generic(name: str, blocklist: set[str]) -> bool:
     """Check if a radar item name is a generic/blocked term."""
-    return _normalize_name(name) in _GENERIC_BLOCKLIST
+    return _normalize_name(name) in blocklist
 
 
-def _is_legacy(name: str) -> bool:
+def _is_legacy(name: str, blocklist: set[str]) -> bool:
     """Check if a radar item name refers to a legacy technology."""
-    return _normalize_name(name) in _LEGACY_BLOCKLIST
+    return _normalize_name(name) in blocklist
 
 
-def _postprocess_radar(radar_items, radar_details, classified_articles):
+def _postprocess_radar(radar_items, radar_details, classified_articles,
+                       domain: str = ""):
     """
     Post-process radar items to remove duplicates, legacy tech, and generic items.
+    Uses domain-aware blocklists so non-AI domains aren't affected by AI-specific filters.
 
     Returns (filtered_radar_items, filtered_details).
     """
+    generic_blocklist = _get_generic_blocklist(domain)
+    legacy_blocklist = _get_legacy_blocklist(domain)
     # Build a details lookup by technology_name
     details_by_name = {d.technology_name: d for d in radar_details}
 
@@ -360,10 +420,10 @@ def _postprocess_radar(radar_items, radar_details, classified_articles):
     removed_legacy = []
 
     for item in radar_items:
-        if _is_generic(item.name):
+        if _is_generic(item.name, generic_blocklist):
             removed_generic.append(item.name)
             continue
-        if _is_legacy(item.name):
+        if _is_legacy(item.name, legacy_blocklist):
             removed_legacy.append(item.name)
             continue
         filtered.append(item)
