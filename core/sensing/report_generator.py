@@ -48,6 +48,9 @@ async def generate_report(
     article_content_map: dict[str, str] | None = None,
     key_people: list[str] | None = None,
     custom_quadrant_names: list[str] | None = None,
+    preset=None,
+    dynamic_generic_blocklist: set[str] | None = None,
+    dynamic_legacy_blocklist: set[str] | None = None,
 ) -> TechSensingReport:
     """
     Generate the complete Tech Sensing Report from classified articles.
@@ -83,7 +86,8 @@ async def generate_report(
     )
     logger.info(f"Articles JSON payload size: {len(articles_json)} chars")
 
-    preset = get_preset_for_domain(domain)
+    if preset is None:
+        preset = get_preset_for_domain(domain)
 
     # ── Phase 1: Core (executive summary, headline moves, key trends) ──
     core_prompt = sensing_report_core_prompt(
@@ -252,6 +256,8 @@ async def generate_report(
     filtered_radar, filtered_details = _postprocess_radar(
         radar.radar_items, details.radar_item_details, classified_articles,
         domain=domain,
+        dynamic_generic_blocklist=dynamic_generic_blocklist,
+        dynamic_legacy_blocklist=dynamic_legacy_blocklist,
     )
     radar.radar_items = filtered_radar
     details = RadarDetailsOutput(radar_item_details=filtered_details)
@@ -353,23 +359,31 @@ _DOMAIN_LEGACY: dict[str, set[str]] = {
 }
 
 
-def _get_generic_blocklist(domain: str) -> set[str]:
+def _get_generic_blocklist(
+    domain: str, dynamic_terms: set[str] | None = None,
+) -> set[str]:
     """Build the effective generic blocklist for a given domain."""
     blocklist = _COMPANY_BLOCKLIST | _UNIVERSAL_GENERIC
     domain_lower = domain.lower()
     for key, terms in _DOMAIN_GENERIC.items():
         if key in domain_lower:
             blocklist |= terms
+    if dynamic_terms:
+        blocklist |= {t.lower() for t in dynamic_terms}
     return blocklist
 
 
-def _get_legacy_blocklist(domain: str) -> set[str]:
+def _get_legacy_blocklist(
+    domain: str, dynamic_terms: set[str] | None = None,
+) -> set[str]:
     """Build the effective legacy blocklist for a given domain."""
     legacy: set[str] = set()
     domain_lower = domain.lower()
     for key, terms in _DOMAIN_LEGACY.items():
         if key in domain_lower:
             legacy |= terms
+    if dynamic_terms:
+        legacy |= {t.lower() for t in dynamic_terms}
     return legacy
 
 _DEDUP_SIMILARITY_THRESHOLD = 0.80
@@ -402,15 +416,17 @@ def _is_legacy(name: str, blocklist: set[str]) -> bool:
 
 
 def _postprocess_radar(radar_items, radar_details, classified_articles,
-                       domain: str = ""):
+                       domain: str = "",
+                       dynamic_generic_blocklist: set[str] | None = None,
+                       dynamic_legacy_blocklist: set[str] | None = None):
     """
     Post-process radar items to remove duplicates, legacy tech, and generic items.
     Uses domain-aware blocklists so non-AI domains aren't affected by AI-specific filters.
 
     Returns (filtered_radar_items, filtered_details).
     """
-    generic_blocklist = _get_generic_blocklist(domain)
-    legacy_blocklist = _get_legacy_blocklist(domain)
+    generic_blocklist = _get_generic_blocklist(domain, dynamic_generic_blocklist)
+    legacy_blocklist = _get_legacy_blocklist(domain, dynamic_legacy_blocklist)
     # Build a details lookup by technology_name
     details_by_name = {d.technology_name: d for d in radar_details}
 

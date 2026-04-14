@@ -95,6 +95,79 @@ class DocumentTopicExtraction(LLMOutputBase):
     )
 
 
+# --- Stage: Domain Intelligence ---
+
+
+class DomainIntelligence(LLMOutputBase):
+    """LLM-generated domain intelligence for configuring the sensing pipeline."""
+
+    domain_name: str = Field(
+        description="Canonical name for this domain."
+    )
+    domain_summary: str = Field(
+        description="2-3 sentence overview of the current state of this domain."
+    )
+    topic_categories: List[str] = Field(
+        description=(
+            "Exactly 5 domain-specific topic category definitions. Each should be "
+            "a string like 'Category Name: Brief description of what belongs here'."
+        )
+    )
+    industry_segments: List[str] = Field(
+        description=(
+            "Exactly 5 industry segment definitions. Each should be "
+            "a string like 'Segment Name: Key players and description'."
+        )
+    )
+    key_people: List[str] = Field(
+        description=(
+            "5-10 key people (researchers, executives, thought leaders) "
+            "currently influential in this domain. Full names only."
+        )
+    )
+    search_queries: List[str] = Field(
+        description=(
+            "10-15 targeted web search queries to find current news and "
+            "developments in this domain. Mix broad and specific queries."
+        )
+    )
+    rss_feed_urls: List[str] = Field(
+        description=(
+            "5-15 relevant RSS/Atom feed URLs for this domain. Include "
+            "arXiv category feeds, subreddits (.rss), tech news sites, "
+            "and official blogs. Only suggest URLs you are confident exist."
+        )
+    )
+    arxiv_categories: List[str] = Field(
+        default_factory=list,
+        description="1-5 relevant arXiv category codes (e.g., 'cs.AI', 'quant-ph').",
+    )
+    patent_keywords: List[str] = Field(
+        description=(
+            "5-10 formal patent-appropriate keyword phrases for USPTO/EPO search."
+        )
+    )
+    technology_keywords: List[str] = Field(
+        description=(
+            "10-20 specific technology names, frameworks, tools, techniques, "
+            "and methodologies to watch in this domain."
+        )
+    )
+    generic_terms_blocklist: List[str] = Field(
+        description=(
+            "10-20 terms that are too broad or generic to be standalone radar "
+            "items in this domain. Include the domain name itself, broad category "
+            "labels, and well-known product family names without version specifics."
+        )
+    )
+    legacy_terms_blocklist: List[str] = Field(
+        description=(
+            "5-15 outdated or superseded technologies in this domain that "
+            "should not appear as radar items."
+        )
+    )
+
+
 # --- Stage: Final report ---
 
 

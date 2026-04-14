@@ -605,3 +605,84 @@ def sensing_document_topic_extraction_prompt(
         },
     ]
     return contents
+
+
+def sensing_domain_intelligence_prompt(
+    domain: str,
+    existing_reference: str = "",
+    custom_requirements: str = "",
+) -> list[dict]:
+    """
+    Build a prompt to generate comprehensive domain intelligence for the
+    sensing pipeline.  When existing_reference is provided (JSON from a
+    previous run), the LLM should build upon it — keeping valid items,
+    adding new ones, and removing outdated ones.
+    """
+    existing_block = ""
+    if existing_reference:
+        existing_block = (
+            "\nEXISTING DOMAIN REFERENCE (from previous runs):\n"
+            f"{existing_reference}\n\n"
+            "INSTRUCTIONS FOR UPDATING:\n"
+            "- KEEP items that are still relevant and accurate.\n"
+            "- ADD new items that have emerged since the last update.\n"
+            "- REMOVE items that are outdated, superseded, or no longer relevant.\n"
+            "- UPDATE items where details have changed (e.g., new key people, "
+            "new technology versions).\n"
+            "- For RSS feeds and search queries, refresh to reflect current "
+            "developments and interests.\n"
+            "- For blocklists, add newly-generic or newly-legacy terms and remove "
+            "any that have regained specificity or relevance.\n\n"
+        )
+
+    requirements_block = ""
+    if custom_requirements:
+        requirements_block = (
+            f"\nADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n"
+        )
+
+    contents = [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology intelligence analyst. Your task is to "
+                f"generate comprehensive domain intelligence for the '{domain}' domain "
+                "to configure a technology sensing pipeline.\n\n"
+                "This intelligence will be used to:\n"
+                "1. Select RSS feeds and construct search queries for article discovery\n"
+                "2. Configure arXiv and patent searches\n"
+                "3. Define topic categories and industry segments for article classification\n"
+                "4. Identify key people to track\n"
+                "5. Build blocklists to filter out generic and legacy radar items\n\n"
+                "GUIDELINES:\n"
+                "- Be SPECIFIC and CURRENT. Prefer names, versions, and concrete terms "
+                "over vague descriptions.\n"
+                "- For RSS feeds, only suggest URLs you are confident actually exist "
+                "(major tech news sites, arXiv categories as http://arxiv.org/rss/CATEGORY, "
+                "popular subreddits as https://www.reddit.com/r/SUBREDDIT/.rss, "
+                "official company/project blogs). Prefer well-known, stable feed URLs.\n"
+                "- For search queries, write natural DuckDuckGo search queries that "
+                "would find recent news articles, blog posts, and announcements.\n"
+                "- For patent keywords, use formal technical language that appears in "
+                "patent titles and abstracts.\n"
+                "- For blocklists, think about what terms are too broad to be "
+                "useful radar items (generic terms) and what technologies have "
+                "been superseded (legacy terms).\n"
+                "- Topic categories should cover the major sub-areas of this domain "
+                "and be suitable for classifying news articles.\n"
+                "- Industry segments should identify the types of actors/organizations "
+                "active in this domain, with example companies or groups.\n\n"
+                + existing_block
+                + requirements_block
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"Generate comprehensive domain intelligence for: {domain}\n\n"
+                "Provide all requested fields with the specified counts. "
+                "Return ONLY valid JSON."
+            ),
+        },
+    ]
+    return contents

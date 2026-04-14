@@ -13,7 +13,8 @@ from typing import Callable, List, Optional
 
 from core.llm.output_schemas.sensing_outputs import TechSensingReport, TrendingVideoItem
 from core.sensing.classify import classify_articles
-from core.sensing.config import DEFAULT_DOMAIN, LOOKBACK_DAYS, get_preset_for_domain
+from core.sensing.config import DEFAULT_DOMAIN, GENERAL_RSS_FEEDS, LOOKBACK_DAYS, get_feeds_for_domain, get_search_queries_for_domain
+from core.sensing.domain_reference import StoredDomainReference, ensure_domain_reference, reference_to_preset
 from core.sensing.dedup import deduplicate_articles
 from core.sensing.ingest import (
     RawArticle,
@@ -87,12 +88,28 @@ async def run_sensing_pipeline(
         f"dont_include={dont_include}) =========="
     )
 
-    # Default key_people from domain preset when caller doesn't provide any
+    # --- Stage 0: Domain Intelligence ---
+    logger.info(f"[Stage 0] DOMAIN INTELLIGENCE — generating for '{domain}'... [{_elapsed()}]")
+    await _emit("domain_intel", 2, f"Analyzing domain: {domain}...")
+
+    domain_ref = await ensure_domain_reference(
+        domain=domain,
+        custom_requirements=custom_requirements,
+        progress_callback=progress_callback,
+    )
+    preset = reference_to_preset(domain_ref)
+
+    logger.info(
+        f"[Stage 0] DOMAIN INTELLIGENCE COMPLETE: run_count={domain_ref.run_count}, "
+        f"feeds={len(domain_ref.rss_feed_urls)}, queries={len(domain_ref.search_queries)}, "
+        f"key_people={len(domain_ref.key_people)} [{_elapsed()}]"
+    )
+
+    # Default key_people from dynamic domain reference
     if not key_people:
-        preset = get_preset_for_domain(domain)
-        if preset.key_people:
-            key_people = preset.key_people
-            logger.info(f"Using default key_people from preset: {key_people}")
+        if domain_ref.key_people:
+            key_people = list(domain_ref.key_people)
+            logger.info(f"Using dynamic key_people: {key_people}")
 
     # Build keyword filter instructions for prompts
     keyword_instructions = _build_keyword_instructions(
@@ -109,8 +126,9 @@ async def run_sensing_pipeline(
     # --- Stage 1: Ingest ---
     logger.info(f"[Stage 1/7] INGEST — starting RSS feeds... [{_elapsed()}]")
     await _emit("ingest", 10, "Fetching RSS feeds...")
+    effective_feeds = feed_urls or _merge_feeds(domain, domain_ref)
     rss_articles = await fetch_rss_feeds(
-        feed_urls, lookback_days=lookback_days, domain=domain
+        effective_feeds, lookback_days=lookback_days, domain=domain
     )
     logger.info(
         f"[Stage 1/7] RSS done: {len(rss_articles)} articles [{_elapsed()}]"
@@ -118,8 +136,9 @@ async def run_sensing_pipeline(
 
     await _emit("ingest", 18, "Searching DuckDuckGo...")
     logger.info(f"[Stage 1/7] INGEST — starting DuckDuckGo... [{_elapsed()}]")
+    effective_queries = search_queries or _merge_queries(domain, domain_ref, must_include)
     ddg_articles = await search_duckduckgo(
-        search_queries, domain,
+        effective_queries, domain,
         lookback_days=lookback_days,
         must_include=must_include,
     )
@@ -150,8 +169,9 @@ async def run_sensing_pipeline(
     # USPTO Patents (longer lookback since patents publish slowly)
     await _emit("ingest", 22, "Searching USPTO patents...")
     logger.info(f"[Stage 1/7] INGEST — starting patent search... [{_elapsed()}]")
+    effective_patent_kw = _merge_patent_keywords(domain_ref, must_include)
     patent_articles = await search_patents(
-        domain, lookback_days=max(lookback_days, 365), must_include=must_include,
+        domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw,
     )
     logger.info(f"[Stage 1/7] USPTO done: {len(patent_articles)} patents [{_elapsed()}]")
 
@@ -159,7 +179,7 @@ async def run_sensing_pipeline(
     await _emit("ingest", 23, "Searching EPO patents...")
     logger.info(f"[Stage 1/7] INGEST — starting EPO patent search... [{_elapsed()}]")
     epo_articles = await search_epo_patents(
-        domain, lookback_days=max(lookback_days, 365), must_include=must_include,
+        domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw,
     )
     logger.info(f"[Stage 1/7] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
 
@@ -248,6 +268,7 @@ async def run_sensing_pipeline(
         list(enriched), domain=domain, custom_requirements=full_requirements,
         key_people=key_people,
         custom_quadrant_names=custom_quadrant_names,
+        preset=preset,
     )
     await _emit("classify", 65, f"{len(classified)} articles classified")
     logger.info(
@@ -281,6 +302,9 @@ async def run_sensing_pipeline(
         article_content_map=url_content_map,
         key_people=key_people,
         custom_quadrant_names=custom_quadrant_names,
+        preset=preset,
+        dynamic_generic_blocklist=set(domain_ref.generic_terms_blocklist),
+        dynamic_legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(
@@ -439,6 +463,44 @@ async def run_sensing_pipeline(
     )
 
 
+def _merge_feeds(domain: str, ref: StoredDomainReference) -> list[str]:
+    """Merge general + dynamic + static domain feeds, deduped."""
+    feeds = list(GENERAL_RSS_FEEDS)
+    if ref.rss_feed_urls:
+        for url in ref.rss_feed_urls:
+            if url not in feeds:
+                feeds.append(url)
+    static_feeds = get_feeds_for_domain(domain)
+    for url in static_feeds:
+        if url not in feeds:
+            feeds.append(url)
+    return feeds
+
+
+def _merge_queries(
+    domain: str, ref: StoredDomainReference, must_include: list[str] | None,
+) -> list[str]:
+    """Merge dynamic + static search queries."""
+    queries = list(ref.search_queries) if ref.search_queries else []
+    static_queries = get_search_queries_for_domain(domain, must_include)
+    for q in static_queries:
+        if q not in queries:
+            queries.append(q)
+    return queries
+
+
+def _merge_patent_keywords(
+    ref: StoredDomainReference, must_include: list[str] | None,
+) -> list[str] | None:
+    """Merge dynamic patent keywords with user must_include."""
+    keywords = list(ref.patent_keywords) if ref.patent_keywords else []
+    if must_include:
+        for kw in must_include:
+            if kw not in keywords:
+                keywords.append(kw)
+    return keywords or must_include
+
+
 def _matches_exclusion(article: RawArticle, dont_lower: list[str]) -> bool:
     """Check if an article matches any exclusion keyword."""
     text = f"{article.title} {article.snippet} {article.content}".lower()
@@ -534,11 +596,27 @@ async def run_sensing_pipeline_from_document(
         f"(file={file_name}, domain={domain}, lookback={lookback_days}d) =========="
     )
 
-    # Default key_people from domain preset when caller doesn't provide any
+    # --- Stage 0: Domain Intelligence ---
+    logger.info(f"[Stage 0] DOMAIN INTELLIGENCE — generating for '{domain}'... [{_elapsed()}]")
+    await _emit("domain_intel", 2, f"Analyzing domain: {domain}...")
+
+    domain_ref = await ensure_domain_reference(
+        domain=domain,
+        custom_requirements=custom_requirements,
+        progress_callback=progress_callback,
+    )
+    preset = reference_to_preset(domain_ref)
+
+    logger.info(
+        f"[Stage 0] DOMAIN INTELLIGENCE COMPLETE: run_count={domain_ref.run_count}, "
+        f"feeds={len(domain_ref.rss_feed_urls)}, queries={len(domain_ref.search_queries)}, "
+        f"key_people={len(domain_ref.key_people)} [{_elapsed()}]"
+    )
+
+    # Default key_people from dynamic domain reference
     if not key_people:
-        preset = get_preset_for_domain(domain)
-        if preset.key_people:
-            key_people = preset.key_people
+        if domain_ref.key_people:
+            key_people = list(domain_ref.key_people)
 
     # --- Stage 1: Parse Document ---
     logger.info(
@@ -644,8 +722,9 @@ async def run_sensing_pipeline_from_document(
     logger.info(f"[Stage 4/9] WEB INGEST — starting... [{_elapsed()}]")
     await _emit("ingest", 18, "Fetching RSS feeds...")
 
+    effective_feeds = _merge_feeds(search_domain, domain_ref)
     rss_articles = await fetch_rss_feeds(
-        feed_urls=None,
+        feed_urls=effective_feeds,
         lookback_days=lookback_days,
         domain=search_domain,
     )
@@ -676,16 +755,17 @@ async def run_sensing_pipeline_from_document(
     logger.info(f"[Stage 4/9] HN done: {len(hn_articles)} stories [{_elapsed()}]")
 
     await _emit("ingest", 26, "Searching USPTO patents...")
+    effective_patent_kw = _merge_patent_keywords(domain_ref, effective_must_include or None)
     patent_articles = await search_patents(
         search_domain, lookback_days=max(lookback_days, 365),
-        must_include=effective_must_include or None,
+        must_include=effective_patent_kw,
     )
     logger.info(f"[Stage 4/9] USPTO done: {len(patent_articles)} patents [{_elapsed()}]")
 
     await _emit("ingest", 28, "Searching EPO patents...")
     epo_articles = await search_epo_patents(
         search_domain, lookback_days=max(lookback_days, 365),
-        must_include=effective_must_include or None,
+        must_include=effective_patent_kw,
     )
     logger.info(f"[Stage 4/9] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
 
@@ -771,6 +851,7 @@ async def run_sensing_pipeline_from_document(
         list(enriched), domain=domain, custom_requirements=full_requirements,
         key_people=effective_key_people or None,
         custom_quadrant_names=custom_quadrant_names,
+        preset=preset,
     )
     await _emit("classify", 65, f"{len(classified)} articles classified")
     logger.info(
@@ -807,6 +888,9 @@ async def run_sensing_pipeline_from_document(
         article_content_map=url_content_map,
         key_people=effective_key_people or None,
         custom_quadrant_names=custom_quadrant_names,
+        preset=preset,
+        dynamic_generic_blocklist=set(domain_ref.generic_terms_blocklist),
+        dynamic_legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(f"[Stage 8/9] REPORT COMPLETE [{_elapsed()}]")

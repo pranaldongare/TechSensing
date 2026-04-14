@@ -26,6 +26,7 @@ async def classify_articles(
     custom_requirements: str = "",
     key_people: list[str] | None = None,
     custom_quadrant_names: list[str] | None = None,
+    preset=None,
 ) -> List[ClassifiedArticle]:
     """
     Classify articles into Technology Radar quadrants/rings via LLM.
@@ -51,7 +52,8 @@ async def classify_articles(
 
     total_batches = (len(uncached_articles) + ARTICLE_BATCH_SIZE - 1) // ARTICLE_BATCH_SIZE if uncached_articles else 0
 
-    preset = get_preset_for_domain(domain)
+    if preset is None:
+        preset = get_preset_for_domain(domain)
 
     for i in range(0, len(uncached_articles), ARTICLE_BATCH_SIZE):
         batch_num = i // ARTICLE_BATCH_SIZE + 1
