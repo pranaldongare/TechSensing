@@ -29,6 +29,7 @@ from core.sensing.sources.arxiv_search import fetch_arxiv_papers
 from core.sensing.sources.github_trending import fetch_github_trending
 from core.sensing.sources.hackernews import fetch_hackernews
 from core.sensing.sources.epo_patent_search import search_epo_patents
+from core.sensing.sources.google_patent_search import search_google_patents
 from core.sensing.sources.patent_search import search_patents
 from core.sensing.sources.youtube_videos import fetch_youtube_videos
 from core.sensing.verifier import verify_report
@@ -183,17 +184,25 @@ async def run_sensing_pipeline(
     )
     logger.info(f"[Stage 1/7] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
 
+    # Google Patents (via Tavily — broadest coverage)
+    await _emit("ingest", 24, "Searching Google Patents...")
+    logger.info(f"[Stage 1/7] INGEST — starting Google Patents search... [{_elapsed()}]")
+    google_patent_articles = await search_google_patents(
+        domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw,
+    )
+    logger.info(f"[Stage 1/7] Google Patents done: {len(google_patent_articles)} patents [{_elapsed()}]")
+
     all_raw = (
         rss_articles + ddg_articles + github_articles + arxiv_articles
-        + hn_articles + patent_articles + epo_articles
+        + hn_articles + patent_articles + epo_articles + google_patent_articles
     )
-    await _emit("ingest", 24, f"Found {len(all_raw)} raw articles from 7 sources")
+    await _emit("ingest", 25, f"Found {len(all_raw)} raw articles from 8 sources")
     logger.info(
         f"[Stage 1/7] INGEST COMPLETE: {len(all_raw)} total raw articles "
         f"(RSS={len(rss_articles)}, DDG={len(ddg_articles)}, "
         f"GitHub={len(github_articles)}, arXiv={len(arxiv_articles)}, "
         f"HN={len(hn_articles)}, USPTO={len(patent_articles)}, "
-        f"EPO={len(epo_articles)}) [{_elapsed()}]"
+        f"EPO={len(epo_articles)}, GooglePat={len(google_patent_articles)}) [{_elapsed()}]"
     )
 
     # --- Stage 2: Dedup ---
@@ -464,16 +473,33 @@ async def run_sensing_pipeline(
 
 
 def _merge_feeds(domain: str, ref: StoredDomainReference) -> list[str]:
-    """Merge general + dynamic + static domain feeds, deduped."""
-    feeds = list(GENERAL_RSS_FEEDS)
+    """Merge dynamic + static domain feeds, deduped.
+
+    General tech feeds (TechCrunch, VentureBeat, etc.) are only included when
+    the domain reference has few domain-specific feeds.  For specialized topics
+    the general feeds bring too much off-topic noise (especially GenAI content).
+    """
+    feeds: list[str] = []
+
+    # Start with dynamic LLM-generated feeds (most domain-relevant)
     if ref.rss_feed_urls:
-        for url in ref.rss_feed_urls:
-            if url not in feeds:
-                feeds.append(url)
+        feeds.extend(ref.rss_feed_urls)
+
+    # Add static domain-specific feeds
     static_feeds = get_feeds_for_domain(domain)
     for url in static_feeds:
         if url not in feeds:
             feeds.append(url)
+
+    # Only include general tech feeds if we have very few domain-specific feeds.
+    # For specialized domains the general feeds drown out domain content with
+    # unrelated GenAI / big-tech noise.
+    domain_specific_count = len(feeds)
+    if domain_specific_count < 5:
+        for url in GENERAL_RSS_FEEDS:
+            if url not in feeds:
+                feeds.append(url)
+
     return feeds
 
 
@@ -718,7 +744,7 @@ async def run_sensing_pipeline_from_document(
         f"[Stage 3/9] SPLIT COMPLETE: {len(pseudo_articles)} pseudo-articles [{_elapsed()}]"
     )
 
-    # --- Stage 4: Web Ingest (all 7 sources, driven by extracted topics) ---
+    # --- Stage 4: Web Ingest (all 8 sources, driven by extracted topics) ---
     logger.info(f"[Stage 4/9] WEB INGEST — starting... [{_elapsed()}]")
     await _emit("ingest", 18, "Fetching RSS feeds...")
 
@@ -769,9 +795,16 @@ async def run_sensing_pipeline_from_document(
     )
     logger.info(f"[Stage 4/9] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
 
+    await _emit("ingest", 29, "Searching Google Patents...")
+    google_patent_articles = await search_google_patents(
+        search_domain, lookback_days=max(lookback_days, 365),
+        must_include=effective_patent_kw,
+    )
+    logger.info(f"[Stage 4/9] Google Patents done: {len(google_patent_articles)} patents [{_elapsed()}]")
+
     all_web = (
         rss_articles + ddg_articles + github_articles + arxiv_articles
-        + hn_articles + patent_articles + epo_articles
+        + hn_articles + patent_articles + epo_articles + google_patent_articles
     )
     all_raw = pseudo_articles + all_web
 

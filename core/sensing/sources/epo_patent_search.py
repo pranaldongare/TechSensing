@@ -81,12 +81,14 @@ def _build_cql_query(
     # Collect keywords
     keywords = [domain]
     if must_include:
-        keywords.extend(must_include[:3])
+        keywords.extend(must_include[:5])
 
-    # Each keyword → search in title OR abstract
+    # Each keyword → word-level search in title OR abstract
+    # Use "all" operator for multi-word terms (AND of all words)
+    # instead of exact-phrase matching which is too restrictive
     text_parts = []
     for kw in keywords:
-        text_parts.append(f'(ti="{kw}" OR ab="{kw}")')
+        text_parts.append(f'(ti all "{kw}" OR ab all "{kw}")')
 
     # Any keyword match + date filter
     text_query = " OR ".join(text_parts)

@@ -31,7 +31,7 @@ def _quadrant_definitions_block(custom_quadrant_names: list[str] | None = None) 
 
 def sensing_classify_prompt(
     articles_text: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
     custom_requirements: str = "",
     key_people: list[str] | None = None,
     topic_categories_text: str = "",
@@ -74,6 +74,17 @@ def sensing_classify_prompt(
                 "5. A short technology name for the radar blip\n"
                 "6. Topic category\n"
                 "7. Industry segment\n\n"
+                f"DOMAIN FOCUS — CRITICAL:\n"
+                f"This report is EXCLUSIVELY about '{domain}'. Apply these rules strictly:\n"
+                f"- An article is relevant ONLY if its PRIMARY subject is '{domain}' "
+                "or a specific sub-topic/technology within that domain.\n"
+                "- Articles about OTHER technology domains (e.g., general AI/LLM news, "
+                "cryptocurrency, cloud infrastructure, cybersecurity) that merely MENTION "
+                f"'{domain}' in passing should receive relevance_score < 0.2.\n"
+                "- An article about a big-tech company's strategy is NOT relevant unless "
+                f"it specifically discusses their work on '{domain}' technologies.\n"
+                "- When in doubt, prefer EXCLUDING over INCLUDING. It is better to have "
+                "a focused report with fewer items than a diluted report with off-topic noise.\n\n"
                 + _quadrant_definitions_block(custom_quadrant_names)
                 + "RING DEFINITIONS:\n"
                 "- Adopt: Proven technology, recommend for wide use\n"
@@ -105,9 +116,10 @@ def sensing_classify_prompt(
             "role": "user",
             "parts": (
                 f"ARTICLES TO CLASSIFY:\n\n{articles_text}\n\n"
-                "Classify each relevant article above. The articles array in your "
-                "response MUST contain classified entries — do NOT return an empty "
-                "array. Return ONLY valid JSON."
+                f"Classify each article that is DIRECTLY relevant to '{domain}'. "
+                "Exclude articles about other technology domains even if they are interesting. "
+                "The articles array in your response MUST contain classified entries — "
+                "do NOT return an empty array. Return ONLY valid JSON."
             ),
         },
     ]
@@ -116,7 +128,7 @@ def sensing_classify_prompt(
 
 def sensing_report_core_prompt(
     classified_articles_json: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
     date_range: str = "",
     custom_requirements: str = "",
     org_context: str = "",
@@ -143,9 +155,14 @@ def sensing_report_core_prompt(
             "role": "system",
             "parts": (
                 "You are a senior technology strategist creating a weekly "
-                f"Tech Sensing Report for the {domain} domain.\n\n"
+                f"Tech Sensing Report EXCLUSIVELY for the '{domain}' domain.\n\n"
                 "Based on the classified articles provided, generate the CORE "
                 "of the report: the executive summary, headline moves, and key trends.\n\n"
+                f"DOMAIN FOCUS: Every item in this report must be directly about '{domain}'. "
+                "Do NOT include developments from other technology domains (e.g., general AI/LLM "
+                "news, cryptocurrency, cloud platforms) unless they specifically involve "
+                f"'{domain}' technologies. When an article covers multiple domains, only "
+                f"discuss the aspects relevant to '{domain}'.\n\n"
                 + industry_segments_text + "\n"
                 + people_block
                 + "SECTION GUIDELINES:\n"
@@ -194,7 +211,7 @@ def sensing_report_core_prompt(
 def sensing_report_radar_prompt(
     classified_articles_json: str,
     core_context_json: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
     date_range: str = "",
     custom_quadrant_names: list[str] | None = None,
 ) -> list[dict]:
@@ -208,11 +225,15 @@ def sensing_report_radar_prompt(
             "role": "system",
             "parts": (
                 "You are a senior technology strategist building the Technology Radar "
-                f"for a weekly Tech Sensing Report on the {domain} domain.\n\n"
+                f"for a weekly Tech Sensing Report EXCLUSIVELY on the '{domain}' domain.\n\n"
                 "Phase 1 (executive summary, headline moves, key trends) has already "
                 "been generated. You will now generate the technology radar entries.\n\n"
                 "Use the Phase 1 context to ensure your radar items align with the "
                 "identified trends and headline moves.\n\n"
+                f"DOMAIN FOCUS: Every radar item must be a technology SPECIFIC to '{domain}'. "
+                "Do NOT include technologies from other domains (e.g., general-purpose LLMs, "
+                "cloud platforms, cryptocurrency tools) unless they are specifically designed "
+                f"for or significantly adapted to '{domain}' use cases.\n\n"
                 "RADAR GUIDELINES:\n"
                 "- 10-20 distinct technologies/techniques — STRICTLY consolidate duplicates.\n"
                 "- Each entry: name, quadrant ("
@@ -281,7 +302,7 @@ def sensing_report_insights_prompt(
     classified_articles_json: str,
     core_context_json: str,
     radar_context_json: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
     date_range: str = "",
     custom_requirements: str = "",
     key_people: list[str] | None = None,
@@ -307,12 +328,14 @@ def sensing_report_insights_prompt(
             "role": "system",
             "parts": (
                 "You are a senior technology strategist continuing a weekly "
-                f"Tech Sensing Report for the {domain} domain.\n\n"
+                f"Tech Sensing Report EXCLUSIVELY for the '{domain}' domain.\n\n"
                 "Phase 1 (executive summary, headline moves, key trends) and "
                 "Phase 2 (technology radar items) have already been generated. "
                 "You will now generate: market signals, deep-dive report sections, "
                 "recommendations, and notable articles.\n\n"
                 "Use the Phase 1 and Phase 2 context to ensure consistency.\n\n"
+                f"DOMAIN FOCUS: All content must be directly relevant to '{domain}'. "
+                "Exclude market signals and recommendations about other technology domains.\n\n"
                 + industry_segments_text + "\n"
                 + people_block
                 + "SECTION GUIDELINES:\n"
@@ -363,7 +386,7 @@ def sensing_report_insights_prompt(
 def sensing_details_prompt(
     radar_items_json: str,
     classified_articles_json: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
 ) -> list[dict]:
     """
     Build a chat prompt to generate detailed write-ups for each radar item.
@@ -428,7 +451,7 @@ def sensing_details_prompt(
 def sensing_relationship_prompt(
     radar_items_json: str,
     classified_articles_json: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
 ) -> list[dict]:
     """
     Build a prompt to extract technology relationships and clusters
@@ -549,7 +572,7 @@ def sensing_deep_dive_followup_prompt(
 
 def sensing_document_topic_extraction_prompt(
     document_text: str,
-    domain: str = "Generative AI",
+    domain: str = "Technology",
     custom_requirements: str = "",
 ) -> list[dict]:
     """

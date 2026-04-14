@@ -41,7 +41,7 @@ logger = logging.getLogger("sensing.report")
 
 async def generate_report(
     classified_articles: List[ClassifiedArticle],
-    domain: str = "Generative AI",
+    domain: str = "Technology",
     date_range: str = "",
     custom_requirements: str = "",
     org_context: str = "",
