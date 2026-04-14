@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import List
 
@@ -209,6 +210,8 @@ async def generate_report(
     )
 
     all_details = []
+    seen_detail_names: set[str] = set()  # Track across batches to prevent duplicates
+
     for batch_idx, batch in enumerate(batches, 1):
         batch_json = json.dumps(
             [
@@ -238,7 +241,19 @@ async def generate_report(
         )
 
         batch_details = RadarDetailsOutput.model_validate(batch_result)
-        all_details.extend(batch_details.radar_item_details)
+
+        # Cross-batch dedup: skip details we've already seen
+        for detail in batch_details.radar_item_details:
+            norm_name = _normalize_name(detail.technology_name)
+            if norm_name in seen_detail_names:
+                logger.info(
+                    f"[Phase 4/4] Skipping cross-batch duplicate detail: "
+                    f"{detail.technology_name}"
+                )
+                continue
+            seen_detail_names.add(norm_name)
+            all_details.append(detail)
+
         logger.info(
             f"[Phase 4/4] Batch {batch_idx}/{len(batches)} done — "
             f"{len(batch_details.radar_item_details)} details"
@@ -341,14 +356,26 @@ _DOMAIN_GENERIC: dict[str, set[str]] = {
 # Only applied when the domain matches the key.
 _DOMAIN_LEGACY: dict[str, set[str]] = {
     "ai": {
-        "gpt-2", "gpt-3", "gpt2", "gpt3", "bert", "roberta", "albert",
-        "t5", "word2vec", "glove", "elmo", "fasttext",
+        # Very old models
+        "word2vec", "glove", "elmo", "fasttext",
+        "bert", "roberta", "albert", "t5",
+        # GPT legacy
+        "gpt-2", "gpt-3", "gpt2", "gpt3",
         "gpt-3.5", "gpt-3.5-turbo", "gpt3.5",
-        "stable diffusion 1.5", "stable diffusion 2",
+        "codex", "davinci", "text-davinci-003",
+        # Superseded image models
+        "stable diffusion 1.5", "stable diffusion 2", "stable diffusion 3",
+        "stable diffusion 3.5",
         "dall-e 2", "dalle-2", "dalle 2",
+        "midjourney v4", "midjourney v5",
+        # Superseded LLMs
         "llama", "llama 2", "llama2",
         "palm", "palm 2", "palm2",
-        "codex", "whisper",
+        "claude 2", "claude 2.1", "claude instant",
+        "claude sonnet 3.5", "claude sonnet 4", "claude sonnet 4.5",
+        "gemini 1.0", "gemini 1.5",
+        "gpt-4", "gpt4",
+        "whisper",
     },
     "cloud": {
         "mapreduce", "hadoop", "mesos",
@@ -386,7 +413,7 @@ def _get_legacy_blocklist(
         legacy |= {t.lower() for t in dynamic_terms}
     return legacy
 
-_DEDUP_SIMILARITY_THRESHOLD = 0.80
+_DEDUP_SIMILARITY_THRESHOLD = 0.75
 
 
 def _normalize_name(name: str) -> str:
@@ -402,6 +429,14 @@ def _is_duplicate(name_a: str, name_b: str) -> bool:
     # One is a substring of the other (e.g., "GPT-4" in "GPT-4o")
     if na in nb or nb in na:
         return True
+    # Word-overlap check: if two names share >70% of their words, likely duplicate
+    # Catches "Vision Language Action Model" vs "Vision-Language-Action Models"
+    words_a, words_b = set(na.split()), set(nb.split())
+    if words_a and words_b:
+        overlap = len(words_a & words_b)
+        smaller = min(len(words_a), len(words_b))
+        if smaller > 0 and overlap / smaller >= 0.7:
+            return True
     return SequenceMatcher(None, na, nb).ratio() >= _DEDUP_SIMILARITY_THRESHOLD
 
 
@@ -415,20 +450,52 @@ def _is_legacy(name: str, blocklist: set[str]) -> bool:
     return _normalize_name(name) in blocklist
 
 
+def _most_recent_mention(
+    tech_name: str, classified_articles: list,
+) -> str | None:
+    """Find the most recent published_date for articles mentioning a technology."""
+    norm = _normalize_name(tech_name)
+    best_date: str | None = None
+    for article in classified_articles:
+        article_norm = _normalize_name(article.technology_name)
+        # Match if the classified article's technology is the same or contains it
+        text = f"{article.title} {article.summary}".lower()
+        if article_norm == norm or norm in text:
+            if article.published_date and (best_date is None or article.published_date > best_date):
+                best_date = article.published_date
+    return best_date
+
+
+def _is_stale(tech_name: str, classified_articles: list, cutoff_days: int = 180) -> bool:
+    """Check if a technology's most recent mention is older than cutoff_days."""
+    latest = _most_recent_mention(tech_name, classified_articles)
+    if not latest:
+        return False  # No date info — don't filter
+    try:
+        # Handle common date formats: "2024-10-15", "2024-10-15T12:00:00Z", etc.
+        date_str = latest[:10]  # Take YYYY-MM-DD portion
+        pub_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+        return pub_date < cutoff
+    except (ValueError, IndexError):
+        return False  # Unparseable date — don't filter
+
+
 def _postprocess_radar(radar_items, radar_details, classified_articles,
                        domain: str = "",
                        dynamic_generic_blocklist: set[str] | None = None,
                        dynamic_legacy_blocklist: set[str] | None = None):
     """
-    Post-process radar items to remove duplicates, legacy tech, and generic items.
+    Post-process radar items to remove duplicates, legacy tech, generic items,
+    and stale technologies.
+
     Uses domain-aware blocklists so non-AI domains aren't affected by AI-specific filters.
+    Also performs programmatic recency checks using article publication dates.
 
     Returns (filtered_radar_items, filtered_details).
     """
     generic_blocklist = _get_generic_blocklist(domain, dynamic_generic_blocklist)
     legacy_blocklist = _get_legacy_blocklist(domain, dynamic_legacy_blocklist)
-    # Build a details lookup by technology_name
-    details_by_name = {d.technology_name: d for d in radar_details}
 
     # Step 1: Remove generic and legacy items
     filtered = []
@@ -449,11 +516,25 @@ def _postprocess_radar(radar_items, radar_details, classified_articles,
     if removed_legacy:
         logger.info(f"Removed legacy radar items: {removed_legacy}")
 
-    # Step 2: Deduplicate — keep the one with higher signal_strength
+    # Step 2: Recency filter — remove items whose most recent article mention
+    # is older than 180 days (programmatic enforcement, not just LLM discretion)
+    recency_filtered = []
+    removed_stale = []
+
+    for item in filtered:
+        if _is_stale(item.name, classified_articles, cutoff_days=180):
+            removed_stale.append(item.name)
+            continue
+        recency_filtered.append(item)
+
+    if removed_stale:
+        logger.info(f"Removed stale radar items (>180 days old): {removed_stale}")
+
+    # Step 3: Deduplicate — keep the one with higher signal_strength
     deduped = []
     removed_dupes = []
 
-    for item in filtered:
+    for item in recency_filtered:
         duplicate_found = False
         for existing in deduped:
             if _is_duplicate(item.name, existing.name):
@@ -472,10 +553,22 @@ def _postprocess_radar(radar_items, radar_details, classified_articles,
     if removed_dupes:
         logger.info(f"Removed duplicate radar items: {removed_dupes}")
 
-    # Step 3: Filter details to match surviving radar items
-    surviving_names = {item.name for item in deduped}
-    filtered_details = [
-        d for d in radar_details if d.technology_name in surviving_names
-    ]
+    # Step 4: Filter details to match surviving radar items
+    # Use normalized names for matching to handle whitespace/case differences
+    surviving_norm_to_name = {_normalize_name(item.name): item.name for item in deduped}
+    surviving_names = set(surviving_norm_to_name.values())
+
+    # Deduplicate details themselves (cross-batch duplicates)
+    seen_detail_names: set[str] = set()
+    filtered_details = []
+    for d in radar_details:
+        norm = _normalize_name(d.technology_name)
+        # Match via normalized name or exact name
+        if d.technology_name in surviving_names or norm in surviving_norm_to_name:
+            if norm not in seen_detail_names:
+                seen_detail_names.add(norm)
+                filtered_details.append(d)
+            else:
+                logger.debug(f"Removed duplicate detail: {d.technology_name}")
 
     return deduped, filtered_details
