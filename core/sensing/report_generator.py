@@ -13,7 +13,9 @@ The four phases are merged into the final TechSensingReport.
 
 import json
 import logging
+import re
 import time
+from difflib import SequenceMatcher
 from typing import List
 
 from core.constants import GPU_SENSING_REPORT_LLM
@@ -246,6 +248,18 @@ async def generate_report(
         f"{len(details.radar_item_details)} detail entries across {len(batches)} batches"
     )
 
+    # ── Post-processing: dedup, recency, specificity ─────────────────
+    filtered_radar, filtered_details = _postprocess_radar(
+        radar.radar_items, details.radar_item_details, classified_articles
+    )
+    radar.radar_items = filtered_radar
+    details = RadarDetailsOutput(radar_item_details=filtered_details)
+
+    logger.info(
+        f"Post-processing: {len(all_radar_items)} -> {len(filtered_radar)} radar items "
+        f"after dedup/recency/specificity filtering"
+    )
+
     # ── Merge into final report ────────────────────────────────────────
     report = TechSensingReport(
         **core.model_dump(),
@@ -264,3 +278,128 @@ async def generate_report(
     )
 
     return report
+
+
+# ── Post-processing helpers ────────────────────────────────────────────
+
+# Generic/broad terms that should NOT be standalone radar items.
+# These are company names, product families, or overly broad categories.
+_GENERIC_BLOCKLIST = {
+    # Company / org names
+    "openai", "google", "meta", "microsoft", "anthropic", "nvidia",
+    "amazon", "apple", "ibm", "intel", "amd", "qualcomm", "tesla",
+    "deepmind", "google deepmind", "hugging face", "huggingface",
+    "stability ai", "mistral ai", "cohere", "databricks", "snowflake",
+    "salesforce",
+    # Broad product families (without version specifics)
+    "chatgpt", "gemini", "claude", "copilot", "alexa", "siri",
+    "gpt", "dall-e", "midjourney",
+    "aws", "azure", "gcp", "google cloud",
+    # Overly generic terms
+    "artificial intelligence", "machine learning", "deep learning",
+    "neural network", "neural networks", "large language model",
+    "large language models", "llm", "llms", "generative ai", "gen ai",
+    "ai", "ml",
+}
+
+# Technologies considered legacy — released/last major update > 6 months ago.
+# Not exhaustive; the LLM prompt handles most, this is a safety net.
+_LEGACY_BLOCKLIST = {
+    "gpt-2", "gpt-3", "gpt2", "gpt3", "bert", "roberta", "albert",
+    "t5", "word2vec", "glove", "elmo", "fasttext",
+    "gpt-3.5", "gpt-3.5-turbo", "gpt3.5",
+    "stable diffusion 1.5", "stable diffusion 2",
+    "dall-e 2", "dalle-2", "dalle 2",
+    "llama", "llama 2", "llama2",
+    "palm", "palm 2", "palm2",
+    "codex", "whisper",
+    "mapreduce", "hadoop",
+}
+
+_DEDUP_SIMILARITY_THRESHOLD = 0.80
+
+
+def _normalize_name(name: str) -> str:
+    """Lowercase and strip whitespace/punctuation for comparison."""
+    return re.sub(r"[^a-z0-9 .]", "", name.lower()).strip()
+
+
+def _is_duplicate(name_a: str, name_b: str) -> bool:
+    """Check if two radar item names are duplicates (fuzzy match)."""
+    na, nb = _normalize_name(name_a), _normalize_name(name_b)
+    if na == nb:
+        return True
+    # One is a substring of the other (e.g., "GPT-4" in "GPT-4o")
+    if na in nb or nb in na:
+        return True
+    return SequenceMatcher(None, na, nb).ratio() >= _DEDUP_SIMILARITY_THRESHOLD
+
+
+def _is_generic(name: str) -> bool:
+    """Check if a radar item name is a generic/blocked term."""
+    return _normalize_name(name) in _GENERIC_BLOCKLIST
+
+
+def _is_legacy(name: str) -> bool:
+    """Check if a radar item name refers to a legacy technology."""
+    return _normalize_name(name) in _LEGACY_BLOCKLIST
+
+
+def _postprocess_radar(radar_items, radar_details, classified_articles):
+    """
+    Post-process radar items to remove duplicates, legacy tech, and generic items.
+
+    Returns (filtered_radar_items, filtered_details).
+    """
+    # Build a details lookup by technology_name
+    details_by_name = {d.technology_name: d for d in radar_details}
+
+    # Step 1: Remove generic and legacy items
+    filtered = []
+    removed_generic = []
+    removed_legacy = []
+
+    for item in radar_items:
+        if _is_generic(item.name):
+            removed_generic.append(item.name)
+            continue
+        if _is_legacy(item.name):
+            removed_legacy.append(item.name)
+            continue
+        filtered.append(item)
+
+    if removed_generic:
+        logger.info(f"Removed generic radar items: {removed_generic}")
+    if removed_legacy:
+        logger.info(f"Removed legacy radar items: {removed_legacy}")
+
+    # Step 2: Deduplicate — keep the one with higher signal_strength
+    deduped = []
+    removed_dupes = []
+
+    for item in filtered:
+        duplicate_found = False
+        for existing in deduped:
+            if _is_duplicate(item.name, existing.name):
+                # Keep whichever has higher signal_strength
+                if item.signal_strength > existing.signal_strength:
+                    removed_dupes.append(existing.name)
+                    deduped.remove(existing)
+                    deduped.append(item)
+                else:
+                    removed_dupes.append(item.name)
+                duplicate_found = True
+                break
+        if not duplicate_found:
+            deduped.append(item)
+
+    if removed_dupes:
+        logger.info(f"Removed duplicate radar items: {removed_dupes}")
+
+    # Step 3: Filter details to match surviving radar items
+    surviving_names = {item.name for item in deduped}
+    filtered_details = [
+        d for d in radar_details if d.technology_name in surviving_names
+    ]
+
+    return deduped, filtered_details
