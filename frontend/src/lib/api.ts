@@ -457,6 +457,7 @@ export const api = {
     customRequirements: string = '',
     mustInclude?: string[],
     dontInclude?: string[],
+    lookbackDays: number = 7,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const formData = new FormData();
@@ -465,6 +466,7 @@ export const api = {
     formData.append('custom_requirements', customRequirements);
     if (mustInclude?.length) formData.append('must_include', mustInclude.join(','));
     if (dontInclude?.length) formData.append('dont_include', dontInclude.join(','));
+    formData.append('lookback_days', String(lookbackDays));
 
     const response = await fetch(`${API_URL}/sensing/generate-from-document`, {
       method: 'POST',

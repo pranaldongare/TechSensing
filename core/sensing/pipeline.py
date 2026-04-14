@@ -469,6 +469,35 @@ def _build_keyword_instructions(
     return "\n".join(parts)
 
 
+async def _extract_document_topics(
+    document_text: str,
+    domain: str,
+    custom_requirements: str = "",
+):
+    """Use LLM to extract key topics and search queries from document text."""
+    from core.constants import GPU_SENSING_CLASSIFY_LLM
+    from core.llm.client import invoke_llm
+    from core.llm.output_schemas.sensing_outputs import DocumentTopicExtraction
+    from core.llm.prompts.sensing_prompts import (
+        sensing_document_topic_extraction_prompt,
+    )
+
+    prompt = sensing_document_topic_extraction_prompt(
+        document_text=document_text,
+        domain=domain,
+        custom_requirements=custom_requirements,
+    )
+
+    result = await invoke_llm(
+        gpu_model=GPU_SENSING_CLASSIFY_LLM.model,
+        response_schema=DocumentTopicExtraction,
+        contents=prompt,
+        port=GPU_SENSING_CLASSIFY_LLM.port,
+    )
+
+    return DocumentTopicExtraction.model_validate(result)
+
+
 async def run_sensing_pipeline_from_document(
     file_path: str,
     file_name: str,
@@ -476,16 +505,20 @@ async def run_sensing_pipeline_from_document(
     custom_requirements: str = "",
     must_include: Optional[List[str]] = None,
     dont_include: Optional[List[str]] = None,
+    lookback_days: int = LOOKBACK_DAYS,
     progress_callback: Optional[Callable] = None,
     user_id: Optional[str] = None,
+    key_people: Optional[List[str]] = None,
 ) -> SensingPipelineResult:
-    """Sensing pipeline variant that uses an uploaded document as the sole
-    source.
+    """Hybrid sensing pipeline: parse an uploaded document, extract key themes
+    via LLM, then use those themes to drive the full web search pipeline.
 
-    Skips the normal ingest stage (RSS / DDG / GitHub / arXiv / HN) and the
-    full-text extraction stage — the parsed document IS the source.
+    The document pseudo-articles are combined with web-sourced articles so the
+    final report reflects both the document's content and current web
+    intelligence.
 
-    Stages: Parse → Split → Classify → Report → Verify → Movement + Scoring.
+    Stages: Parse → Extract Topics → Split → Web Ingest → Dedup → Extract
+             Text → Classify → Report → Verify → Movement + Scoring.
     """
     start = time.time()
 
@@ -497,26 +530,21 @@ async def run_sensing_pipeline_from_document(
             await progress_callback(stage, pct, msg)
 
     logger.info(
-        f"========== DOCUMENT SENSING START "
-        f"(file={file_name}, domain={domain}) =========="
+        f"========== HYBRID DOCUMENT SENSING START "
+        f"(file={file_name}, domain={domain}, lookback={lookback_days}d) =========="
     )
 
-    keyword_instructions = _build_keyword_instructions(
-        domain, must_include, dont_include
-    )
-    full_requirements = custom_requirements
-    if keyword_instructions:
-        full_requirements = (
-            f"{custom_requirements}\n\n{keyword_instructions}"
-            if custom_requirements
-            else keyword_instructions
-        )
+    # Default key_people from domain preset when caller doesn't provide any
+    if not key_people:
+        preset = get_preset_for_domain(domain)
+        if preset.key_people:
+            key_people = preset.key_people
 
     # --- Stage 1: Parse Document ---
     logger.info(
-        f"[Stage 1/6] PARSE DOCUMENT — {file_name}... [{_elapsed()}]"
+        f"[Stage 1/9] PARSE DOCUMENT — {file_name}... [{_elapsed()}]"
     )
-    await _emit("parse", 10, f"Parsing {file_name}...")
+    await _emit("parse", 5, f"Parsing {file_name}...")
 
     from core.parsers.main import extract_document
 
@@ -531,16 +559,67 @@ async def run_sensing_pipeline_from_document(
     if not doc or not doc.full_text:
         raise ValueError(f"Failed to parse document: {file_name}")
 
-    await _emit("parse", 20, f"Document parsed ({len(doc.full_text)} chars)")
+    await _emit("parse", 10, f"Document parsed ({len(doc.full_text)} chars)")
     logger.info(
-        f"[Stage 1/6] PARSE COMPLETE: {len(doc.full_text)} chars [{_elapsed()}]"
+        f"[Stage 1/9] PARSE COMPLETE: {len(doc.full_text)} chars [{_elapsed()}]"
     )
 
-    # --- Stage 2: Convert to pseudo-articles ---
-    logger.info(
-        f"[Stage 2/6] SPLIT — creating pseudo-articles... [{_elapsed()}]"
+    # --- Stage 2: Extract topics from document via LLM ---
+    logger.info(f"[Stage 2/9] EXTRACT TOPICS... [{_elapsed()}]")
+    await _emit("extract_topics", 10, "Analyzing document themes...")
+
+    effective_search_queries = None
+    effective_must_include = list(must_include or [])
+    effective_key_people = list(key_people or [])
+    doc_context = ""
+
+    try:
+        topics = await _extract_document_topics(
+            document_text=doc.full_text,
+            domain=domain,
+            custom_requirements=custom_requirements,
+        )
+        effective_search_queries = list(topics.search_queries)
+        for kw in topics.technology_keywords:
+            if kw not in effective_must_include:
+                effective_must_include.append(kw)
+        for entity in topics.key_entities:
+            if entity not in effective_key_people:
+                effective_key_people.append(entity)
+        search_domain = topics.refined_domain or domain
+        doc_context = (
+            f"DOCUMENT CONTEXT: This report combines analysis of the uploaded "
+            f"document '{file_name}' with current web sources. "
+            f"Document summary: {topics.document_summary}\n\n"
+        )
+        logger.info(
+            f"[Stage 2/9] Extracted topics: {len(topics.search_queries)} queries, "
+            f"{len(topics.technology_keywords)} keywords, "
+            f"{len(topics.key_entities)} entities, "
+            f"refined_domain='{search_domain}' [{_elapsed()}]"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[Stage 2/9] Topic extraction failed (using defaults): {e}"
+        )
+        search_domain = domain
+
+    await _emit(
+        "extract_topics", 15,
+        f"Found {len(effective_must_include)} technology keywords"
     )
-    await _emit("split", 25, "Splitting document into sections...")
+
+    # Build keyword filter instructions
+    keyword_instructions = _build_keyword_instructions(
+        domain, effective_must_include or None, dont_include
+    )
+    full_requirements = doc_context + (custom_requirements or "")
+    if keyword_instructions:
+        full_requirements += f"\n\n{keyword_instructions}"
+
+    # --- Stage 3: Split document into pseudo-articles ---
+    logger.info(f"[Stage 3/9] SPLIT — creating pseudo-articles... [{_elapsed()}]")
+    await _emit("split", 16, "Splitting document into sections...")
 
     from core.sensing.document_source import document_to_articles
 
@@ -550,62 +629,174 @@ async def run_sensing_pipeline_from_document(
         title=file_name,
     )
 
-    # Apply dont_include filter
+    # Apply dont_include filter to document sections
     if dont_include:
         dont_lower = [kw.lower() for kw in dont_include]
         pseudo_articles = [
             a for a in pseudo_articles if not _matches_exclusion(a, dont_lower)
         ]
 
-    all_raw_count = len(pseudo_articles)
-    await _emit("split", 30, f"{all_raw_count} sections created from document")
     logger.info(
-        f"[Stage 2/6] SPLIT COMPLETE: {all_raw_count} pseudo-articles "
-        f"[{_elapsed()}]"
+        f"[Stage 3/9] SPLIT COMPLETE: {len(pseudo_articles)} pseudo-articles [{_elapsed()}]"
     )
 
-    # --- Stage 3: Classify ---
+    # --- Stage 4: Web Ingest (all 7 sources, driven by extracted topics) ---
+    logger.info(f"[Stage 4/9] WEB INGEST — starting... [{_elapsed()}]")
+    await _emit("ingest", 18, "Fetching RSS feeds...")
+
+    rss_articles = await fetch_rss_feeds(
+        feed_urls=None,
+        lookback_days=lookback_days,
+        domain=search_domain,
+    )
+    logger.info(f"[Stage 4/9] RSS done: {len(rss_articles)} articles [{_elapsed()}]")
+
+    await _emit("ingest", 20, "Searching DuckDuckGo...")
+    ddg_articles = await search_duckduckgo(
+        queries=effective_search_queries,
+        domain=search_domain,
+        lookback_days=lookback_days,
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] DDG done: {len(ddg_articles)} articles [{_elapsed()}]")
+
+    await _emit("ingest", 22, "Searching GitHub trending...")
+    github_articles = await fetch_github_trending(search_domain, lookback_days=lookback_days)
+    logger.info(f"[Stage 4/9] GitHub done: {len(github_articles)} repos [{_elapsed()}]")
+
+    await _emit("ingest", 23, "Searching arXiv...")
+    arxiv_articles = await fetch_arxiv_papers(
+        search_domain, lookback_days=lookback_days,
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] arXiv done: {len(arxiv_articles)} papers [{_elapsed()}]")
+
+    await _emit("ingest", 24, "Searching Hacker News...")
+    hn_articles = await fetch_hackernews(search_domain, lookback_days=lookback_days)
+    logger.info(f"[Stage 4/9] HN done: {len(hn_articles)} stories [{_elapsed()}]")
+
+    await _emit("ingest", 26, "Searching USPTO patents...")
+    patent_articles = await search_patents(
+        search_domain, lookback_days=max(lookback_days, 365),
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] USPTO done: {len(patent_articles)} patents [{_elapsed()}]")
+
+    await _emit("ingest", 28, "Searching EPO patents...")
+    epo_articles = await search_epo_patents(
+        search_domain, lookback_days=max(lookback_days, 365),
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
+
+    all_web = (
+        rss_articles + ddg_articles + github_articles + arxiv_articles
+        + hn_articles + patent_articles + epo_articles
+    )
+    all_raw = pseudo_articles + all_web
+
+    await _emit(
+        "ingest", 30,
+        f"{len(pseudo_articles)} document sections + {len(all_web)} web articles"
+    )
     logger.info(
-        f"[Stage 3/6] CLASSIFY — {len(pseudo_articles)} sections... "
-        f"[{_elapsed()}]"
+        f"[Stage 4/9] WEB INGEST COMPLETE: {len(all_web)} web articles + "
+        f"{len(pseudo_articles)} doc sections = {len(all_raw)} total [{_elapsed()}]"
     )
-    await _emit("classify", 40, "Classifying document sections with LLM...")
-    classified = await classify_articles(
-        list(pseudo_articles),
-        domain=domain,
-        custom_requirements=full_requirements,
-    )
-    await _emit("classify", 60, f"{len(classified)} sections classified")
+
+    # --- Stage 5: Dedup ---
+    logger.info(f"[Stage 5/9] DEDUP — starting... [{_elapsed()}]")
+    await _emit("dedup", 31, "Deduplicating...")
+    unique_articles = deduplicate_articles(all_raw)
+
+    if dont_include:
+        before_filter = len(unique_articles)
+        dont_lower = [kw.lower() for kw in dont_include]
+        unique_articles = [
+            a for a in unique_articles
+            if not _matches_exclusion(a, dont_lower)
+        ]
+        filtered_out = before_filter - len(unique_articles)
+        if filtered_out:
+            logger.info(f"[Stage 5/9] Keyword filter removed {filtered_out} articles")
+
+    await _emit("dedup", 35, f"{len(unique_articles)} unique articles")
     logger.info(
-        f"[Stage 3/6] CLASSIFY COMPLETE: {len(classified)} [{_elapsed()}]"
+        f"[Stage 5/9] DEDUP COMPLETE: {len(all_raw)} -> {len(unique_articles)} unique [{_elapsed()}]"
     )
 
-    # Build content excerpt map
-    url_content_map = {
-        a.url: (a.content or "")[:800]
-        for a in pseudo_articles
-        if a.url and a.content
-    }
+    # --- Stage 6: Extract full text (web articles only; doc articles already have content) ---
+    logger.info(
+        f"[Stage 6/9] EXTRACT — extracting full text... [{_elapsed()}]"
+    )
+    await _emit("extract", 36, "Extracting article text...")
+    sem = asyncio.Semaphore(5)
 
-    # --- Stage 4: Generate report ---
-    logger.info(f"[Stage 4/6] REPORT — generating... [{_elapsed()}]")
-    await _emit("report", 65, "Generating report with LLM...")
+    async def _extract_with_sem(article: RawArticle) -> RawArticle:
+        async with sem:
+            return await extract_full_text(article)
 
-    date_range = f"Document: {file_name}"
+    enriched = await asyncio.gather(
+        *[_extract_with_sem(a) for a in unique_articles]
+    )
 
+    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
+    await _emit("extract", 45, "Text extraction complete")
+    logger.info(
+        f"[Stage 6/9] EXTRACT COMPLETE: {content_count}/{len(enriched)} with content [{_elapsed()}]"
+    )
+
+    # Load org context for custom quadrant names
     org_context_str = ""
+    custom_quadrant_names = None
     if user_id:
         try:
-            from core.sensing.org_context import (
-                build_org_context_prompt,
-                load_org_context,
-            )
-
+            from core.sensing.org_context import build_org_context_prompt, load_org_context
             org_ctx = await load_org_context(user_id)
             if org_ctx:
                 org_context_str = build_org_context_prompt(org_ctx)
+                if org_ctx.radar_customization and org_ctx.radar_customization.quadrants:
+                    custom_quadrant_names = [
+                        q.name for q in org_ctx.radar_customization.quadrants
+                    ]
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
+
+    # --- Stage 7: Classify ---
+    logger.info(
+        f"[Stage 7/9] CLASSIFY — {len(enriched)} articles via LLM... [{_elapsed()}]"
+    )
+    await _emit("classify", 50, "Classifying articles with LLM...")
+    classified = await classify_articles(
+        list(enriched), domain=domain, custom_requirements=full_requirements,
+        key_people=effective_key_people or None,
+        custom_quadrant_names=custom_quadrant_names,
+    )
+    await _emit("classify", 65, f"{len(classified)} articles classified")
+    logger.info(
+        f"[Stage 7/9] CLASSIFY COMPLETE: {len(classified)} [{_elapsed()}]"
+    )
+
+    # Build URL→content excerpt map for report grounding
+    url_content_map = {
+        a.url: (a.content or "")[:800]
+        for a in enriched
+        if a.url and a.content and len(a.content) > 50
+    }
+
+    # --- Stage 8: Generate report ---
+    logger.info(f"[Stage 8/9] REPORT — generating... [{_elapsed()}]")
+    await _emit("report", 70, "Generating report with LLM...")
+
+    now = datetime.now(timezone.utc)
+    if lookback_days > 0:
+        lookback_start = now - timedelta(days=lookback_days)
+        date_range = (
+            f"Document: {file_name} + Web: "
+            f"{lookback_start.strftime('%b %d')} - {now.strftime('%b %d, %Y')}"
+        )
+    else:
+        date_range = f"Document: {file_name} + Web (all time)"
 
     report = await generate_report(
         classified_articles=classified,
@@ -614,38 +805,50 @@ async def run_sensing_pipeline_from_document(
         custom_requirements=full_requirements,
         org_context=org_context_str,
         article_content_map=url_content_map,
+        key_people=effective_key_people or None,
+        custom_quadrant_names=custom_quadrant_names,
     )
-    await _emit("report", 80, "Report generated, verifying...")
-    logger.info(f"[Stage 4/6] REPORT COMPLETE [{_elapsed()}]")
+    await _emit("report", 85, "Report generated, verifying relevance...")
+    logger.info(f"[Stage 8/9] REPORT COMPLETE [{_elapsed()}]")
 
-    # --- Stage 5: Verify ---
-    logger.info(f"[Stage 5/6] VERIFY... [{_elapsed()}]")
-    await _emit("verify", 85, "Verifying report relevance...")
+    # --- Stage 9: Verify + post-processing ---
+    logger.info(f"[Stage 9/9] VERIFY... [{_elapsed()}]")
+    await _emit("verify", 88, "Verifying report relevance...")
     report = await verify_report(
         report=report,
         domain=domain,
-        must_include=must_include,
+        must_include=effective_must_include or None,
         dont_include=dont_include,
     )
-    logger.info(f"[Stage 5/6] VERIFY COMPLETE [{_elapsed()}]")
+    logger.info(f"[Stage 9/9] VERIFY COMPLETE [{_elapsed()}]")
 
-    # --- Stage 6: Movement detection ---
+    # Movement detection
     if user_id:
-        await _emit("movement", 90, "Detecting movements...")
+        await _emit("movement", 92, "Detecting technology movements...")
         report = await detect_radar_movements(
             new_report=report,
             user_id=user_id,
             domain=domain,
         )
 
-    # Signal scoring
+    # Signal strength scoring
+    await _emit("scoring", 94, "Computing signal strengths...")
     report = compute_signal_strengths(report, classified)
+
+    # Technology Relationship Extraction
+    if user_id:
+        try:
+            from core.sensing.relationships import extract_relationships
+            rel_map = await extract_relationships(report, classified, domain)
+            report.relationships = rel_map
+        except Exception as e:
+            logger.warning(f"Relationship extraction failed (non-fatal): {e}")
 
     # Weak signals
     if user_id:
+        await _emit("weak_signals", 95, "Detecting emerging signals...")
         try:
             from core.sensing.weak_signals import detect_weak_signals
-
             weak = await detect_weak_signals(report, classified, user_id)
             report.weak_signals = weak
         except Exception as e:
@@ -678,20 +881,48 @@ async def run_sensing_pipeline_from_document(
         except Exception as e:
             logger.warning(f"Alert detection failed (non-fatal): {e}")
 
-    # No YouTube for document-based runs
-    report.trending_videos = []
+    # YouTube video enrichment
+    await _emit("videos", 98, "Finding trending YouTube videos...")
+    try:
+        sorted_radar = sorted(
+            report.radar_items, key=lambda r: r.signal_strength, reverse=True,
+        )
+        tech_names = [item.name for item in sorted_radar[:10]]
+        raw_videos = await fetch_youtube_videos(tech_names)
+        report.trending_videos = [
+            TrendingVideoItem(
+                technology_name=v.technology_name,
+                title=v.title,
+                url=v.url,
+                description=v.description,
+                uploader=v.uploader,
+                duration=v.duration,
+                published=v.published,
+                view_count=v.view_count,
+                thumbnail_url=v.thumbnail_url,
+            )
+            for v in raw_videos
+        ]
+    except Exception as e:
+        logger.warning(f"YouTube enrichment failed (non-fatal): {e}")
+        report.trending_videos = []
 
     await _emit("complete", 100, "Report ready")
 
     elapsed = time.time() - start
     logger.info(
-        f"========== DOCUMENT SENSING COMPLETE in {elapsed:.1f}s =========="
+        f"========== HYBRID DOCUMENT SENSING COMPLETE in {elapsed:.1f}s =========="
+    )
+    logger.info(
+        f"  Doc sections={len(pseudo_articles)} | Web={len(all_web)} | "
+        f"Deduped={len(unique_articles)} | Classified={len(classified)} | "
+        f"Radar items={len(report.radar_items)}"
     )
 
     return SensingPipelineResult(
         report=report,
-        raw_article_count=all_raw_count,
-        deduped_article_count=all_raw_count,
+        raw_article_count=len(all_raw),
+        deduped_article_count=len(unique_articles),
         classified_article_count=len(classified),
         execution_time_seconds=round(elapsed, 2),
         alerts=alerts or None,

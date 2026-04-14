@@ -325,6 +325,7 @@ const TechSensing: React.FC = () => {
           customReqs,
           mustInclude.length > 0 ? mustInclude : undefined,
           dontInclude.length > 0 ? dontInclude : undefined,
+          lookbackDays,
         );
       } else {
         // Normal web-based pipeline
@@ -1079,7 +1080,7 @@ const TechSensing: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Upload a document to analyze instead of fetching from web sources.
+                  Upload a document — themes will be extracted and combined with web sources.
                 </p>
                 <input
                   type="file"
@@ -1095,7 +1096,7 @@ const TechSensing: React.FC = () => {
                       <XCircle className="w-3 h-3 cursor-pointer" onClick={() => setUploadFile(null)} />
                     </Badge>
                     <span className="text-xs text-muted-foreground">
-                      Web sources will be skipped
+                      Document + web sources
                     </span>
                   </div>
                 )}

@@ -46,6 +46,55 @@ class ArticleBatchClassification(LLMOutputBase):
     )
 
 
+# --- Stage: Document topic extraction ---
+
+
+class DocumentTopicExtraction(LLMOutputBase):
+    """LLM-extracted topics and search parameters from an uploaded document."""
+
+    document_summary: str = Field(
+        description="2-3 sentence summary of the document's main subject matter."
+    )
+    refined_domain: str = Field(
+        description=(
+            "A refined domain description based on document content. "
+            "E.g., if user selected 'Generative AI' but document is about "
+            "'LLM-based code generation', refine to 'AI Code Generation'."
+        )
+    )
+    search_queries: List[str] = Field(
+        description=(
+            "5-10 DuckDuckGo search queries to find current web articles "
+            "related to the document's key themes. Each should be a natural "
+            "language search query like 'retrieval augmented generation "
+            "enterprise adoption 2026'."
+        )
+    )
+    technology_keywords: List[str] = Field(
+        description=(
+            "3-8 specific technology names, frameworks, or techniques "
+            "mentioned or implied in the document. Used for arXiv, GitHub, "
+            "and patent searches. E.g., ['RAG', 'vector databases', "
+            "'LangChain', 'fine-tuning']."
+        )
+    )
+    key_entities: List[str] = Field(
+        default_factory=list,
+        description=(
+            "0-5 companies, organizations, or notable people referenced "
+            "in the document. Used to enhance search specificity."
+        ),
+    )
+    patent_keywords: List[str] = Field(
+        default_factory=list,
+        description=(
+            "3-5 patent-appropriate keyword phrases for USPTO/EPO search. "
+            "E.g., ['retrieval augmented generation system', "
+            "'vector similarity search method']."
+        ),
+    )
+
+
 # --- Stage: Final report ---
 
 

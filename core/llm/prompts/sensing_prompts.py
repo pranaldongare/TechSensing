@@ -545,3 +545,63 @@ def sensing_deep_dive_followup_prompt(
         },
     ]
     return contents
+
+
+def sensing_document_topic_extraction_prompt(
+    document_text: str,
+    domain: str = "Generative AI",
+    custom_requirements: str = "",
+) -> list[dict]:
+    """
+    Build a prompt to extract key topics, technologies, and search queries
+    from a parsed document.  Used to orient the web search pipeline so that
+    a document upload drives — rather than replaces — web intelligence.
+
+    Takes the first ~8000 characters of the document to stay within
+    context limits while capturing the most important content.
+    """
+    truncated = document_text[:8000]
+
+    contents = [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology analyst. Given a document excerpt, "
+                "extract the key technologies, themes, and entities to drive a "
+                "comprehensive web search for related current developments.\n\n"
+                f"The user has selected the domain: {domain}\n\n"
+                "Your job is to:\n"
+                "1. Summarize the document's main subject in 2-3 sentences.\n"
+                "2. Refine the domain description if the document is more "
+                "specific than the broad domain label.\n"
+                "3. Generate 5-10 web search queries that would find CURRENT "
+                "news, developments, and research related to the document's "
+                "themes. Make queries specific and time-relevant.\n"
+                "4. Extract 3-8 specific technology names, frameworks, "
+                "techniques, or methodologies mentioned or implied.\n"
+                "5. Identify 0-5 companies, organizations, or notable people.\n"
+                "6. Generate 3-5 patent-appropriate keyword phrases.\n\n"
+                "GUIDELINES:\n"
+                "- Search queries should look for CURRENT developments "
+                "(news this week/month), not the document's own content.\n"
+                "- Technology keywords should be specific enough for "
+                "arXiv/GitHub search (e.g., 'LoRA' not 'fine-tuning methods').\n"
+                "- Patent keywords should be formal technical phrases "
+                "(e.g., 'large language model optimization method').\n"
+                + (
+                    f"\nADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n"
+                    if custom_requirements
+                    else ""
+                )
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"DOCUMENT EXCERPT:\n\n{truncated}\n\n"
+                "Extract topics, technologies, search queries, and entities "
+                "from this document. Return ONLY valid JSON."
+            ),
+        },
+    ]
+    return contents

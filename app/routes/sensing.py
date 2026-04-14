@@ -219,6 +219,7 @@ async def generate_sensing_from_document(
     custom_requirements: str = Form(""),
     must_include: Optional[str] = Form(None),
     dont_include: Optional[str] = Form(None),
+    lookback_days: int = Form(7),
 ):
     """Start async tech sensing from an uploaded document instead of web
     sources."""
@@ -276,6 +277,7 @@ async def generate_sensing_from_document(
                 custom_requirements=custom_requirements,
                 must_include=must_list,
                 dont_include=dont_list,
+                lookback_days=lookback_days,
                 progress_callback=_progress_cb,
                 user_id=user_id,
             )
@@ -301,7 +303,7 @@ async def generate_sensing_from_document(
                     "custom_requirements": custom_requirements,
                     "must_include": must_list,
                     "dont_include": dont_list,
-                    "lookback_days": 0,
+                    "lookback_days": lookback_days,
                     "alerts": alerts_data,
                 },
             }
