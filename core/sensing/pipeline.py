@@ -399,6 +399,9 @@ async def run_sensing_pipeline(
                 report=report,
                 classified_articles=classified,
                 user_id=user_id,
+                domain=domain,
+                generic_blocklist=set(domain_ref.generic_terms_blocklist),
+                legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
             )
             report.weak_signals = weak
             logger.info(f"Weak signals: {len(weak)} detected [{_elapsed()}]")
@@ -1097,7 +1100,14 @@ async def run_sensing_pipeline_from_document(
         await _emit("weak_signals", 95, "Detecting emerging signals...")
         try:
             from core.sensing.weak_signals import detect_weak_signals
-            weak = await detect_weak_signals(report, classified, user_id)
+            weak = await detect_weak_signals(
+                report=report,
+                classified_articles=classified,
+                user_id=user_id,
+                domain=domain,
+                generic_blocklist=set(domain_ref.generic_terms_blocklist),
+                legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
+            )
             report.weak_signals = weak
         except Exception as e:
             logger.warning(f"Weak signal detection failed (non-fatal): {e}")
