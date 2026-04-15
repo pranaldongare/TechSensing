@@ -9,6 +9,7 @@ API docs: https://api.semanticscholar.org/
 Rate limit: 100 requests/sec (unauthenticated)
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -70,9 +71,22 @@ async def fetch_semantic_scholar(
             if year_filter:
                 params["year"] = year_filter
 
-            resp = await client.get(S2_API_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+            # Retry with backoff on 429 rate-limit responses
+            data = None
+            for attempt in range(3):
+                resp = await client.get(S2_API_URL, params=params)
+                if resp.status_code == 429:
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    logger.info(f"Semantic Scholar 429 — retrying in {wait}s (attempt {attempt + 1}/3)")
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+
+            if data is None:
+                logger.warning("Semantic Scholar: exhausted retries after 429s")
+                return articles
 
             for paper in data.get("data", [])[:max_results]:
                 title = paper.get("title", "")

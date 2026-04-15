@@ -119,6 +119,6 @@ def _format_batch_for_prompt(articles: List[RawArticle]) -> str:
             f"Source: {a.source}\n"
             f"URL: {a.url}\n"
             f"Date: {a.published_date or 'Unknown'}\n"
-            f"Content:\n{a.content[:2000]}\n"
+            f"Content:\n{(a.content or a.snippet or a.title)[:2000]}\n"
         )
     return "\n".join(parts)

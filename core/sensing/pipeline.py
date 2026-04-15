@@ -212,27 +212,6 @@ async def run_sensing_pipeline(
         f"[Stage 2/7] DEDUP COMPLETE: {len(all_raw)} -> {len(unique_articles)} unique [{_elapsed()}]"
     )
 
-    # --- Stage 3: Extract full text (parallel, throttled) ---
-    logger.info(
-        f"[Stage 3/7] EXTRACT — extracting full text for {len(unique_articles)} articles... [{_elapsed()}]"
-    )
-    await _emit("extract", 35, "Extracting article text...")
-    sem = asyncio.Semaphore(5)  # Max 5 concurrent HTTP fetches
-
-    async def _extract_with_sem(article: RawArticle) -> RawArticle:
-        async with sem:
-            return await extract_full_text(article)
-
-    enriched = await asyncio.gather(
-        *[_extract_with_sem(a) for a in unique_articles]
-    )
-
-    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
-    await _emit("extract", 45, "Text extraction complete")
-    logger.info(
-        f"[Stage 3/7] EXTRACT COMPLETE: {content_count}/{len(enriched)} with substantial content [{_elapsed()}]"
-    )
-
     # Load org context early so custom quadrant names are available for classification
     org_context_str = ""
     custom_quadrant_names = None
@@ -254,20 +233,44 @@ async def run_sensing_pipeline(
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
 
-    # --- Stage 4: Classify ---
+    # --- Stage 3: Classify (using title + snippet + any pre-existing content) ---
     logger.info(
-        f"[Stage 4/7] CLASSIFY — classifying {len(enriched)} articles via LLM... [{_elapsed()}]"
+        f"[Stage 3/7] CLASSIFY — classifying {len(unique_articles)} articles via LLM... [{_elapsed()}]"
     )
-    await _emit("classify", 50, "Classifying articles with LLM...")
+    await _emit("classify", 35, "Classifying articles with LLM...")
     classified = await classify_articles(
-        list(enriched), domain=domain, custom_requirements=full_requirements,
+        list(unique_articles), domain=domain, custom_requirements=full_requirements,
         key_people=key_people,
         custom_quadrant_names=custom_quadrant_names,
         preset=preset,
     )
-    await _emit("classify", 65, f"{len(classified)} articles classified")
+    await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
-        f"[Stage 4/7] CLASSIFY COMPLETE: {len(classified)} classified articles [{_elapsed()}]"
+        f"[Stage 3/7] CLASSIFY COMPLETE: {len(classified)} classified articles [{_elapsed()}]"
+    )
+
+    # --- Stage 4: Extract full text (only for classified articles) ---
+    classified_urls = {a.url for a in classified}
+    to_extract = [a for a in unique_articles if a.url in classified_urls]
+    logger.info(
+        f"[Stage 4/7] EXTRACT — extracting full text for {len(to_extract)} classified articles "
+        f"(skipped {len(unique_articles) - len(to_extract)} irrelevant) [{_elapsed()}]"
+    )
+    await _emit("extract", 58, f"Extracting text for {len(to_extract)} relevant articles...")
+    sem = asyncio.Semaphore(5)
+
+    async def _extract_with_sem(article: RawArticle) -> RawArticle:
+        async with sem:
+            return await extract_full_text(article)
+
+    enriched = await asyncio.gather(
+        *[_extract_with_sem(a) for a in to_extract]
+    )
+
+    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
+    await _emit("extract", 65, "Text extraction complete")
+    logger.info(
+        f"[Stage 4/7] EXTRACT COMPLETE: {content_count}/{len(enriched)} with substantial content [{_elapsed()}]"
     )
 
     # Build URL→content excerpt map so report LLM gets real article text
@@ -351,7 +354,7 @@ async def run_sensing_pipeline(
         deduped_count=len(unique_articles),
         classified_count=len(classified),
         content_extraction_count=content_count,
-        source_names=set(a.source for a in enriched),
+        source_names=set(a.source for a in unique_articles),
         radar_item_count=len(report.radar_items),
     )
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
@@ -620,9 +623,9 @@ def _compute_report_confidence(
     else:
         scores["source_diversity"] = 0.2
 
-    # Content extraction rate (0-1)
-    if deduped_count > 0:
-        extraction_rate = content_extraction_count / deduped_count
+    # Content extraction rate (0-1) — based on classified articles only
+    if classified_count > 0:
+        extraction_rate = content_extraction_count / classified_count
         scores["content_extraction"] = round(min(1.0, extraction_rate * 1.2), 2)
     else:
         scores["content_extraction"] = 0.0
@@ -936,27 +939,6 @@ async def run_sensing_pipeline_from_document(
         f"[Stage 5/9] DEDUP COMPLETE: {len(all_raw)} -> {len(unique_articles)} unique [{_elapsed()}]"
     )
 
-    # --- Stage 6: Extract full text (web articles only; doc articles already have content) ---
-    logger.info(
-        f"[Stage 6/9] EXTRACT — extracting full text... [{_elapsed()}]"
-    )
-    await _emit("extract", 36, "Extracting article text...")
-    sem = asyncio.Semaphore(5)
-
-    async def _extract_with_sem(article: RawArticle) -> RawArticle:
-        async with sem:
-            return await extract_full_text(article)
-
-    enriched = await asyncio.gather(
-        *[_extract_with_sem(a) for a in unique_articles]
-    )
-
-    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
-    await _emit("extract", 45, "Text extraction complete")
-    logger.info(
-        f"[Stage 6/9] EXTRACT COMPLETE: {content_count}/{len(enriched)} with content [{_elapsed()}]"
-    )
-
     # Load org context for custom quadrant names
     org_context_str = ""
     custom_quadrant_names = None
@@ -976,20 +958,44 @@ async def run_sensing_pipeline_from_document(
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
 
-    # --- Stage 7: Classify ---
+    # --- Stage 6: Classify (using title + snippet + any pre-existing content) ---
     logger.info(
-        f"[Stage 7/9] CLASSIFY — {len(enriched)} articles via LLM... [{_elapsed()}]"
+        f"[Stage 6/9] CLASSIFY — {len(unique_articles)} articles via LLM... [{_elapsed()}]"
     )
-    await _emit("classify", 50, "Classifying articles with LLM...")
+    await _emit("classify", 38, "Classifying articles with LLM...")
     classified = await classify_articles(
-        list(enriched), domain=domain, custom_requirements=full_requirements,
+        list(unique_articles), domain=domain, custom_requirements=full_requirements,
         key_people=effective_key_people or None,
         custom_quadrant_names=custom_quadrant_names,
         preset=preset,
     )
-    await _emit("classify", 65, f"{len(classified)} articles classified")
+    await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
-        f"[Stage 7/9] CLASSIFY COMPLETE: {len(classified)} [{_elapsed()}]"
+        f"[Stage 6/9] CLASSIFY COMPLETE: {len(classified)} [{_elapsed()}]"
+    )
+
+    # --- Stage 7: Extract full text (only for classified articles) ---
+    classified_urls = {a.url for a in classified}
+    to_extract = [a for a in unique_articles if a.url in classified_urls]
+    logger.info(
+        f"[Stage 7/9] EXTRACT — extracting full text for {len(to_extract)} classified articles "
+        f"(skipped {len(unique_articles) - len(to_extract)} irrelevant) [{_elapsed()}]"
+    )
+    await _emit("extract", 58, f"Extracting text for {len(to_extract)} relevant articles...")
+    sem = asyncio.Semaphore(5)
+
+    async def _extract_with_sem(article: RawArticle) -> RawArticle:
+        async with sem:
+            return await extract_full_text(article)
+
+    enriched = await asyncio.gather(
+        *[_extract_with_sem(a) for a in to_extract]
+    )
+
+    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
+    await _emit("extract", 65, "Text extraction complete")
+    logger.info(
+        f"[Stage 7/9] EXTRACT COMPLETE: {content_count}/{len(enriched)} with content [{_elapsed()}]"
     )
 
     # Build URL→content excerpt map for report grounding
@@ -1064,7 +1070,7 @@ async def run_sensing_pipeline_from_document(
         deduped_count=len(unique_articles),
         classified_count=len(classified),
         content_extraction_count=content_count,
-        source_names=set(a.source for a in enriched),
+        source_names=set(a.source for a in unique_articles),
         radar_item_count=len(report.radar_items),
     )
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
