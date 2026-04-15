@@ -50,6 +50,20 @@ class StoredDomainReference(BaseModel):
     generic_terms_blocklist: List[str] = Field(default_factory=list)
     legacy_terms_blocklist: List[str] = Field(default_factory=list)
 
+    # Web-discovered sources (populated by source_discovery.py)
+    discovered_rss_feeds: List[str] = Field(
+        default_factory=list,
+        description="RSS feed URLs discovered via web search and validated.",
+    )
+    discovered_sources_metadata: List[dict] = Field(
+        default_factory=list,
+        description="Metadata for web-discovered sources (name, type, description).",
+    )
+    sources_last_discovered: str = Field(
+        default="",
+        description="ISO timestamp of last source discovery run. Empty = never run.",
+    )
+
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -95,6 +109,7 @@ async def save_domain_reference(ref: StoredDomainReference) -> None:
     logger.info(
         f"Domain reference saved: {ref.domain_slug} "
         f"(run_count={ref.run_count}, feeds={len(ref.rss_feed_urls)}, "
+        f"discovered_feeds={len(ref.discovered_rss_feeds)}, "
         f"queries={len(ref.search_queries)}, people={len(ref.key_people)})"
     )
 
@@ -296,9 +311,6 @@ async def ensure_domain_reference(
         )
 
         merged = merge_intelligence_into_reference(existing, new_intel, domain)
-        await save_domain_reference(merged)
-        await _emit("Domain intelligence ready")
-        return merged
 
     except Exception as e:
         logger.error(f"Domain intelligence generation failed: {e}")
@@ -306,7 +318,71 @@ async def ensure_domain_reference(
 
         if existing:
             logger.info("Falling back to existing domain reference")
-            return existing
+            merged = existing
+        else:
+            logger.info("No existing reference; building from static config")
+            merged = _build_static_fallback(domain)
 
-        logger.info("No existing reference; building from static config")
-        return _build_static_fallback(domain)
+    # --- Source Discovery (web-powered, runs on TTL expiry only) ---
+    try:
+        from core.sensing.source_discovery import (
+            discover_domain_sources,
+            should_rediscover_sources,
+        )
+
+        # Carry forward existing discovered sources
+        if existing and existing.discovered_rss_feeds:
+            merged.discovered_rss_feeds = list(existing.discovered_rss_feeds)
+            merged.discovered_sources_metadata = list(
+                existing.discovered_sources_metadata
+            )
+            merged.sources_last_discovered = existing.sources_last_discovered
+
+        if should_rediscover_sources(merged.sources_last_discovered):
+            await _emit("Discovering domain sources via web search...")
+            logger.info(
+                f"[Source Discovery] Running for '{domain}' "
+                "(TTL expired or first run)"
+            )
+
+            all_known_feeds = list(set(
+                merged.rss_feed_urls + merged.discovered_rss_feeds
+            ))
+
+            sources, validated_feeds = await discover_domain_sources(
+                domain=domain,
+                domain_summary=merged.domain_summary,
+                existing_feeds=all_known_feeds,
+                progress_callback=progress_callback,
+            )
+
+            merged.discovered_rss_feeds = validated_feeds
+            merged.discovered_sources_metadata = [
+                s.model_dump() for s in sources
+            ]
+            merged.sources_last_discovered = (
+                datetime.now(timezone.utc).isoformat()
+            )
+            logger.info(
+                f"[Source Discovery] Complete: {len(validated_feeds)} feeds, "
+                f"{len(sources)} sources discovered"
+            )
+        else:
+            logger.info(
+                f"[Source Discovery] Skipped (last discovered: "
+                f"{merged.sources_last_discovered})"
+            )
+
+    except Exception as e:
+        logger.warning(f"[Source Discovery] Failed (non-fatal): {e}")
+        # Carry forward existing discovered sources on failure
+        if existing and existing.discovered_rss_feeds:
+            merged.discovered_rss_feeds = list(existing.discovered_rss_feeds)
+            merged.discovered_sources_metadata = list(
+                existing.discovered_sources_metadata
+            )
+            merged.sources_last_discovered = existing.sources_last_discovered
+
+    await save_domain_reference(merged)
+    await _emit("Domain intelligence ready")
+    return merged

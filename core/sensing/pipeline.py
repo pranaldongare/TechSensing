@@ -26,11 +26,14 @@ from core.sensing.movement import detect_radar_movements
 from core.sensing.report_generator import generate_report
 from core.sensing.signal_score import compute_signal_strengths
 from core.sensing.sources.arxiv_search import fetch_arxiv_papers
+from core.sensing.sources.devto_search import fetch_devto_articles
 from core.sensing.sources.github_trending import fetch_github_trending
 from core.sensing.sources.hackernews import fetch_hackernews
 from core.sensing.sources.epo_patent_search import search_epo_patents
 from core.sensing.sources.google_patent_search import search_google_patents
 from core.sensing.sources.patent_search import search_patents
+from core.sensing.sources.reddit_search import search_reddit
+from core.sensing.sources.semantic_scholar import fetch_semantic_scholar
 from core.sensing.sources.youtube_videos import fetch_youtube_videos
 from core.sensing.verifier import verify_report
 
@@ -102,7 +105,9 @@ async def run_sensing_pipeline(
 
     logger.info(
         f"[Stage 0] DOMAIN INTELLIGENCE COMPLETE: run_count={domain_ref.run_count}, "
-        f"feeds={len(domain_ref.rss_feed_urls)}, queries={len(domain_ref.search_queries)}, "
+        f"feeds={len(domain_ref.rss_feed_urls)}, "
+        f"discovered_feeds={len(domain_ref.discovered_rss_feeds)}, "
+        f"queries={len(domain_ref.search_queries)}, "
         f"key_people={len(domain_ref.key_people)} [{_elapsed()}]"
     )
 
@@ -192,17 +197,44 @@ async def run_sensing_pipeline(
     )
     logger.info(f"[Stage 1/7] Google Patents done: {len(google_patent_articles)} patents [{_elapsed()}]")
 
+    # Semantic Scholar (academic papers across all disciplines)
+    await _emit("ingest", 25, "Searching Semantic Scholar...")
+    logger.info(f"[Stage 1/7] INGEST — starting Semantic Scholar... [{_elapsed()}]")
+    s2_articles = await fetch_semantic_scholar(
+        domain, lookback_days=max(lookback_days, 30), must_include=must_include,
+    )
+    logger.info(f"[Stage 1/7] Semantic Scholar done: {len(s2_articles)} papers [{_elapsed()}]")
+
+    # Reddit (cross-subreddit domain discussions)
+    await _emit("ingest", 26, "Searching Reddit...")
+    logger.info(f"[Stage 1/7] INGEST — starting Reddit search... [{_elapsed()}]")
+    reddit_articles = await search_reddit(
+        domain, lookback_days=lookback_days, must_include=must_include,
+    )
+    logger.info(f"[Stage 1/7] Reddit done: {len(reddit_articles)} posts [{_elapsed()}]")
+
+    # DEV.to (developer articles and tutorials)
+    await _emit("ingest", 27, "Searching DEV.to...")
+    logger.info(f"[Stage 1/7] INGEST — starting DEV.to... [{_elapsed()}]")
+    devto_articles = await fetch_devto_articles(
+        domain, lookback_days=lookback_days, must_include=must_include,
+    )
+    logger.info(f"[Stage 1/7] DEV.to done: {len(devto_articles)} articles [{_elapsed()}]")
+
     all_raw = (
         rss_articles + ddg_articles + github_articles + arxiv_articles
         + hn_articles + patent_articles + epo_articles + google_patent_articles
+        + s2_articles + reddit_articles + devto_articles
     )
-    await _emit("ingest", 25, f"Found {len(all_raw)} raw articles from 8 sources")
+    await _emit("ingest", 28, f"Found {len(all_raw)} raw articles from 11 sources")
     logger.info(
         f"[Stage 1/7] INGEST COMPLETE: {len(all_raw)} total raw articles "
         f"(RSS={len(rss_articles)}, DDG={len(ddg_articles)}, "
         f"GitHub={len(github_articles)}, arXiv={len(arxiv_articles)}, "
         f"HN={len(hn_articles)}, USPTO={len(patent_articles)}, "
-        f"EPO={len(epo_articles)}, GooglePat={len(google_patent_articles)}) [{_elapsed()}]"
+        f"EPO={len(epo_articles)}, GooglePat={len(google_patent_articles)}, "
+        f"S2={len(s2_articles)}, Reddit={len(reddit_articles)}, "
+        f"DEV.to={len(devto_articles)}) [{_elapsed()}]"
     )
 
     # --- Stage 2: Dedup ---
@@ -473,17 +505,25 @@ async def run_sensing_pipeline(
 
 
 def _merge_feeds(domain: str, ref: StoredDomainReference) -> list[str]:
-    """Merge dynamic + static domain feeds, deduped.
+    """Merge dynamic + web-discovered + static domain feeds, deduped.
 
-    General tech feeds (TechCrunch, VentureBeat, etc.) are only included when
-    the domain reference has few domain-specific feeds.  For specialized topics
-    the general feeds bring too much off-topic noise (especially GenAI content).
+    Priority order:
+    1. LLM-generated feeds (from domain intelligence)
+    2. Web-discovered feeds (validated via source discovery)
+    3. Static domain-specific feeds (from config.py)
+    4. General tech feeds (only if < 5 domain-specific feeds)
     """
     feeds: list[str] = []
 
     # Start with dynamic LLM-generated feeds (most domain-relevant)
     if ref.rss_feed_urls:
         feeds.extend(ref.rss_feed_urls)
+
+    # Add web-discovered feeds (validated, real sources)
+    if ref.discovered_rss_feeds:
+        for url in ref.discovered_rss_feeds:
+            if url not in feeds:
+                feeds.append(url)
 
     # Add static domain-specific feeds
     static_feeds = get_feeds_for_domain(domain)
@@ -635,7 +675,9 @@ async def run_sensing_pipeline_from_document(
 
     logger.info(
         f"[Stage 0] DOMAIN INTELLIGENCE COMPLETE: run_count={domain_ref.run_count}, "
-        f"feeds={len(domain_ref.rss_feed_urls)}, queries={len(domain_ref.search_queries)}, "
+        f"feeds={len(domain_ref.rss_feed_urls)}, "
+        f"discovered_feeds={len(domain_ref.discovered_rss_feeds)}, "
+        f"queries={len(domain_ref.search_queries)}, "
         f"key_people={len(domain_ref.key_people)} [{_elapsed()}]"
     )
 
@@ -802,14 +844,39 @@ async def run_sensing_pipeline_from_document(
     )
     logger.info(f"[Stage 4/9] Google Patents done: {len(google_patent_articles)} patents [{_elapsed()}]")
 
+    # Semantic Scholar (academic papers across all disciplines)
+    await _emit("ingest", 30, "Searching Semantic Scholar...")
+    s2_articles = await fetch_semantic_scholar(
+        search_domain, lookback_days=max(lookback_days, 30),
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] Semantic Scholar done: {len(s2_articles)} papers [{_elapsed()}]")
+
+    # Reddit (cross-subreddit domain discussions)
+    await _emit("ingest", 31, "Searching Reddit...")
+    reddit_articles = await search_reddit(
+        search_domain, lookback_days=lookback_days,
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] Reddit done: {len(reddit_articles)} posts [{_elapsed()}]")
+
+    # DEV.to (developer articles and tutorials)
+    await _emit("ingest", 32, "Searching DEV.to...")
+    devto_articles = await fetch_devto_articles(
+        search_domain, lookback_days=lookback_days,
+        must_include=effective_must_include or None,
+    )
+    logger.info(f"[Stage 4/9] DEV.to done: {len(devto_articles)} articles [{_elapsed()}]")
+
     all_web = (
         rss_articles + ddg_articles + github_articles + arxiv_articles
         + hn_articles + patent_articles + epo_articles + google_patent_articles
+        + s2_articles + reddit_articles + devto_articles
     )
     all_raw = pseudo_articles + all_web
 
     await _emit(
-        "ingest", 30,
+        "ingest", 33,
         f"{len(pseudo_articles)} document sections + {len(all_web)} web articles"
     )
     logger.info(
