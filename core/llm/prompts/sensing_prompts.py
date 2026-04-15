@@ -37,6 +37,7 @@ def sensing_classify_prompt(
     topic_categories_text: str = "",
     industry_segments_text: str = "",
     custom_quadrant_names: list[str] | None = None,
+    date_range: str = "",
 ) -> list[dict]:
     """
     Build a chat prompt to classify and summarize a batch of articles.
@@ -85,6 +86,17 @@ def sensing_classify_prompt(
                 f"it specifically discusses their work on '{domain}' technologies.\n"
                 "- When in doubt, prefer EXCLUDING over INCLUDING. It is better to have "
                 "a focused report with fewer items than a diluted report with off-topic noise.\n\n"
+                + (
+                    f"RECENCY RULES:\n"
+                    f"- The target date range is: {date_range}.\n"
+                    "- Articles published MORE THAN 6 months before the current date should "
+                    "receive a significantly lower relevance_score (< 0.3) unless they describe "
+                    "a genuinely new development within the date range.\n"
+                    "- If an article discusses an old technology release (e.g., a product launched "
+                    "in 2024) as current news, it is NOT relevant — score it below 0.2.\n"
+                    "- Prioritize articles about developments from the last 1-3 months.\n\n"
+                    if date_range else ""
+                )
                 + _quadrant_definitions_block(custom_quadrant_names)
                 + "RING DEFINITIONS:\n"
                 "- Adopt: Proven technology, recommend for wide use\n"
@@ -181,6 +193,14 @@ def sensing_report_core_prompt(
                 "- Use article URLs to populate source_urls arrays (1-5 per entry).\n"
                 "- If an article includes a 'content_excerpt' field, use it for deeper context.\n"
                 "- Do NOT fabricate information not present in the articles.\n\n"
+                "RECENCY ENFORCEMENT:\n"
+                "- Focus on developments from the DATE RANGE specified below.\n"
+                "- Do NOT feature technologies or events that occurred BEFORE the date range "
+                "as if they are current news.\n"
+                "- If an article mentions an older product/technology as context or comparison, "
+                "do NOT create a headline_move or key_trend for it — only for NEW developments.\n"
+                "- Old product launches, discontinued products, and legacy technologies "
+                "should not appear as headline moves or trends.\n\n"
                 + (
                     f"ADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n\n"
                     if custom_requirements
@@ -356,6 +376,10 @@ def sensing_report_insights_prompt(
                 "- Use article URLs to populate source_urls arrays (1-5 per entry).\n"
                 "- If an article includes a 'content_excerpt' field, use it for deeper context.\n"
                 "- Do NOT fabricate information not present in the articles.\n\n"
+                "RECENCY ENFORCEMENT:\n"
+                "- Focus on developments from the DATE RANGE. Do not feature old events as current.\n"
+                "- Old product launches, discontinued products, and legacy technologies "
+                "should not appear in market signals, sections, or recommendations.\n\n"
                 "ATTRIBUTION ACCURACY RULES:\n"
                 "- Distinguish between research authors and implementation authors.\n"
                 "- For market_signals: The company_or_player must be the entity that TOOK THE ACTION.\n"

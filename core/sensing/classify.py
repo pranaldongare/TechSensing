@@ -27,6 +27,7 @@ async def classify_articles(
     key_people: list[str] | None = None,
     custom_quadrant_names: list[str] | None = None,
     preset=None,
+    date_range: str = "",
 ) -> List[ClassifiedArticle]:
     """
     Classify articles into Technology Radar quadrants/rings via LLM.
@@ -68,6 +69,7 @@ async def classify_articles(
             topic_categories_text=preset.topic_categories,
             industry_segments_text=preset.industry_segments,
             custom_quadrant_names=custom_quadrant_names,
+            date_range=date_range,
         )
 
         try:

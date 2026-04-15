@@ -170,7 +170,7 @@ async def run_sensing_pipeline(
         fetch_arxiv_papers(domain, lookback_days=lookback_days, must_include=must_include),
         fetch_hackernews(domain, lookback_days=lookback_days),
         search_google_patents(domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw),
-        fetch_semantic_scholar(domain, lookback_days=max(lookback_days, 30), must_include=must_include),
+        fetch_semantic_scholar(domain, lookback_days=lookback_days, must_include=must_include),
         search_reddit(domain, lookback_days=lookback_days, must_include=must_include),
     )
 
@@ -212,6 +212,15 @@ async def run_sensing_pipeline(
         f"[Stage 2/7] DEDUP COMPLETE: {len(all_raw)} -> {len(unique_articles)} unique [{_elapsed()}]"
     )
 
+    # Date filter: remove articles outside the allowed time window
+    before_date_filter = len(unique_articles)
+    unique_articles = _filter_by_date(unique_articles, lookback_days)
+    if len(unique_articles) < before_date_filter:
+        logger.info(
+            f"[Stage 2/7] Date filter: {before_date_filter} -> {len(unique_articles)} "
+            f"(removed {before_date_filter - len(unique_articles)} old articles)"
+        )
+
     # Load org context early so custom quadrant names are available for classification
     org_context_str = ""
     custom_quadrant_names = None
@@ -233,6 +242,14 @@ async def run_sensing_pipeline(
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
 
+    # Compute date range early (used by classifier recency rules and report generation)
+    now = datetime.now(timezone.utc)
+    if lookback_days > 0:
+        lookback_start = now - timedelta(days=lookback_days)
+        date_range = f"{lookback_start.strftime('%b %d')} - {now.strftime('%b %d, %Y')}"
+    else:
+        date_range = f"All time (as of {now.strftime('%b %d, %Y')})"
+
     # --- Stage 3: Classify (using title + snippet + any pre-existing content) ---
     logger.info(
         f"[Stage 3/7] CLASSIFY — classifying {len(unique_articles)} articles via LLM... [{_elapsed()}]"
@@ -243,6 +260,7 @@ async def run_sensing_pipeline(
         key_people=key_people,
         custom_quadrant_names=custom_quadrant_names,
         preset=preset,
+        date_range=date_range,
     )
     await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
@@ -284,12 +302,6 @@ async def run_sensing_pipeline(
     # --- Stage 5: Generate report ---
     logger.info(f"[Stage 5/7] REPORT — generating final report via LLM... [{_elapsed()}]")
     await _emit("report", 70, "Generating report with LLM...")
-    now = datetime.now(timezone.utc)
-    if lookback_days > 0:
-        lookback_start = now - timedelta(days=lookback_days)
-        date_range = f"{lookback_start.strftime('%b %d')} - {now.strftime('%b %d, %Y')}"
-    else:
-        date_range = f"All time (as of {now.strftime('%b %d, %Y')})"
 
     report = await generate_report(
         classified_articles=classified,
@@ -559,6 +571,50 @@ def _merge_patent_keywords(
             if kw not in keywords:
                 keywords.append(kw)
     return keywords or must_include
+
+
+def _filter_by_date(
+    articles: List[RawArticle],
+    lookback_days: int,
+    buffer_multiplier: float = 2.0,
+) -> List[RawArticle]:
+    """Remove articles with published_date outside the allowed window.
+
+    Articles with no date or unparseable dates are KEPT (benefit of doubt).
+    Buffer multiplier allows 2x the lookback window to account for
+    articles published slightly before the range but still relevant.
+    """
+    if lookback_days <= 0:
+        return articles
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=int(lookback_days * buffer_multiplier)
+    )
+    kept = []
+    filtered = 0
+    for a in articles:
+        if not a.published_date:
+            kept.append(a)
+            continue
+        try:
+            pub_dt = datetime.fromisoformat(
+                a.published_date.replace("Z", "+00:00")
+            )
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            if pub_dt < cutoff:
+                filtered += 1
+                continue
+        except (ValueError, TypeError):
+            pass
+        kept.append(a)
+
+    if filtered:
+        logger.info(
+            f"Date filter: removed {filtered} articles older than "
+            f"{int(lookback_days * buffer_multiplier)} days"
+        )
+    return kept
 
 
 def _matches_exclusion(article: RawArticle, dont_lower: list[str]) -> bool:
@@ -898,7 +954,7 @@ async def run_sensing_pipeline_from_document(
         fetch_arxiv_papers(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
         fetch_hackernews(search_domain, lookback_days=lookback_days),
         search_google_patents(search_domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw),
-        fetch_semantic_scholar(search_domain, lookback_days=max(lookback_days, 30), must_include=effective_must_include or None),
+        fetch_semantic_scholar(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
         search_reddit(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
     )
 
@@ -939,6 +995,15 @@ async def run_sensing_pipeline_from_document(
         f"[Stage 5/9] DEDUP COMPLETE: {len(all_raw)} -> {len(unique_articles)} unique [{_elapsed()}]"
     )
 
+    # Date filter: remove articles outside the allowed time window
+    before_date_filter = len(unique_articles)
+    unique_articles = _filter_by_date(unique_articles, lookback_days)
+    if len(unique_articles) < before_date_filter:
+        logger.info(
+            f"[Stage 5/9] Date filter: {before_date_filter} -> {len(unique_articles)} "
+            f"(removed {before_date_filter - len(unique_articles)} old articles)"
+        )
+
     # Load org context for custom quadrant names
     org_context_str = ""
     custom_quadrant_names = None
@@ -958,6 +1023,17 @@ async def run_sensing_pipeline_from_document(
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
 
+    # Compute date range early (used by classifier recency rules and report generation)
+    now = datetime.now(timezone.utc)
+    if lookback_days > 0:
+        lookback_start = now - timedelta(days=lookback_days)
+        date_range = (
+            f"Document: {file_name} + Web: "
+            f"{lookback_start.strftime('%b %d')} - {now.strftime('%b %d, %Y')}"
+        )
+    else:
+        date_range = f"Document: {file_name} + Web (all time)"
+
     # --- Stage 6: Classify (using title + snippet + any pre-existing content) ---
     logger.info(
         f"[Stage 6/9] CLASSIFY — {len(unique_articles)} articles via LLM... [{_elapsed()}]"
@@ -968,6 +1044,7 @@ async def run_sensing_pipeline_from_document(
         key_people=effective_key_people or None,
         custom_quadrant_names=custom_quadrant_names,
         preset=preset,
+        date_range=date_range,
     )
     await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
@@ -1008,16 +1085,6 @@ async def run_sensing_pipeline_from_document(
     # --- Stage 8: Generate report ---
     logger.info(f"[Stage 8/9] REPORT — generating... [{_elapsed()}]")
     await _emit("report", 70, "Generating report with LLM...")
-
-    now = datetime.now(timezone.utc)
-    if lookback_days > 0:
-        lookback_start = now - timedelta(days=lookback_days)
-        date_range = (
-            f"Document: {file_name} + Web: "
-            f"{lookback_start.strftime('%b %d')} - {now.strftime('%b %d, %Y')}"
-        )
-    else:
-        date_range = f"Document: {file_name} + Web (all time)"
 
     report = await generate_report(
         classified_articles=classified,
