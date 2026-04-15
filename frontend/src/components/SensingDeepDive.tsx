@@ -1,21 +1,14 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Loader2, MessageCircle, History, ChevronDown, ChevronRight } from 'lucide-react';
-import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
+import { History, ChevronDown, ChevronRight } from 'lucide-react';
 import type { DeepDiveReport, DeepDiveHistoryItem } from '@/lib/api';
 
 interface SensingDeepDiveProps {
   report: DeepDiveReport;
   trackingId?: string;
   domain?: string;
-  onFollowUp?: (question: string) => void;
-  followUpMessages?: { role: string; content: string }[];
-  followUpLoading?: boolean;
-  suggestedQuestions?: string[];
   deepDiveHistory?: DeepDiveHistoryItem[];
   onLoadDeepDive?: (trackingId: string) => void;
 }
@@ -23,28 +16,10 @@ interface SensingDeepDiveProps {
 const SensingDeepDive: React.FC<SensingDeepDiveProps> = ({
   report,
   trackingId,
-  domain,
-  onFollowUp,
-  followUpMessages = [],
-  followUpLoading = false,
-  suggestedQuestions = [],
   deepDiveHistory = [],
   onLoadDeepDive,
 }) => {
-  const [inputValue, setInputValue] = useState('');
   const [showHistory, setShowHistory] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [followUpMessages]);
-
-  const handleSend = () => {
-    if (inputValue.trim() && onFollowUp) {
-      onFollowUp(inputValue.trim());
-      setInputValue('');
-    }
-  };
 
   return (
     <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2">
@@ -77,11 +52,6 @@ const SensingDeepDive: React.FC<SensingDeepDiveProps> = ({
                         {item.domain ? ` · ${item.domain}` : ''}
                       </span>
                     </div>
-                    {item.message_count > 0 && (
-                      <Badge variant="secondary" className="text-[10px] ml-2 shrink-0">
-                        {item.message_count} msgs
-                      </Badge>
-                    )}
                   </button>
                 ))}
               </div>
@@ -210,98 +180,6 @@ const SensingDeepDive: React.FC<SensingDeepDiveProps> = ({
                 </li>
               ))}
             </ul>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Follow-Up Chat Section */}
-      {trackingId && onFollowUp && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <MessageCircle className="w-4 h-4" />
-              Follow-Up Questions
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {/* Conversation Messages */}
-            {followUpMessages.length > 0 && (
-              <div className="space-y-3 max-h-[300px] overflow-y-auto">
-                {followUpMessages.map((msg, i) => (
-                  <div
-                    key={i}
-                    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                        msg.role === 'user'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted'
-                      }`}
-                    >
-                      {msg.role === 'assistant' ? (
-                        <SafeMarkdownRenderer content={msg.content} />
-                      ) : (
-                        msg.content
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {followUpLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-muted rounded-lg px-3 py-2 text-sm flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Thinking...
-                    </div>
-                  </div>
-                )}
-                <div ref={chatEndRef} />
-              </div>
-            )}
-
-            {/* Suggested Questions */}
-            {suggestedQuestions.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {suggestedQuestions.map((q, i) => (
-                  <button
-                    key={i}
-                    onClick={() => onFollowUp(q)}
-                    disabled={followUpLoading}
-                    className="text-xs bg-muted hover:bg-muted/80 rounded-full px-3 py-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Chat Input */}
-            <div className="flex gap-2">
-              <Input
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder={`Ask about ${report.technology_name}...`}
-                disabled={followUpLoading}
-                className="flex-1"
-              />
-              <Button
-                size="sm"
-                onClick={handleSend}
-                disabled={!inputValue.trim() || followUpLoading}
-              >
-                {followUpLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4" />
-                )}
-              </Button>
-            </div>
           </CardContent>
         </Card>
       )}

@@ -38,6 +38,10 @@ class OrgTechContext(BaseModel):
     radar_customization: Optional[RadarCustomization] = Field(
         default=None, description="Custom radar quadrant names and colors"
     )
+    stakeholder_role: str = Field(
+        default="general",
+        description="User's role: 'cto', 'engineering_lead', 'developer', 'product_manager', 'general'",
+    )
 
 
 async def load_org_context(user_id: str) -> Optional[OrgTechContext]:

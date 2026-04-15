@@ -26,12 +26,9 @@ from core.sensing.movement import detect_radar_movements
 from core.sensing.report_generator import generate_report
 from core.sensing.signal_score import compute_signal_strengths
 from core.sensing.sources.arxiv_search import fetch_arxiv_papers
-from core.sensing.sources.devto_search import fetch_devto_articles
 from core.sensing.sources.github_trending import fetch_github_trending
 from core.sensing.sources.hackernews import fetch_hackernews
-from core.sensing.sources.epo_patent_search import search_epo_patents
 from core.sensing.sources.google_patent_search import search_google_patents
-from core.sensing.sources.patent_search import search_patents
 from core.sensing.sources.reddit_search import search_reddit
 from core.sensing.sources.semantic_scholar import fetch_semantic_scholar
 from core.sensing.sources.youtube_videos import fetch_youtube_videos
@@ -63,6 +60,7 @@ async def run_sensing_pipeline(
     progress_callback: Optional[Callable] = None,
     user_id: Optional[str] = None,
     key_people: Optional[List[str]] = None,
+    include_videos: bool = False,
 ) -> SensingPipelineResult:
     """
     Full tech sensing pipeline execution.
@@ -117,6 +115,25 @@ async def run_sensing_pipeline(
             key_people = list(domain_ref.key_people)
             logger.info(f"Using dynamic key_people: {key_people}")
 
+    # --- Topic Preferences: boost interested, suppress not-interested ---
+    if user_id:
+        try:
+            from core.sensing.topic_preferences import load_topic_preferences
+
+            topic_prefs = await load_topic_preferences(user_id, domain)
+            if topic_prefs.interested:
+                boosted = [t for t in topic_prefs.interested if t not in (must_include or [])]
+                if boosted:
+                    must_include = list(must_include or []) + boosted
+                    logger.info(f"Topic prefs: boosted {len(boosted)} interested topics")
+            if topic_prefs.not_interested:
+                suppressed = [t for t in topic_prefs.not_interested if t not in (dont_include or [])]
+                if suppressed:
+                    dont_include = list(dont_include or []) + suppressed
+                    logger.info(f"Topic prefs: suppressed {len(suppressed)} not-interested topics")
+        except Exception as e:
+            logger.warning(f"Topic preferences load failed (non-fatal): {e}")
+
     # Build keyword filter instructions for prompts
     keyword_instructions = _build_keyword_instructions(
         domain, must_include, dont_include
@@ -129,112 +146,46 @@ async def run_sensing_pipeline(
             else keyword_instructions
         )
 
-    # --- Stage 1: Ingest ---
-    logger.info(f"[Stage 1/7] INGEST — starting RSS feeds... [{_elapsed()}]")
-    await _emit("ingest", 10, "Fetching RSS feeds...")
+    # --- Stage 1: Ingest (all 8 sources in parallel) ---
+    logger.info(f"[Stage 1/7] INGEST — launching all sources in parallel... [{_elapsed()}]")
+    await _emit("ingest", 10, "Fetching all sources in parallel...")
+
     effective_feeds = feed_urls or _merge_feeds(domain, domain_ref)
-    rss_articles = await fetch_rss_feeds(
-        effective_feeds, lookback_days=lookback_days, domain=domain
-    )
-    logger.info(
-        f"[Stage 1/7] RSS done: {len(rss_articles)} articles [{_elapsed()}]"
-    )
-
-    await _emit("ingest", 18, "Searching DuckDuckGo...")
-    logger.info(f"[Stage 1/7] INGEST — starting DuckDuckGo... [{_elapsed()}]")
     effective_queries = search_queries or _merge_queries(domain, domain_ref, must_include)
-    ddg_articles = await search_duckduckgo(
-        effective_queries, domain,
-        lookback_days=lookback_days,
-        must_include=must_include,
-    )
-    logger.info(
-        f"[Stage 1/7] DDG done: {len(ddg_articles)} articles [{_elapsed()}]"
-    )
-
-    # GitHub trending repos
-    await _emit("ingest", 19, "Searching GitHub trending...")
-    logger.info(f"[Stage 1/7] INGEST — starting GitHub... [{_elapsed()}]")
-    github_articles = await fetch_github_trending(domain, lookback_days=lookback_days)
-    logger.info(f"[Stage 1/7] GitHub done: {len(github_articles)} repos [{_elapsed()}]")
-
-    # arXiv papers
-    await _emit("ingest", 20, "Searching arXiv...")
-    logger.info(f"[Stage 1/7] INGEST — starting arXiv... [{_elapsed()}]")
-    arxiv_articles = await fetch_arxiv_papers(
-        domain, lookback_days=lookback_days, must_include=must_include,
-    )
-    logger.info(f"[Stage 1/7] arXiv done: {len(arxiv_articles)} papers [{_elapsed()}]")
-
-    # Hacker News
-    await _emit("ingest", 21, "Searching Hacker News...")
-    logger.info(f"[Stage 1/7] INGEST — starting HN... [{_elapsed()}]")
-    hn_articles = await fetch_hackernews(domain, lookback_days=lookback_days)
-    logger.info(f"[Stage 1/7] HN done: {len(hn_articles)} stories [{_elapsed()}]")
-
-    # USPTO Patents (longer lookback since patents publish slowly)
-    await _emit("ingest", 22, "Searching USPTO patents...")
-    logger.info(f"[Stage 1/7] INGEST — starting patent search... [{_elapsed()}]")
     effective_patent_kw = _merge_patent_keywords(domain_ref, must_include)
-    patent_articles = await search_patents(
-        domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw,
-    )
-    logger.info(f"[Stage 1/7] USPTO done: {len(patent_articles)} patents [{_elapsed()}]")
 
-    # EPO Patents (global coverage — complements USPTO)
-    await _emit("ingest", 23, "Searching EPO patents...")
-    logger.info(f"[Stage 1/7] INGEST — starting EPO patent search... [{_elapsed()}]")
-    epo_articles = await search_epo_patents(
-        domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw,
+    (
+        rss_articles,
+        ddg_articles,
+        github_articles,
+        arxiv_articles,
+        hn_articles,
+        google_patent_articles,
+        s2_articles,
+        reddit_articles,
+    ) = await asyncio.gather(
+        fetch_rss_feeds(effective_feeds, lookback_days=lookback_days, domain=domain),
+        search_duckduckgo(effective_queries, domain, lookback_days=lookback_days, must_include=must_include),
+        fetch_github_trending(domain, lookback_days=lookback_days),
+        fetch_arxiv_papers(domain, lookback_days=lookback_days, must_include=must_include),
+        fetch_hackernews(domain, lookback_days=lookback_days),
+        search_google_patents(domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw),
+        fetch_semantic_scholar(domain, lookback_days=max(lookback_days, 30), must_include=must_include),
+        search_reddit(domain, lookback_days=lookback_days, must_include=must_include),
     )
-    logger.info(f"[Stage 1/7] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
-
-    # Google Patents (via Tavily — broadest coverage)
-    await _emit("ingest", 24, "Searching Google Patents...")
-    logger.info(f"[Stage 1/7] INGEST — starting Google Patents search... [{_elapsed()}]")
-    google_patent_articles = await search_google_patents(
-        domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw,
-    )
-    logger.info(f"[Stage 1/7] Google Patents done: {len(google_patent_articles)} patents [{_elapsed()}]")
-
-    # Semantic Scholar (academic papers across all disciplines)
-    await _emit("ingest", 25, "Searching Semantic Scholar...")
-    logger.info(f"[Stage 1/7] INGEST — starting Semantic Scholar... [{_elapsed()}]")
-    s2_articles = await fetch_semantic_scholar(
-        domain, lookback_days=max(lookback_days, 30), must_include=must_include,
-    )
-    logger.info(f"[Stage 1/7] Semantic Scholar done: {len(s2_articles)} papers [{_elapsed()}]")
-
-    # Reddit (cross-subreddit domain discussions)
-    await _emit("ingest", 26, "Searching Reddit...")
-    logger.info(f"[Stage 1/7] INGEST — starting Reddit search... [{_elapsed()}]")
-    reddit_articles = await search_reddit(
-        domain, lookback_days=lookback_days, must_include=must_include,
-    )
-    logger.info(f"[Stage 1/7] Reddit done: {len(reddit_articles)} posts [{_elapsed()}]")
-
-    # DEV.to (developer articles and tutorials)
-    await _emit("ingest", 27, "Searching DEV.to...")
-    logger.info(f"[Stage 1/7] INGEST — starting DEV.to... [{_elapsed()}]")
-    devto_articles = await fetch_devto_articles(
-        domain, lookback_days=lookback_days, must_include=must_include,
-    )
-    logger.info(f"[Stage 1/7] DEV.to done: {len(devto_articles)} articles [{_elapsed()}]")
 
     all_raw = (
         rss_articles + ddg_articles + github_articles + arxiv_articles
-        + hn_articles + patent_articles + epo_articles + google_patent_articles
-        + s2_articles + reddit_articles + devto_articles
+        + hn_articles + google_patent_articles
+        + s2_articles + reddit_articles
     )
-    await _emit("ingest", 28, f"Found {len(all_raw)} raw articles from 11 sources")
+    await _emit("ingest", 25, f"Found {len(all_raw)} raw articles from 8 sources")
     logger.info(
         f"[Stage 1/7] INGEST COMPLETE: {len(all_raw)} total raw articles "
         f"(RSS={len(rss_articles)}, DDG={len(ddg_articles)}, "
         f"GitHub={len(github_articles)}, arXiv={len(arxiv_articles)}, "
-        f"HN={len(hn_articles)}, USPTO={len(patent_articles)}, "
-        f"EPO={len(epo_articles)}, GooglePat={len(google_patent_articles)}, "
-        f"S2={len(s2_articles)}, Reddit={len(reddit_articles)}, "
-        f"DEV.to={len(devto_articles)}) [{_elapsed()}]"
+        f"HN={len(hn_articles)}, GooglePat={len(google_patent_articles)}, "
+        f"S2={len(s2_articles)}, Reddit={len(reddit_articles)}) [{_elapsed()}]"
     )
 
     # --- Stage 2: Dedup ---
@@ -285,6 +236,7 @@ async def run_sensing_pipeline(
     # Load org context early so custom quadrant names are available for classification
     org_context_str = ""
     custom_quadrant_names = None
+    stakeholder_role = "general"
     if user_id:
         try:
             from core.sensing.org_context import build_org_context_prompt, load_org_context
@@ -297,6 +249,8 @@ async def run_sensing_pipeline(
                         q.name for q in org_ctx.radar_customization.quadrants
                     ]
                     logger.info(f"Custom radar quadrants: {custom_quadrant_names}")
+                if org_ctx.stakeholder_role:
+                    stakeholder_role = org_ctx.stakeholder_role
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
 
@@ -346,6 +300,7 @@ async def run_sensing_pipeline(
         preset=preset,
         dynamic_generic_blocklist=set(domain_ref.generic_terms_blocklist),
         dynamic_legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
+        stakeholder_role=stakeholder_role,
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(
@@ -383,8 +338,40 @@ async def run_sensing_pipeline(
 
     # Signal strength scoring
     logger.info(f"Computing signal strengths... [{_elapsed()}]")
-    await _emit("scoring", 96, "Computing signal strengths...")
-    report = compute_signal_strengths(report, classified)
+    await _emit("scoring", 94, "Computing signal strengths...")
+    report = await compute_signal_strengths(report, classified, user_id=user_id)
+
+    # Technology lifecycle detection
+    from core.sensing.lifecycle import detect_lifecycle_stages
+    report = detect_lifecycle_stages(report, classified)
+
+    # Report confidence scoring
+    report.report_confidence, report.confidence_factors = _compute_report_confidence(
+        raw_article_count=len(all_raw),
+        deduped_count=len(unique_articles),
+        classified_count=len(classified),
+        content_extraction_count=content_count,
+        source_names=set(a.source for a in enriched),
+        radar_item_count=len(report.radar_items),
+    )
+    logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
+
+    # Funding signal enrichment
+    await _emit("funding", 95, "Checking funding signals...")
+    try:
+        from core.sensing.sources.funding_signals import enrich_with_funding_signals
+
+        tech_names = [item.name for item in report.radar_items[:15]]
+        funding_signals = await enrich_with_funding_signals(tech_names, domain)
+
+        funding_map = {s.technology_name.lower(): s for s in funding_signals if s.has_recent_funding}
+        for item in report.radar_items:
+            signal = funding_map.get(item.name.lower())
+            if signal:
+                item.funding_signal = signal.funding_summary
+                item.signal_strength = min(1.0, item.signal_strength + 0.15)
+    except Exception as e:
+        logger.warning(f"Funding enrichment failed (non-fatal): {e}")
 
     # --- Technology Relationship Extraction ---
     if user_id:
@@ -419,68 +406,63 @@ async def run_sensing_pipeline(
             logger.warning(f"Weak signal detection failed (non-fatal): {e}")
             report.weak_signals = []
 
-    # --- Alert Detection ---
-    alerts = []
-    if user_id:
-        logger.info(f"Detecting alerts... [{_elapsed()}]")
-        try:
-            from core.sensing.alerts import detect_alerts
-            from core.sensing.movement import load_previous_report
-            from core.sensing.org_context import load_org_context
-
-            previous_report = await load_previous_report(user_id, domain)
-            org_ctx = None
-            try:
-                org_ctx = await load_org_context(user_id)
-            except Exception:
-                pass
-
-            alerts = await detect_alerts(
-                new_report=report,
-                user_id=user_id,
-                domain=domain,
-                previous_report_data=previous_report,
-                org_tech_stack=org_ctx.tech_stack if org_ctx else None,
-                weak_signals=getattr(report, "weak_signals", []),
-            )
-            logger.info(f"Alerts: {len(alerts)} generated [{_elapsed()}]")
-        except Exception as e:
-            logger.warning(f"Alert detection failed (non-fatal): {e}")
-
     # --- YouTube Video Enrichment ---
-    logger.info(f"Enriching with YouTube videos... [{_elapsed()}]")
-    await _emit("videos", 98, "Finding trending YouTube videos...")
-    try:
-        sorted_radar = sorted(
-            report.radar_items,
-            key=lambda r: r.signal_strength,
-            reverse=True,
-        )
-        tech_names = [item.name for item in sorted_radar[:10]]
-
-        raw_videos = await fetch_youtube_videos(tech_names)
-
-        report.trending_videos = [
-            TrendingVideoItem(
-                technology_name=v.technology_name,
-                title=v.title,
-                url=v.url,
-                description=v.description,
-                uploader=v.uploader,
-                duration=v.duration,
-                published=v.published,
-                view_count=v.view_count,
-                thumbnail_url=v.thumbnail_url,
+    # YouTube video enrichment (opt-in)
+    if include_videos:
+        logger.info(f"Enriching with YouTube videos... [{_elapsed()}]")
+        await _emit("videos", 98, "Finding trending YouTube videos...")
+        try:
+            sorted_radar = sorted(
+                report.radar_items,
+                key=lambda r: r.signal_strength,
+                reverse=True,
             )
-            for v in raw_videos
-        ]
-        logger.info(
-            f"YouTube enrichment: {len(report.trending_videos)} videos "
-            f"for {len(tech_names)} technologies [{_elapsed()}]"
-        )
-    except Exception as e:
-        logger.warning(f"YouTube video enrichment failed (non-fatal): {e}")
+            tech_names = [item.name for item in sorted_radar[:10]]
+
+            raw_videos = await fetch_youtube_videos(tech_names)
+
+            report.trending_videos = [
+                TrendingVideoItem(
+                    technology_name=v.technology_name,
+                    title=v.title,
+                    url=v.url,
+                    description=v.description,
+                    uploader=v.uploader,
+                    duration=v.duration,
+                    published=v.published,
+                    view_count=v.view_count,
+                    thumbnail_url=v.thumbnail_url,
+                )
+                for v in raw_videos
+            ]
+            logger.info(
+                f"YouTube enrichment: {len(report.trending_videos)} videos "
+                f"for {len(tech_names)} technologies [{_elapsed()}]"
+            )
+        except Exception as e:
+            logger.warning(f"YouTube video enrichment failed (non-fatal): {e}")
+            report.trending_videos = []
+    else:
         report.trending_videos = []
+
+    # --- Model Releases (GenAI domains only) ---
+    if _is_ai_domain(domain):
+        logger.info(f"Searching for model releases... [{_elapsed()}]")
+        await _emit("model_releases", 99, "Finding recent model releases...")
+        try:
+            from core.sensing.sources.model_releases import search_model_releases
+            from core.sensing.model_release_extractor import extract_model_releases
+
+            mr_articles = await search_model_releases(lookback_days=lookback_days)
+            if mr_articles:
+                releases = await extract_model_releases(mr_articles, lookback_days=lookback_days)
+                report.model_releases = releases
+                logger.info(f"Model releases: {len(releases)} found [{_elapsed()}]")
+            else:
+                report.model_releases = []
+        except Exception as e:
+            logger.warning(f"Model releases extraction failed (non-fatal): {e}")
+            report.model_releases = []
 
     await _emit("complete", 100, "Report ready")
 
@@ -500,8 +482,14 @@ async def run_sensing_pipeline(
         deduped_article_count=len(unique_articles),
         classified_article_count=len(classified),
         execution_time_seconds=round(elapsed, 2),
-        alerts=alerts or None,
+        alerts=None,
     )
+
+
+def _is_ai_domain(domain: str) -> bool:
+    """Check if the domain is AI-related (triggers model releases extraction)."""
+    d = domain.lower()
+    return any(kw in d for kw in ("ai", "generative", "llm", "machine learning", "deep learning"))
 
 
 def _merge_feeds(domain: str, ref: StoredDomainReference) -> list[str]:
@@ -597,6 +585,82 @@ def _build_keyword_instructions(
     return "\n".join(parts)
 
 
+def _compute_report_confidence(
+    raw_article_count: int,
+    deduped_count: int,
+    classified_count: int,
+    content_extraction_count: int,
+    source_names: set,
+    radar_item_count: int,
+) -> tuple[str, dict]:
+    """Compute overall report confidence score."""
+    scores = {}
+
+    # Volume score (0-1)
+    if classified_count >= 80:
+        scores["article_volume"] = 1.0
+    elif classified_count >= 40:
+        scores["article_volume"] = 0.7
+    elif classified_count >= 15:
+        scores["article_volume"] = 0.4
+    else:
+        scores["article_volume"] = 0.2
+
+    # Source diversity (0-1)
+    source_count = len(source_names)
+    if source_count >= 6:
+        scores["source_diversity"] = 1.0
+    elif source_count >= 4:
+        scores["source_diversity"] = 0.7
+    elif source_count >= 2:
+        scores["source_diversity"] = 0.4
+    else:
+        scores["source_diversity"] = 0.2
+
+    # Content extraction rate (0-1)
+    if deduped_count > 0:
+        extraction_rate = content_extraction_count / deduped_count
+        scores["content_extraction"] = round(min(1.0, extraction_rate * 1.2), 2)
+    else:
+        scores["content_extraction"] = 0.0
+
+    # Radar coverage (0-1)
+    if radar_item_count >= 15:
+        scores["radar_coverage"] = 1.0
+    elif radar_item_count >= 8:
+        scores["radar_coverage"] = 0.7
+    elif radar_item_count >= 3:
+        scores["radar_coverage"] = 0.4
+    else:
+        scores["radar_coverage"] = 0.2
+
+    # Weighted average
+    weights = {
+        "article_volume": 0.3,
+        "source_diversity": 0.3,
+        "content_extraction": 0.2,
+        "radar_coverage": 0.2,
+    }
+    weighted = sum(scores[k] * weights[k] for k in scores)
+
+    if weighted >= 0.7:
+        confidence = "high"
+    elif weighted >= 0.4:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    factors = {
+        **scores,
+        "weighted_score": round(weighted, 2),
+        "articles_analyzed": classified_count,
+        "sources_used": source_count,
+        "source_names": sorted(source_names),
+    }
+
+    return confidence, factors
+
+
 async def _extract_document_topics(
     document_text: str,
     domain: str,
@@ -637,6 +701,7 @@ async def run_sensing_pipeline_from_document(
     progress_callback: Optional[Callable] = None,
     user_id: Optional[str] = None,
     key_people: Optional[List[str]] = None,
+    include_videos: bool = False,
 ) -> SensingPipelineResult:
     """Hybrid sensing pipeline: parse an uploaded document, extract key themes
     via LLM, then use those themes to drive the full web search pipeline.
@@ -755,6 +820,24 @@ async def run_sensing_pipeline_from_document(
         f"Found {len(effective_must_include)} technology keywords"
     )
 
+    # --- Topic Preferences: boost interested, suppress not-interested ---
+    if user_id:
+        try:
+            from core.sensing.topic_preferences import load_topic_preferences
+
+            topic_prefs = await load_topic_preferences(user_id, domain)
+            if topic_prefs.interested:
+                for t in topic_prefs.interested:
+                    if t not in effective_must_include:
+                        effective_must_include.append(t)
+            if topic_prefs.not_interested:
+                dont_include = list(dont_include or [])
+                for t in topic_prefs.not_interested:
+                    if t not in dont_include:
+                        dont_include.append(t)
+        except Exception as e:
+            logger.warning(f"Topic preferences load failed (non-fatal): {e}")
+
     # Build keyword filter instructions
     keyword_instructions = _build_keyword_instructions(
         domain, effective_must_include or None, dont_include
@@ -786,92 +869,37 @@ async def run_sensing_pipeline_from_document(
         f"[Stage 3/9] SPLIT COMPLETE: {len(pseudo_articles)} pseudo-articles [{_elapsed()}]"
     )
 
-    # --- Stage 4: Web Ingest (all 8 sources, driven by extracted topics) ---
-    logger.info(f"[Stage 4/9] WEB INGEST — starting... [{_elapsed()}]")
-    await _emit("ingest", 18, "Fetching RSS feeds...")
+    # --- Stage 4: Web Ingest (all 8 sources in parallel, driven by extracted topics) ---
+    logger.info(f"[Stage 4/9] WEB INGEST — launching all sources in parallel... [{_elapsed()}]")
+    await _emit("ingest", 18, "Fetching all sources in parallel...")
 
     effective_feeds = _merge_feeds(search_domain, domain_ref)
-    rss_articles = await fetch_rss_feeds(
-        feed_urls=effective_feeds,
-        lookback_days=lookback_days,
-        domain=search_domain,
-    )
-    logger.info(f"[Stage 4/9] RSS done: {len(rss_articles)} articles [{_elapsed()}]")
-
-    await _emit("ingest", 20, "Searching DuckDuckGo...")
-    ddg_articles = await search_duckduckgo(
-        queries=effective_search_queries,
-        domain=search_domain,
-        lookback_days=lookback_days,
-        must_include=effective_must_include or None,
-    )
-    logger.info(f"[Stage 4/9] DDG done: {len(ddg_articles)} articles [{_elapsed()}]")
-
-    await _emit("ingest", 22, "Searching GitHub trending...")
-    github_articles = await fetch_github_trending(search_domain, lookback_days=lookback_days)
-    logger.info(f"[Stage 4/9] GitHub done: {len(github_articles)} repos [{_elapsed()}]")
-
-    await _emit("ingest", 23, "Searching arXiv...")
-    arxiv_articles = await fetch_arxiv_papers(
-        search_domain, lookback_days=lookback_days,
-        must_include=effective_must_include or None,
-    )
-    logger.info(f"[Stage 4/9] arXiv done: {len(arxiv_articles)} papers [{_elapsed()}]")
-
-    await _emit("ingest", 24, "Searching Hacker News...")
-    hn_articles = await fetch_hackernews(search_domain, lookback_days=lookback_days)
-    logger.info(f"[Stage 4/9] HN done: {len(hn_articles)} stories [{_elapsed()}]")
-
-    await _emit("ingest", 26, "Searching USPTO patents...")
     effective_patent_kw = _merge_patent_keywords(domain_ref, effective_must_include or None)
-    patent_articles = await search_patents(
-        search_domain, lookback_days=max(lookback_days, 365),
-        must_include=effective_patent_kw,
-    )
-    logger.info(f"[Stage 4/9] USPTO done: {len(patent_articles)} patents [{_elapsed()}]")
 
-    await _emit("ingest", 28, "Searching EPO patents...")
-    epo_articles = await search_epo_patents(
-        search_domain, lookback_days=max(lookback_days, 365),
-        must_include=effective_patent_kw,
+    (
+        rss_articles,
+        ddg_articles,
+        github_articles,
+        arxiv_articles,
+        hn_articles,
+        google_patent_articles,
+        s2_articles,
+        reddit_articles,
+    ) = await asyncio.gather(
+        fetch_rss_feeds(feed_urls=effective_feeds, lookback_days=lookback_days, domain=search_domain),
+        search_duckduckgo(queries=effective_search_queries, domain=search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
+        fetch_github_trending(search_domain, lookback_days=lookback_days),
+        fetch_arxiv_papers(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
+        fetch_hackernews(search_domain, lookback_days=lookback_days),
+        search_google_patents(search_domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw),
+        fetch_semantic_scholar(search_domain, lookback_days=max(lookback_days, 30), must_include=effective_must_include or None),
+        search_reddit(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
     )
-    logger.info(f"[Stage 4/9] EPO done: {len(epo_articles)} patents [{_elapsed()}]")
-
-    await _emit("ingest", 29, "Searching Google Patents...")
-    google_patent_articles = await search_google_patents(
-        search_domain, lookback_days=max(lookback_days, 365),
-        must_include=effective_patent_kw,
-    )
-    logger.info(f"[Stage 4/9] Google Patents done: {len(google_patent_articles)} patents [{_elapsed()}]")
-
-    # Semantic Scholar (academic papers across all disciplines)
-    await _emit("ingest", 30, "Searching Semantic Scholar...")
-    s2_articles = await fetch_semantic_scholar(
-        search_domain, lookback_days=max(lookback_days, 30),
-        must_include=effective_must_include or None,
-    )
-    logger.info(f"[Stage 4/9] Semantic Scholar done: {len(s2_articles)} papers [{_elapsed()}]")
-
-    # Reddit (cross-subreddit domain discussions)
-    await _emit("ingest", 31, "Searching Reddit...")
-    reddit_articles = await search_reddit(
-        search_domain, lookback_days=lookback_days,
-        must_include=effective_must_include or None,
-    )
-    logger.info(f"[Stage 4/9] Reddit done: {len(reddit_articles)} posts [{_elapsed()}]")
-
-    # DEV.to (developer articles and tutorials)
-    await _emit("ingest", 32, "Searching DEV.to...")
-    devto_articles = await fetch_devto_articles(
-        search_domain, lookback_days=lookback_days,
-        must_include=effective_must_include or None,
-    )
-    logger.info(f"[Stage 4/9] DEV.to done: {len(devto_articles)} articles [{_elapsed()}]")
 
     all_web = (
         rss_articles + ddg_articles + github_articles + arxiv_articles
-        + hn_articles + patent_articles + epo_articles + google_patent_articles
-        + s2_articles + reddit_articles + devto_articles
+        + hn_articles + google_patent_articles
+        + s2_articles + reddit_articles
     )
     all_raw = pseudo_articles + all_web
 
@@ -929,6 +957,7 @@ async def run_sensing_pipeline_from_document(
     # Load org context for custom quadrant names
     org_context_str = ""
     custom_quadrant_names = None
+    stakeholder_role = "general"
     if user_id:
         try:
             from core.sensing.org_context import build_org_context_prompt, load_org_context
@@ -939,6 +968,8 @@ async def run_sensing_pipeline_from_document(
                     custom_quadrant_names = [
                         q.name for q in org_ctx.radar_customization.quadrants
                     ]
+                if org_ctx.stakeholder_role:
+                    stakeholder_role = org_ctx.stakeholder_role
         except Exception as e:
             logger.warning(f"Failed to load org context: {e}")
 
@@ -991,6 +1022,7 @@ async def run_sensing_pipeline_from_document(
         preset=preset,
         dynamic_generic_blocklist=set(domain_ref.generic_terms_blocklist),
         dynamic_legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
+        stakeholder_role=stakeholder_role,
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(f"[Stage 8/9] REPORT COMPLETE [{_elapsed()}]")
@@ -1016,8 +1048,40 @@ async def run_sensing_pipeline_from_document(
         )
 
     # Signal strength scoring
-    await _emit("scoring", 94, "Computing signal strengths...")
-    report = compute_signal_strengths(report, classified)
+    await _emit("scoring", 92, "Computing signal strengths...")
+    report = await compute_signal_strengths(report, classified, user_id=user_id)
+
+    # Technology lifecycle detection
+    from core.sensing.lifecycle import detect_lifecycle_stages
+    report = detect_lifecycle_stages(report, classified)
+
+    # Report confidence scoring
+    report.report_confidence, report.confidence_factors = _compute_report_confidence(
+        raw_article_count=len(all_raw),
+        deduped_count=len(unique_articles),
+        classified_count=len(classified),
+        content_extraction_count=content_count,
+        source_names=set(a.source for a in enriched),
+        radar_item_count=len(report.radar_items),
+    )
+    logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
+
+    # Funding signal enrichment
+    await _emit("funding", 94, "Checking funding signals...")
+    try:
+        from core.sensing.sources.funding_signals import enrich_with_funding_signals
+
+        tech_names = [item.name for item in report.radar_items[:15]]
+        funding_signals = await enrich_with_funding_signals(tech_names, domain)
+
+        funding_map = {s.technology_name.lower(): s for s in funding_signals if s.has_recent_funding}
+        for item in report.radar_items:
+            signal = funding_map.get(item.name.lower())
+            if signal:
+                item.funding_signal = signal.funding_summary
+                item.signal_strength = min(1.0, item.signal_strength + 0.15)
+    except Exception as e:
+        logger.warning(f"Funding enrichment failed (non-fatal): {e}")
 
     # Technology Relationship Extraction
     if user_id:
@@ -1039,57 +1103,53 @@ async def run_sensing_pipeline_from_document(
             logger.warning(f"Weak signal detection failed (non-fatal): {e}")
             report.weak_signals = []
 
-    # Alert detection
-    alerts = []
-    if user_id:
+    # YouTube video enrichment (opt-in)
+    if include_videos:
+        await _emit("videos", 98, "Finding trending YouTube videos...")
         try:
-            from core.sensing.alerts import detect_alerts
-            from core.sensing.movement import load_previous_report
-            from core.sensing.org_context import load_org_context
-
-            previous_report = await load_previous_report(user_id, domain)
-            org_ctx = None
-            try:
-                org_ctx = await load_org_context(user_id)
-            except Exception:
-                pass
-
-            alerts = await detect_alerts(
-                new_report=report,
-                user_id=user_id,
-                domain=domain,
-                previous_report_data=previous_report,
-                org_tech_stack=org_ctx.tech_stack if org_ctx else None,
-                weak_signals=getattr(report, "weak_signals", []),
+            sorted_radar = sorted(
+                report.radar_items, key=lambda r: r.signal_strength, reverse=True,
             )
+            tech_names = [item.name for item in sorted_radar[:10]]
+            raw_videos = await fetch_youtube_videos(tech_names)
+            report.trending_videos = [
+                TrendingVideoItem(
+                    technology_name=v.technology_name,
+                    title=v.title,
+                    url=v.url,
+                    description=v.description,
+                    uploader=v.uploader,
+                    duration=v.duration,
+                    published=v.published,
+                    view_count=v.view_count,
+                    thumbnail_url=v.thumbnail_url,
+                )
+                for v in raw_videos
+            ]
         except Exception as e:
-            logger.warning(f"Alert detection failed (non-fatal): {e}")
-
-    # YouTube video enrichment
-    await _emit("videos", 98, "Finding trending YouTube videos...")
-    try:
-        sorted_radar = sorted(
-            report.radar_items, key=lambda r: r.signal_strength, reverse=True,
-        )
-        tech_names = [item.name for item in sorted_radar[:10]]
-        raw_videos = await fetch_youtube_videos(tech_names)
-        report.trending_videos = [
-            TrendingVideoItem(
-                technology_name=v.technology_name,
-                title=v.title,
-                url=v.url,
-                description=v.description,
-                uploader=v.uploader,
-                duration=v.duration,
-                published=v.published,
-                view_count=v.view_count,
-                thumbnail_url=v.thumbnail_url,
-            )
-            for v in raw_videos
-        ]
-    except Exception as e:
-        logger.warning(f"YouTube enrichment failed (non-fatal): {e}")
+            logger.warning(f"YouTube enrichment failed (non-fatal): {e}")
+            report.trending_videos = []
+    else:
         report.trending_videos = []
+
+    # --- Model Releases (GenAI domains only) ---
+    if _is_ai_domain(domain):
+        logger.info(f"Searching for model releases... [{_elapsed()}]")
+        await _emit("model_releases", 99, "Finding recent model releases...")
+        try:
+            from core.sensing.sources.model_releases import search_model_releases
+            from core.sensing.model_release_extractor import extract_model_releases
+
+            mr_articles = await search_model_releases(lookback_days=lookback_days)
+            if mr_articles:
+                releases = await extract_model_releases(mr_articles, lookback_days=lookback_days)
+                report.model_releases = releases
+                logger.info(f"Model releases: {len(releases)} found [{_elapsed()}]")
+            else:
+                report.model_releases = []
+        except Exception as e:
+            logger.warning(f"Model releases extraction failed (non-fatal): {e}")
+            report.model_releases = []
 
     await _emit("complete", 100, "Report ready")
 
@@ -1109,5 +1169,5 @@ async def run_sensing_pipeline_from_document(
         deduped_article_count=len(unique_articles),
         classified_article_count=len(classified),
         execution_time_seconds=round(elapsed, 2),
-        alerts=alerts or None,
+        alerts=None,
     )

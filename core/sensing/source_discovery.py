@@ -20,7 +20,7 @@ from core.llm.output_schemas.base import LLMOutputBase
 
 logger = logging.getLogger("sensing.source_discovery")
 
-SOURCE_DISCOVERY_TTL_DAYS = 180  # Re-discover sources every ~6 months
+SOURCE_DISCOVERY_TTL_DAYS = 75  # Re-discover sources every ~2.5 months
 MAX_DISCOVERY_QUERIES = 8
 MAX_SEARCH_RESULTS_PER_QUERY = 10
 MAX_VALIDATED_SOURCES = 20

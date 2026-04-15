@@ -36,11 +36,11 @@ import { Switch } from '@/components/ui/switch';
 import {
   Radar, Loader2, History, Trash2, RefreshCw, Download,
   Maximize2, Minimize2, X, Plus, XCircle, RotateCcw, Calendar,
-  ChevronDown, ChevronRight, FileUp, Bell, BellOff, AlertTriangle,
+  ChevronDown, ChevronRight, FileUp,
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { api, getAuthToken } from '@/lib/api';
-import type { SensingReportData, SensingHistoryItem, ReportComparison, SensingSchedule, TimelineData, OrgTechContext, SensingAlert, AlertPreferences } from '@/lib/api';
+import type { SensingReportData, SensingHistoryItem, ReportComparison, SensingSchedule, TimelineData, OrgTechContext, TopicPreferences } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { API_URL } from '../../config';
 import TechRadar from '@/components/TechRadar';
@@ -48,6 +48,7 @@ import SensingRelationshipGraph from '@/components/SensingRelationshipGraph';
 import SensingReportRenderer from '@/components/SensingReportRenderer';
 import SensingComparisonView from '@/components/SensingComparisonView';
 import SensingTimeline from '@/components/SensingTimeline';
+import SensingDashboard from '@/components/SensingDashboard';
 import SensingDeepDive from '@/components/SensingDeepDive';
 import SensingCollaboration from '@/components/SensingCollaboration';
 import { toast } from '@/components/ui/use-toast';
@@ -106,6 +107,11 @@ const TechSensing: React.FC = () => {
 
   // Document upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [includeVideos, setIncludeVideos] = useState(false);
+  const [nlQuery, setNlQuery] = useState('');
+  const [stakeholderRole, setStakeholderRole] = useState('general');
+  const [queryAnswer, setQueryAnswer] = useState<import('@/lib/api').QueryAnswer | null>(null);
+  const [queryLoading, setQueryLoading] = useState(false);
 
   // Comparison state
   const [compareA, setCompareA] = useState<string>('');
@@ -134,20 +140,14 @@ const TechSensing: React.FC = () => {
   const [showDeepDiveDialog, setShowDeepDiveDialog] = useState(false);
   const [deepDiveTrackingId, setDeepDiveTrackingId] = useState<string | null>(null);
   const [deepDiveTechName, setDeepDiveTechName] = useState('');
-  const [followUpMessages, setFollowUpMessages] = useState<{ role: string; content: string }[]>([]);
-  const [followUpLoading, setFollowUpLoading] = useState(false);
-  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [deepDiveHistory, setDeepDiveHistory] = useState<DeepDiveHistoryItem[]>([]);
 
   // Collaboration state
   const [shareId, setShareId] = useState<string | null>(null);
   const [showCollabDialog, setShowCollabDialog] = useState(false);
 
-  // Alert state
-  const [alerts, setAlerts] = useState<SensingAlert[]>([]);
-  const [showAlerts, setShowAlerts] = useState(true);
-  const [alertPrefs, setAlertPrefs] = useState<AlertPreferences | null>(null);
-  const [showAlertPrefsDialog, setShowAlertPrefsDialog] = useState(false);
+  // Topic preferences state
+  const [topicPrefs, setTopicPrefs] = useState<TopicPreferences | null>(null);
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -161,8 +161,16 @@ const TechSensing: React.FC = () => {
     loadHistory();
     loadSchedules();
     loadOrgContext();
-    loadAlertPrefs();
   }, []);
+
+  // Load topic preferences when report domain changes
+  useEffect(() => {
+    if (reportData?.report?.domain) {
+      api.sensingGetTopicPrefs(reportData.report.domain)
+        .then(setTopicPrefs)
+        .catch(() => setTopicPrefs(null));
+    }
+  }, [reportData?.report?.domain]);
 
   // Socket.IO for progress events
   useEffect(() => {
@@ -177,7 +185,6 @@ const TechSensing: React.FC = () => {
     socketRef.current = socket;
 
     const eventName = `${user.userId}/sensing_progress`;
-    const alertEventName = `${user.userId}/sensing_alerts`;
 
     socket.on(eventName, (payload: { tracking_id: string; stage: string; progress: number; message: string }) => {
       if (payload.tracking_id !== trackingId) return;
@@ -193,25 +200,12 @@ const TechSensing: React.FC = () => {
       }
     });
 
-    socket.on(alertEventName, (payload: { tracking_id: string; alerts: SensingAlert[] }) => {
-      if (payload.tracking_id !== trackingId) return;
-      setAlerts(payload.alerts || []);
-      if (payload.alerts?.length > 0) {
-        setShowAlerts(true);
-        toast({
-          title: `${payload.alerts.length} Alert${payload.alerts.length > 1 ? 's' : ''} Detected`,
-          description: payload.alerts[0].title,
-        });
-      }
-    });
-
     socket.on('connect_error', () => {
       startPolling(trackingId);
     });
 
     return () => {
       socket.off(eventName);
-      socket.off(alertEventName);
       socket.disconnect();
       socketRef.current = null;
     };
@@ -254,13 +248,6 @@ const TechSensing: React.FC = () => {
         const res = await api.sensingStatus(tid);
         if (res.status === 'completed' && res.data) {
           setReportData(res.data);
-          const metaAlerts = (res.data.meta as any)?.alerts;
-          if (metaAlerts?.length) {
-            setAlerts(metaAlerts);
-            setShowAlerts(true);
-          } else {
-            setAlerts([]);
-          }
           setIsGenerating(false);
           setProgress(100);
           setProgressMessage('Report ready');
@@ -286,14 +273,6 @@ const TechSensing: React.FC = () => {
       const res = await api.sensingStatus(tid);
       if (res.status === 'completed' && res.data) {
         setReportData(res.data);
-        // Extract alerts from report meta
-        const metaAlerts = (res.data.meta as any)?.alerts;
-        if (metaAlerts?.length) {
-          setAlerts(metaAlerts);
-          setShowAlerts(true);
-        } else {
-          setAlerts([]);
-        }
         setIsGenerating(false);
         setProgress(100);
         loadHistory();
@@ -313,7 +292,6 @@ const TechSensing: React.FC = () => {
     setProgress(0);
     setProgressMessage('Starting...');
     setReportData(null);
-    setAlerts([]);
 
     try {
       let res;
@@ -326,6 +304,7 @@ const TechSensing: React.FC = () => {
           mustInclude.length > 0 ? mustInclude : undefined,
           dontInclude.length > 0 ? dontInclude : undefined,
           lookbackDays,
+          includeVideos,
         );
       } else {
         // Normal web-based pipeline
@@ -337,6 +316,7 @@ const TechSensing: React.FC = () => {
           lookbackDays,
           feedUrls.length > 0 ? feedUrls : undefined,
           searchQueries.length > 0 ? searchQueries : undefined,
+          includeVideos,
         );
       }
       setTrackingId(res.tracking_id);
@@ -498,31 +478,11 @@ const TechSensing: React.FC = () => {
     }
   };
 
-  const loadAlertPrefs = async () => {
-    try {
-      const prefs = await api.sensingGetAlertPrefs();
-      setAlertPrefs(prefs);
-    } catch { /* ignore */ }
-  };
-
-  const handleSaveAlertPrefs = async () => {
-    if (!alertPrefs) return;
-    try {
-      await api.sensingUpdateAlertPrefs(alertPrefs);
-      toast({ title: 'Alert preferences saved' });
-      setShowAlertPrefsDialog(false);
-    } catch (err: unknown) {
-      toast({ title: 'Failed to save', description: err instanceof Error ? err.message : '', variant: 'destructive' });
-    }
-  };
-
   const handleDeepDive = async (technologyName: string) => {
     setDeepDiveLoading(true);
     setDeepDiveResult(null);
     setShowDeepDiveDialog(true);
     setDeepDiveTechName(technologyName);
-    setFollowUpMessages([]);
-    setSuggestedQuestions([]);
     loadDeepDiveHistory();
     try {
       const { tracking_id } = await api.sensingDeepDive(technologyName, domain);
@@ -556,28 +516,6 @@ const TechSensing: React.FC = () => {
     }
   };
 
-  const handleDeepDiveFollowUp = async (question: string) => {
-    if (!deepDiveTrackingId) return;
-    setFollowUpLoading(true);
-    setFollowUpMessages(prev => [...prev, { role: 'user', content: question }]);
-    try {
-      const result = await api.sensingDeepDiveFollowUp(
-        deepDiveTechName,
-        domain,
-        question,
-        deepDiveTrackingId,
-      );
-      setFollowUpMessages(prev => [...prev, { role: 'assistant', content: result.answer }]);
-      setSuggestedQuestions(result.suggested_questions || []);
-    } catch (err: unknown) {
-      toast({ title: 'Follow-up failed', description: err instanceof Error ? err.message : '', variant: 'destructive' });
-      // Remove the user message if the request failed
-      setFollowUpMessages(prev => prev.slice(0, -1));
-    } finally {
-      setFollowUpLoading(false);
-    }
-  };
-
   const loadDeepDiveHistory = async () => {
     try {
       const res = await api.sensingDeepDiveHistory();
@@ -590,14 +528,11 @@ const TechSensing: React.FC = () => {
   const handleLoadDeepDive = async (loadTrackingId: string) => {
     setDeepDiveLoading(true);
     setDeepDiveResult(null);
-    setFollowUpMessages([]);
-    setSuggestedQuestions([]);
     try {
       const loaded = await api.sensingDeepDiveLoad(loadTrackingId);
       setDeepDiveResult(loaded.report);
       setDeepDiveTrackingId(loadTrackingId);
       setDeepDiveTechName(loaded.meta.technology_name || loaded.report.technology_name);
-      setFollowUpMessages(loaded.conversation_history || []);
     } catch (err: unknown) {
       toast({ title: 'Failed to load deep dive', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     } finally {
@@ -616,6 +551,39 @@ const TechSensing: React.FC = () => {
       toast({ title: 'Report shared', description: 'Link copied to clipboard' });
     } catch (err: unknown) {
       toast({ title: 'Share failed', description: err instanceof Error ? err.message : '', variant: 'destructive' });
+    }
+  };
+
+  const handleTopicInterest = async (techName: string, interest: 'interested' | 'not_interested' | 'neutral') => {
+    if (!reportData?.report?.domain) return;
+    try {
+      const updated = await api.sensingUpdateTopicPref(reportData.report.domain, techName, interest);
+      setTopicPrefs(updated);
+    } catch (err: unknown) {
+      toast({ title: 'Failed to update preference', description: err instanceof Error ? err.message : '', variant: 'destructive' });
+    }
+  };
+
+  const handleNlQuery = async () => {
+    if (!nlQuery.trim()) return;
+    setQueryLoading(true);
+    setQueryAnswer(null);
+    try {
+      const answer = await api.sensingQuery(nlQuery.trim(), domain || undefined);
+      setQueryAnswer(answer);
+    } catch (err: unknown) {
+      toast({ title: 'Query failed', description: err instanceof Error ? err.message : '', variant: 'destructive' });
+    } finally {
+      setQueryLoading(false);
+    }
+  };
+
+  const handleSourceFeedback = async (sourceName: string, vote: 'up' | 'down') => {
+    try {
+      await api.sensingSubmitSourceFeedback(sourceName, vote);
+      toast({ title: `Source ${vote === 'up' ? 'upvoted' : 'downvoted'}`, description: sourceName });
+    } catch (err: unknown) {
+      toast({ title: 'Failed to submit feedback', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     }
   };
 
@@ -689,6 +657,7 @@ const TechSensing: React.FC = () => {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
           <div className="px-6 pt-2 shrink-0">
             <TabsList>
+              <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
               <TabsTrigger value="report">Report</TabsTrigger>
               <TabsTrigger value="radar">Technology Radar</TabsTrigger>
               <TabsTrigger value="relationships" disabled={!reportData?.report?.relationships}>Relationships</TabsTrigger>
@@ -696,8 +665,11 @@ const TechSensing: React.FC = () => {
               <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
             </TabsList>
           </div>
+          <TabsContent value="dashboard" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
+            <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
+          </TabsContent>
           <TabsContent value="report" className="flex-1 min-h-0 px-6 pb-4 mt-2">
-            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} />
+            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} />
           </TabsContent>
           <TabsContent value="radar" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
             <TechRadar items={reportData.report.radar_items || []} onBlipClick={(name) => { setHighlightTech(name); setActiveTab('report'); }} customQuadrants={orgContext.radar_customization?.quadrants} />
@@ -777,10 +749,6 @@ const TechSensing: React.FC = () => {
           <Button variant="outline" size="sm" onClick={() => setShowOrgDialog(true)}>
             Org Profile
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowAlertPrefsDialog(true)}>
-            <Bell className="w-4 h-4 mr-1" /> Alerts
-            {alerts.length > 0 && <Badge variant="destructive" className="ml-1 text-xs h-5 min-w-[20px] px-1">{alerts.length}</Badge>}
-          </Button>
         </div>
         {reportData && (
           <div className="flex items-center gap-2">
@@ -852,6 +820,33 @@ const TechSensing: React.FC = () => {
         {/* Config card */}
         <Card className="flex-1">
           <CardContent className="p-4 space-y-3">
+            {/* Ask your radar */}
+            <div className="flex gap-2">
+              <Input
+                value={nlQuery}
+                onChange={(e) => setNlQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleNlQuery(); }}
+                placeholder="Ask your radar... e.g., 'What happened with RAG frameworks this month?'"
+                disabled={queryLoading}
+                className="text-sm"
+              />
+              <Button size="sm" onClick={handleNlQuery} disabled={queryLoading || !nlQuery.trim()}>
+                {queryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ask'}
+              </Button>
+            </div>
+            {queryAnswer && (
+              <Card className="border-l-4 border-l-blue-500 p-3">
+                <div className="text-sm prose prose-sm max-w-none dark:prose-invert">{queryAnswer.answer}</div>
+                <div className="flex gap-2 mt-2 flex-wrap">
+                  <Badge variant={queryAnswer.confidence === 'high' ? 'default' : queryAnswer.confidence === 'medium' ? 'secondary' : 'destructive'}>
+                    {queryAnswer.confidence} confidence
+                  </Badge>
+                  {queryAnswer.technologies_mentioned.map((t) => (
+                    <Badge key={t} variant="outline" className="text-xs">{t}</Badge>
+                  ))}
+                </div>
+              </Card>
+            )}
             {/* Two-column grid: Left = Domain/Date/Requirements, Right = Keywords */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
               {/* Left column */}
@@ -905,18 +900,46 @@ const TechSensing: React.FC = () => {
                     </div>
                   )}
                 </div>
-                {/* Custom Requirements */}
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Custom Requirements (optional)
-                  </label>
-                  <Textarea
-                    value={customReqs}
-                    onChange={(e) => setCustomReqs(e.target.value)}
-                    placeholder="e.g., Focus on enterprise adoption, compare with previous trends..."
-                    rows={2}
-                    disabled={isGenerating}
-                  />
+                {/* YouTube Videos Toggle + Custom Requirements */}
+                <div className="flex gap-3 items-start">
+                  <div className="flex-1">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      Custom Requirements (optional)
+                    </label>
+                    <Textarea
+                      value={customReqs}
+                      onChange={(e) => setCustomReqs(e.target.value)}
+                      placeholder="e.g., Focus on enterprise adoption, compare with previous trends..."
+                      rows={2}
+                      disabled={isGenerating}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 pt-5">
+                    <Switch
+                      id="include-videos"
+                      checked={includeVideos}
+                      onCheckedChange={setIncludeVideos}
+                      disabled={isGenerating}
+                    />
+                    <label htmlFor="include-videos" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
+                      YouTube Videos
+                    </label>
+                  </div>
+                  <div className="pt-3">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Audience</label>
+                    <Select value={stakeholderRole} onValueChange={setStakeholderRole} disabled={isGenerating}>
+                      <SelectTrigger className="w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="general">General</SelectItem>
+                        <SelectItem value="cto">CTO / Strategy</SelectItem>
+                        <SelectItem value="engineering_lead">Engineering Lead</SelectItem>
+                        <SelectItem value="developer">Developer</SelectItem>
+                        <SelectItem value="product_manager">Product Manager</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
 
@@ -1198,52 +1221,22 @@ const TechSensing: React.FC = () => {
         </Card>
       </div>
 
-      {/* Alert banner */}
-      {reportData && alerts.length > 0 && showAlerts && (
-        <div className="shrink-0 rounded-lg border p-3 space-y-2 bg-amber-50/50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                {alerts.length} Alert{alerts.length !== 1 ? 's' : ''} Detected
-              </span>
-            </div>
-            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setShowAlerts(false)}>
-              Dismiss
-            </Button>
-          </div>
-          <div className="space-y-1.5 max-h-32 overflow-y-auto">
-            {alerts.map((alert, i) => {
-              const severityClass = alert.severity === 'critical'
-                ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
-                : alert.severity === 'high'
-                ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300'
-                : alert.severity === 'medium'
-                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300'
-                : 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300';
-              return (
-                <div key={i} className="flex items-start gap-2 text-xs">
-                  <Badge className={`shrink-0 text-[10px] ${severityClass}`}>{alert.severity}</Badge>
-                  <span className="text-foreground/80">{alert.title}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Report display */}
       {reportData ? (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
           <TabsList className="shrink-0">
+            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="report">Report</TabsTrigger>
             <TabsTrigger value="radar">Technology Radar</TabsTrigger>
             <TabsTrigger value="relationships" disabled={!reportData?.report?.relationships}>Relationships</TabsTrigger>
             <TabsTrigger value="compare" disabled={history.length < 2}>Compare</TabsTrigger>
             <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
           </TabsList>
+          <TabsContent value="dashboard" className="flex-1 min-h-0 mt-2 overflow-auto">
+            <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
+          </TabsContent>
           <TabsContent value="report" className="flex-1 min-h-0 mt-2">
-            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} />
+            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} />
           </TabsContent>
           <TabsContent value="radar" className="flex-1 min-h-0 mt-2 overflow-auto">
             <TechRadar items={reportData.report.radar_items || []} onBlipClick={(name) => { setHighlightTech(name); setActiveTab('report'); }} customQuadrants={orgContext.radar_customization?.quadrants} />
@@ -1531,83 +1524,6 @@ const TechSensing: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Alert Preferences dialog */}
-      <Dialog open={showAlertPrefsDialog} onOpenChange={setShowAlertPrefsDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Alert Preferences</DialogTitle>
-            <DialogDescription>Configure which alerts you receive when reports are generated.</DialogDescription>
-          </DialogHeader>
-          {alertPrefs && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">Alerts Enabled</label>
-                <Switch checked={alertPrefs.enabled} onCheckedChange={(v) => setAlertPrefs({ ...alertPrefs, enabled: v })} />
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-sm font-medium">Ring Jump Alerts</label>
-                  <p className="text-xs text-muted-foreground">Alert when technology moves {alertPrefs.ring_jump_threshold}+ rings</p>
-                </div>
-                <Select
-                  value={String(alertPrefs.ring_jump_threshold)}
-                  onValueChange={(v) => setAlertPrefs({ ...alertPrefs, ring_jump_threshold: parseInt(v) })}
-                >
-                  <SelectTrigger className="w-16"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">1</SelectItem>
-                    <SelectItem value="2">2</SelectItem>
-                    <SelectItem value="3">3</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-sm font-medium">Direct Adopt/Trial</label>
-                  <p className="text-xs text-muted-foreground">New tech enters Adopt or Trial directly</p>
-                </div>
-                <Switch checked={alertPrefs.alert_on_direct_adopt} onCheckedChange={(v) => setAlertPrefs({ ...alertPrefs, alert_on_direct_adopt: v })} />
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-sm font-medium">Weak Signal Breakout</label>
-                  <p className="text-xs text-muted-foreground">Weak signal acceleration threshold</p>
-                </div>
-                <Select
-                  value={String(alertPrefs.weak_signal_acceleration_threshold)}
-                  onValueChange={(v) => setAlertPrefs({ ...alertPrefs, weak_signal_acceleration_threshold: parseFloat(v) })}
-                >
-                  <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1.5">1.5x</SelectItem>
-                    <SelectItem value="2">2.0x</SelectItem>
-                    <SelectItem value="3">3.0x</SelectItem>
-                    <SelectItem value="5">5.0x</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-sm font-medium">Stack Match</label>
-                  <p className="text-xs text-muted-foreground">Technology matches your org tech stack</p>
-                </div>
-                <Switch checked={alertPrefs.alert_on_stack_match} onCheckedChange={(v) => setAlertPrefs({ ...alertPrefs, alert_on_stack_match: v })} />
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="text-sm font-medium">Trend Surge</label>
-                  <p className="text-xs text-muted-foreground">New high-impact trend detected</p>
-                </div>
-                <Switch checked={alertPrefs.alert_on_trend_surge} onCheckedChange={(v) => setAlertPrefs({ ...alertPrefs, alert_on_trend_surge: v })} />
-              </div>
-              <DialogFooter>
-                <Button onClick={handleSaveAlertPrefs}>Save Preferences</Button>
-              </DialogFooter>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* Deep Dive dialog */}
       <Dialog open={showDeepDiveDialog} onOpenChange={(open) => {
         setShowDeepDiveDialog(open);
@@ -1629,10 +1545,6 @@ const TechSensing: React.FC = () => {
               report={deepDiveResult}
               trackingId={deepDiveTrackingId || undefined}
               domain={domain}
-              onFollowUp={handleDeepDiveFollowUp}
-              followUpMessages={followUpMessages}
-              followUpLoading={followUpLoading}
-              suggestedQuestions={suggestedQuestions}
               deepDiveHistory={deepDiveHistory}
               onLoadDeepDive={handleLoadDeepDive}
             />

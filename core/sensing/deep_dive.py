@@ -12,8 +12,7 @@ from typing import Callable, List, Optional
 
 from core.constants import GPU_SENSING_REPORT_LLM
 from core.llm.client import invoke_llm
-from core.llm.output_schemas.sensing_outputs import DeepDiveFollowUpOutput, DeepDiveReport
-from core.llm.prompts.sensing_prompts import sensing_deep_dive_followup_prompt
+from core.llm.output_schemas.sensing_outputs import DeepDiveReport
 from core.sensing.ingest import RawArticle, extract_full_text, search_duckduckgo
 
 logger = logging.getLogger("sensing.deep_dive")
@@ -159,79 +158,3 @@ async def run_deep_dive(
     )
 
     return report
-
-
-def _needs_fresh_search(question: str) -> bool:
-    """Heuristic: determine if a follow-up question needs fresh web search."""
-    triggers = [
-        "latest", "recent", "current", "new", "update",
-        "compare", "vs", "versus", "alternative",
-        "how to", "tutorial", "example", "getting started",
-        "price", "cost", "pricing", "benchmark",
-    ]
-    q_lower = question.lower()
-    return any(t in q_lower for t in triggers)
-
-
-async def run_deep_dive_followup(
-    technology_name: str,
-    domain: str,
-    question: str,
-    conversation_history: list[dict],
-    original_report_context: str,
-    user_id: str = "",
-) -> dict:
-    """
-    Run a conversational follow-up on an existing deep dive.
-
-    Returns:
-        dict with keys: answer, sources_used, suggested_questions
-    """
-    logger.info(
-        f"Deep dive follow-up for '{technology_name}': {question[:80]}..."
-    )
-
-    # Optionally fetch fresh search results for current-info questions
-    fresh_search_results = ""
-    if _needs_fresh_search(question):
-        logger.info("Follow-up needs fresh search — querying DDG...")
-        try:
-            results = await search_duckduckgo(
-                queries=[f"{technology_name} {question[:50]}"],
-                domain=domain,
-                lookback_days=14,
-            )
-            if results:
-                fresh_search_results = "\n".join(
-                    f"- {r.title}: {r.snippet}" for r in results[:5]
-                )
-        except Exception as e:
-            logger.warning(f"Fresh search failed: {e}")
-
-    prompt = sensing_deep_dive_followup_prompt(
-        technology_name=technology_name,
-        domain=domain,
-        question=question,
-        conversation_history=conversation_history,
-        original_report_context=original_report_context,
-        fresh_search_results=fresh_search_results,
-    )
-
-    result = await invoke_llm(
-        gpu_model=GPU_SENSING_REPORT_LLM.model,
-        response_schema=DeepDiveFollowUpOutput,
-        contents=prompt,
-        port=GPU_SENSING_REPORT_LLM.port,
-    )
-
-    validated = DeepDiveFollowUpOutput.model_validate(result)
-    logger.info(
-        f"Follow-up answer generated: {len(validated.follow_up_answer)} chars, "
-        f"{len(validated.suggested_questions)} suggestions"
-    )
-
-    return {
-        "answer": validated.follow_up_answer,
-        "sources_used": validated.sources_used,
-        "suggested_questions": validated.suggested_questions,
-    }

@@ -69,6 +69,10 @@ class SensingGenerateRequest(BaseModel):
         default=None,
         description="Override default search queries",
     )
+    include_videos: bool = Field(
+        default=False,
+        description="Include YouTube video enrichment (requires YOUTUBE_API_KEY)",
+    )
 
 
 # --- Helpers ---
@@ -124,13 +128,7 @@ async def generate_sensing_report(
                 lookback_days=body.lookback_days,
                 progress_callback=_progress_cb,
                 user_id=user_id,
-            )
-
-            # Serialize alerts
-            alerts_data = (
-                [a.model_dump() for a in result.alerts]
-                if result.alerts
-                else []
+                include_videos=body.include_videos,
             )
 
             report_data = {
@@ -148,7 +146,6 @@ async def generate_sensing_report(
                     "must_include": body.must_include,
                     "dont_include": body.dont_include,
                     "lookback_days": body.lookback_days,
-                    "alerts": alerts_data,
                 },
             }
 
@@ -172,16 +169,6 @@ async def generate_sensing_report(
                     "message": "Report ready",
                 },
             )
-
-            # Emit alerts via separate channel if any
-            if alerts_data:
-                await sio.emit(
-                    f"{user_id}/sensing_alerts",
-                    {
-                        "tracking_id": tracking_id,
-                        "alerts": alerts_data,
-                    },
-                )
 
         except Exception:
             error_details = traceback.format_exc()
@@ -220,6 +207,7 @@ async def generate_sensing_from_document(
     must_include: Optional[str] = Form(None),
     dont_include: Optional[str] = Form(None),
     lookback_days: int = Form(7),
+    include_videos: bool = Form(False),
 ):
     """Start async tech sensing from an uploaded document instead of web
     sources."""
@@ -278,15 +266,9 @@ async def generate_sensing_from_document(
                 must_include=must_list,
                 dont_include=dont_list,
                 lookback_days=lookback_days,
+                include_videos=include_videos,
                 progress_callback=_progress_cb,
                 user_id=user_id,
-            )
-
-            # Serialize alerts
-            alerts_data = (
-                [a.model_dump() for a in result.alerts]
-                if result.alerts
-                else []
             )
 
             report_data = {
@@ -304,7 +286,6 @@ async def generate_sensing_from_document(
                     "must_include": must_list,
                     "dont_include": dont_list,
                     "lookback_days": lookback_days,
-                    "alerts": alerts_data,
                 },
             }
 
@@ -328,16 +309,6 @@ async def generate_sensing_from_document(
                     "message": "Report ready",
                 },
             )
-
-            # Emit alerts via separate channel if any
-            if alerts_data:
-                await sio.emit(
-                    f"{user_id}/sensing_alerts",
-                    {
-                        "tracking_id": tracking_id,
-                        "alerts": alerts_data,
-                    },
-                )
 
         except Exception:
             error_details = traceback.format_exc()
@@ -575,33 +546,51 @@ async def delete_sensing_report(request: Request, report_id: str):
     return JSONResponse(content={"status": "deleted"})
 
 
-# --- Alert Preferences ---
+# --- Topic Preferences ---
 
 
-@router.get("/alert-prefs")
-async def get_alert_prefs(request: Request):
-    """Get user's alert preferences."""
-    from core.sensing.alerts import load_alert_preferences
+class TopicPrefUpdateRequest(BaseModel):
+    domain: str
+    technology_name: str
+    interest: str = Field(description="One of: interested, not_interested, neutral")
+
+
+@router.get("/topic-prefs")
+async def get_topic_prefs(request: Request, domain: str = "Generative AI"):
+    """Get topic preferences for a domain."""
+    from core.sensing.topic_preferences import load_topic_preferences
 
     payload = request.state.user
     if not payload:
         raise HTTPException(status_code=401, detail="User not authenticated")
 
-    prefs = await load_alert_preferences(payload.userId)
+    prefs = await load_topic_preferences(payload.userId, domain)
     return JSONResponse(content=prefs.model_dump())
 
 
-@router.put("/alert-prefs")
-async def update_alert_prefs(request: Request, body: dict = Body(...)):
-    """Update user's alert preferences."""
-    from core.sensing.alerts import AlertPreferences, save_alert_preferences
+@router.put("/topic-prefs")
+async def update_topic_pref(
+    request: Request, body: TopicPrefUpdateRequest = Body(...)
+):
+    """Update a single topic's interest status."""
+    from core.sensing.topic_preferences import mark_topic
 
     payload = request.state.user
     if not payload:
         raise HTTPException(status_code=401, detail="User not authenticated")
 
-    prefs = AlertPreferences(**body)
-    await save_alert_preferences(payload.userId, prefs)
+    if body.interest not in ("interested", "not_interested", "neutral"):
+        raise HTTPException(
+            status_code=400,
+            detail="interest must be 'interested', 'not_interested', or 'neutral'",
+        )
+
+    prefs = await mark_topic(
+        user_id=payload.userId,
+        domain=body.domain,
+        technology_name=body.technology_name,
+        interest=body.interest,
+    )
     return JSONResponse(content=prefs.model_dump())
 
 
@@ -879,79 +868,6 @@ async def deep_dive_status(request: Request, tracking_id: str):
 # --- Deep Dive Follow-Up ---
 
 
-class DeepDiveFollowUpRequest(BaseModel):
-    technology_name: str
-    domain: str = Field(default="Generative AI")
-    question: str
-    tracking_id: str
-
-
-@router.post("/deep-dive-followup")
-async def deep_dive_followup(
-    request: Request,
-    body: DeepDiveFollowUpRequest = Body(...),
-):
-    """Conversational follow-up on an existing deep dive."""
-    payload = request.state.user
-    if not payload:
-        raise HTTPException(status_code=401, detail="User not authenticated")
-
-    user_id = payload.userId
-    sensing_dir = _get_sensing_dir(user_id)
-
-    # Load original deep dive report for context
-    deepdive_path = os.path.join(sensing_dir, f"deepdive_{body.tracking_id}.json")
-    if not os.path.exists(deepdive_path):
-        raise HTTPException(status_code=404, detail="Deep dive not found")
-
-    try:
-        async with aiofiles.open(deepdive_path, "r", encoding="utf-8") as f:
-            deepdive_data = json.loads(await f.read())
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to read deep dive")
-
-    # Handle both new format (wrapped with meta) and old format (flat report)
-    report_data = deepdive_data.get("report", deepdive_data) if isinstance(deepdive_data, dict) else deepdive_data
-
-    # Build context from original report
-    original_context = json.dumps(report_data, ensure_ascii=False)[:4000]
-
-    # Load existing conversation history
-    chat_path = os.path.join(sensing_dir, f"deepdive_chat_{body.tracking_id}.json")
-    conversation_history = []
-    if os.path.exists(chat_path):
-        try:
-            async with aiofiles.open(chat_path, "r", encoding="utf-8") as f:
-                conversation_history = json.loads(await f.read())
-        except Exception:
-            conversation_history = []
-
-    # Run follow-up
-    from core.sensing.deep_dive import run_deep_dive_followup
-
-    result = await run_deep_dive_followup(
-        technology_name=body.technology_name,
-        domain=body.domain,
-        question=body.question,
-        conversation_history=conversation_history,
-        original_report_context=original_context,
-        user_id=user_id,
-    )
-
-    # Persist conversation (trim to last 20 messages)
-    conversation_history.append({"role": "user", "content": body.question})
-    conversation_history.append({"role": "assistant", "content": result["answer"]})
-    conversation_history = conversation_history[-20:]
-
-    try:
-        async with aiofiles.open(chat_path, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(conversation_history, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.warning(f"Failed to persist conversation: {e}")
-
-    return JSONResponse(content=result)
-
-
 # --- Deep Dive History & Load ---
 
 
@@ -1202,3 +1118,78 @@ async def get_shared_feedback(request: Request, share_id: str):
     if not feedback:
         raise HTTPException(status_code=404, detail="Shared report not found")
     return JSONResponse(content=feedback)
+
+
+@router.get("/platform-status")
+async def platform_status():
+    """Auto-generated platform capabilities summary."""
+    from core.sensing.platform_status import generate_platform_status
+
+    status = generate_platform_status()
+    return JSONResponse(content=status.model_dump())
+
+
+@router.post("/source-feedback")
+async def submit_source_feedback(
+    request: Request,
+    source_name: str = Body(...),
+    vote: str = Body(...),  # "up" or "down"
+):
+    """Record user feedback on a source's quality."""
+    from core.sensing.source_feedback import record_vote
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    if vote not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="vote must be 'up' or 'down'")
+
+    feedback = await record_vote(payload.userId, source_name, vote)
+    return JSONResponse(content={"status": "ok", "feedback": feedback})
+
+
+@router.get("/source-feedback")
+async def get_source_feedback(request: Request):
+    """Get user's source quality feedback."""
+    from core.sensing.source_feedback import load_source_feedback
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    feedback = await load_source_feedback(payload.userId)
+    return JSONResponse(content=feedback)
+
+
+@router.get("/dashboard")
+async def sensing_dashboard(request: Request):
+    """Cross-domain dashboard aggregating all tracked domains."""
+    from core.sensing.dashboard import build_dashboard
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    dashboard = await build_dashboard(user_id=payload.userId)
+    return JSONResponse(content=dashboard.model_dump())
+
+
+@router.post("/query")
+async def query_sensing_reports(
+    request: Request,
+    question: str = Body(...),
+    domain: Optional[str] = Body(None),
+):
+    """Answer a natural language question using stored report data."""
+    from core.sensing.query import query_reports
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    answer = await query_reports(
+        user_id=payload.userId,
+        question=question,
+        domain=domain,
+    )
+    return JSONResponse(content=answer.model_dump())

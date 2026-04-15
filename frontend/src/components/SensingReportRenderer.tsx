@@ -6,10 +6,11 @@ import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play, Zap,
+  ThumbsUp, ThumbsDown,
 } from 'lucide-react';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
-  SensingHeadlineMove, SensingTrendingVideo, WeakSignal, SensingAlert,
+  SensingHeadlineMove, SensingTrendingVideo, WeakSignal, TopicPreferences, ModelRelease,
 } from '@/lib/api';
 
 interface Meta {
@@ -20,7 +21,6 @@ interface Meta {
   classified_article_count: number;
   execution_time_seconds: number;
   generated_at: string;
-  alerts?: SensingAlert[];
 }
 
 interface SensingReportRendererProps {
@@ -28,6 +28,9 @@ interface SensingReportRendererProps {
   meta: Meta;
   highlightTechnology?: string;
   onDeepDive?: (technologyName: string) => void;
+  topicPreferences?: TopicPreferences | null;
+  onTopicInterest?: (techName: string, interest: 'interested' | 'not_interested' | 'neutral') => void;
+  onSourceFeedback?: (sourceName: string, vote: 'up' | 'down') => void;
 }
 
 const impactColors: Record<string, string> = {
@@ -81,7 +84,7 @@ const SourceLinks: React.FC<{ urls?: string[] }> = ({ urls }) => {
   );
 };
 
-const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, meta, highlightTechnology, onDeepDive }) => {
+const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, meta, highlightTechnology, onDeepDive, topicPreferences, onTopicInterest, onSourceFeedback }) => {
   const [expandedTrends, setExpandedTrends] = useState<Set<number>>(new Set());
   const [expandedRadarDetails, setExpandedRadarDetails] = useState<Set<number>>(new Set());
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
@@ -123,6 +126,11 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
             <Badge variant="outline">{report.date_range}</Badge>
             <Badge variant="outline">{report.total_articles_analyzed} articles analyzed</Badge>
             <Badge variant="outline">{Math.round(meta.execution_time_seconds / 60)}m generation time</Badge>
+            {report.report_confidence && (
+              <Badge variant={report.report_confidence === 'high' ? 'default' : report.report_confidence === 'medium' ? 'secondary' : 'destructive'}>
+                Confidence: {report.report_confidence}
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -362,6 +370,71 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </div>
         )}
 
+        {/* Latest Model Releases (GenAI domains only) */}
+        {report.model_releases && report.model_releases.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Cpu className="w-5 h-5 text-purple-600" />
+              Latest Model Releases ({report.model_releases.length})
+            </h3>
+            <p className="text-sm text-muted-foreground -mt-1">
+              Recent AI model announcements and releases.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Model</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Organization</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Date</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Parameters</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Type</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Modality</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">License</th>
+                    <th className="py-2 font-semibold text-xs text-muted-foreground">Notable Features</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.model_releases.map((mr: ModelRelease, idx: number) => (
+                    <tr key={idx} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                      <td className="py-2 pr-3 font-medium">
+                        {mr.source_url ? (
+                          <a
+                            href={mr.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-purple-700 dark:text-purple-300 hover:underline flex items-center gap-1"
+                          >
+                            {mr.model_name}
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </a>
+                        ) : (
+                          mr.model_name
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 text-muted-foreground">{mr.organization}</td>
+                      <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
+                      <td className="py-2 pr-3">
+                        <Badge variant="outline" className="text-xs font-mono">{mr.parameters}</Badge>
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Badge variant="secondary" className="text-xs">{mr.model_type}</Badge>
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Badge variant="secondary" className="text-xs">{mr.modality}</Badge>
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Badge variant="outline" className="text-xs">{mr.license}</Badge>
+                      </td>
+                      <td className="py-2 text-xs text-muted-foreground max-w-xs">{mr.notable_features}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Technology Deep Dives (Radar Item Details) */}
         {report.radar_item_details?.length > 0 && (
           <div className="space-y-3">
@@ -397,11 +470,55 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                                 {radarItem.patent_count} {radarItem.patent_count === 1 ? 'patent' : 'patents'}
                               </Badge>
                             )}
+                            {radarItem.lifecycle_stage && (
+                              <Badge variant="outline" className="text-xs capitalize text-violet-600 dark:text-violet-400 border-violet-300 dark:border-violet-700">
+                                {radarItem.lifecycle_stage.replace('_', ' ')}
+                              </Badge>
+                            )}
+                            {radarItem.funding_signal && (
+                              <Badge variant="outline" className="text-xs text-green-600 dark:text-green-400 border-green-300 dark:border-green-700">
+                                $ Funded
+                              </Badge>
+                            )}
                             {radarItem.moved_in && (
                               <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" variant="secondary">
                                 {RING_ORDER.indexOf(radarItem.ring) < RING_ORDER.indexOf(radarItem.moved_in) ? '\u2191' : '\u2193'} Moved from {radarItem.moved_in}
                               </Badge>
                             )}
+                          </>
+                        )}
+                        {onTopicInterest && (
+                          <>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const isActive = topicPreferences?.interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase());
+                                onTopicInterest(item.technology_name, isActive ? 'neutral' : 'interested');
+                              }}
+                              title="Interested"
+                              className={`p-0.5 rounded transition-colors ${
+                                topicPreferences?.interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase())
+                                  ? 'text-emerald-600'
+                                  : 'text-muted-foreground/40 hover:text-emerald-600'
+                              }`}
+                            >
+                              <ThumbsUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const isActive = topicPreferences?.not_interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase());
+                                onTopicInterest(item.technology_name, isActive ? 'neutral' : 'not_interested');
+                              }}
+                              title="Not interested"
+                              className={`p-0.5 rounded transition-colors ${
+                                topicPreferences?.not_interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase())
+                                  ? 'text-red-600'
+                                  : 'text-muted-foreground/40 hover:text-red-600'
+                              }`}
+                            >
+                              <ThumbsDown className="w-3 h-3" />
+                            </button>
                           </>
                         )}
                       </div>
@@ -505,15 +622,51 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                           </div>
                         );
                       })()}
-                      {onDeepDive && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onDeepDive(item.technology_name); }}
-                          className="text-xs text-emerald-600 hover:text-emerald-700 font-medium mt-2 flex items-center gap-1"
-                        >
-                          <Target className="w-3 h-3" />
-                          Deep Dive Analysis
-                        </button>
-                      )}
+                      <div className="flex items-center gap-3 mt-2">
+                        {onDeepDive && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onDeepDive(item.technology_name); }}
+                            className="text-xs text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-1"
+                          >
+                            <Target className="w-3 h-3" />
+                            Deep Dive Analysis
+                          </button>
+                        )}
+                        {onTopicInterest && (
+                          <div className="flex items-center gap-1 ml-auto">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const isActive = topicPreferences?.interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase());
+                                onTopicInterest(item.technology_name, isActive ? 'neutral' : 'interested');
+                              }}
+                              title="Interested — boost in future reports"
+                              className={`p-1 rounded transition-colors ${
+                                topicPreferences?.interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase())
+                                  ? 'text-emerald-600 bg-emerald-100 dark:bg-emerald-900/30'
+                                  : 'text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'
+                              }`}
+                            >
+                              <ThumbsUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const isActive = topicPreferences?.not_interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase());
+                                onTopicInterest(item.technology_name, isActive ? 'neutral' : 'not_interested');
+                              }}
+                              title="Not interested — suppress in future reports"
+                              className={`p-1 rounded transition-colors ${
+                                topicPreferences?.not_interested.some(t => t.toLowerCase() === item.technology_name.toLowerCase())
+                                  ? 'text-red-600 bg-red-100 dark:bg-red-900/30'
+                                  : 'text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20'
+                              }`}
+                            >
+                              <ThumbsDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </Card>
@@ -599,6 +752,16 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                       </a>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <Badge variant="outline" className="text-xs">{article.source}</Badge>
+                        {onSourceFeedback && (
+                          <>
+                            <button onClick={() => onSourceFeedback(article.source, 'up')} title="Good source" className="p-0.5 text-muted-foreground/40 hover:text-emerald-600 transition-colors">
+                              <ThumbsUp className="w-3 h-3" />
+                            </button>
+                            <button onClick={() => onSourceFeedback(article.source, 'down')} title="Poor source" className="p-0.5 text-muted-foreground/40 hover:text-red-600 transition-colors">
+                              <ThumbsDown className="w-3 h-3" />
+                            </button>
+                          </>
+                        )}
                         <Badge variant="outline" className="text-xs">{article.quadrant}</Badge>
                         <Badge className={ringColors[article.ring] || 'bg-gray-100'} variant="secondary">
                           {article.ring}

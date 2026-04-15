@@ -27,6 +27,8 @@ export interface SensingRadarItem {
   source_count?: number;
   trl?: number;
   patent_count?: number;
+  lifecycle_stage?: string;
+  funding_signal?: string;
 }
 
 export interface SensingTrendItem {
@@ -123,6 +125,18 @@ export interface WeakSignal {
   dvi_score: number;
 }
 
+export interface ModelRelease {
+  model_name: string;
+  organization: string;
+  release_date: string;
+  parameters: string;
+  license: string;
+  model_type: string;
+  modality: string;
+  notable_features: string;
+  source_url: string;
+}
+
 export interface SensingReport {
   report_title: string;
   executive_summary: string;
@@ -139,7 +153,10 @@ export interface SensingReport {
   notable_articles: SensingClassifiedArticle[];
   trending_videos?: SensingTrendingVideo[];
   weak_signals?: WeakSignal[];
+  model_releases?: ModelRelease[];
   relationships?: TechRelationshipMap | null;
+  report_confidence?: string;
+  confidence_factors?: Record<string, any>;
 }
 
 export interface TechRelationship {
@@ -161,24 +178,44 @@ export interface TechRelationshipMap {
   clusters: TechCluster[];
 }
 
-export interface SensingAlert {
-  alert_type: string;
-  severity: string;
-  title: string;
-  description: string;
-  technology_name: string;
-  metadata: Record<string, unknown>;
-  timestamp: string;
+export interface TopicPreferences {
+  domain: string;
+  interested: string[];
+  not_interested: string[];
+  updated_at: string;
 }
 
-export interface AlertPreferences {
-  enabled: boolean;
-  email_alerts: boolean;
-  ring_jump_threshold: number;
-  weak_signal_acceleration_threshold: number;
-  alert_on_direct_adopt: boolean;
-  alert_on_stack_match: boolean;
-  alert_on_trend_surge: boolean;
+export interface DomainSummaryItem {
+  domain: string;
+  report_id: string;
+  report_date: string;
+  report_title: string;
+  total_radar_items: number;
+  new_items_count: number;
+  moved_items_count: number;
+  adopt_ring_items: string[];
+  top_trends: string[];
+  alert_count: number;
+  weak_signal_count: number;
+}
+
+export interface CrossDomainDashboard {
+  user_id: string;
+  generated_at: string;
+  domains: DomainSummaryItem[];
+  total_domains: number;
+  total_radar_items: number;
+  total_new_items: number;
+  total_alerts: number;
+  recent_adopt_items: { name: string; domain: string; date: string }[];
+  recent_movements: { name: string; domain: string; from_ring: string; to_ring: string; date: string }[];
+}
+
+export interface QueryAnswer {
+  answer: string;
+  sources: string[];
+  technologies_mentioned: string[];
+  confidence: string;
 }
 
 export interface SensingReportData {
@@ -195,7 +232,6 @@ export interface SensingReportData {
     must_include?: string[] | null;
     dont_include?: string[] | null;
     lookback_days?: number;
-    alerts?: SensingAlert[];
   };
 }
 
@@ -312,12 +348,6 @@ export interface DeepDiveReport {
   recommendations: string[];
 }
 
-export interface DeepDiveFollowUpResponse {
-  answer: string;
-  sources_used: string[];
-  suggested_questions: string[];
-}
-
 export interface DeepDiveHistoryItem {
   tracking_id: string;
   technology_name: string;
@@ -426,6 +456,7 @@ export const api = {
     lookbackDays: number = 7,
     feedUrls?: string[],
     searchQueries?: string[],
+    includeVideos: boolean = false,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const response = await fetch(`${API_URL}/sensing/generate`, {
@@ -442,6 +473,7 @@ export const api = {
         lookback_days: lookbackDays,
         feed_urls: feedUrls || null,
         search_queries: searchQueries || null,
+        include_videos: includeVideos,
       }),
     });
     const data = await response.json();
@@ -458,6 +490,7 @@ export const api = {
     mustInclude?: string[],
     dontInclude?: string[],
     lookbackDays: number = 7,
+    includeVideos: boolean = false,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const formData = new FormData();
@@ -467,6 +500,7 @@ export const api = {
     if (mustInclude?.length) formData.append('must_include', mustInclude.join(','));
     if (dontInclude?.length) formData.append('dont_include', dontInclude.join(','));
     formData.append('lookback_days', String(lookbackDays));
+    formData.append('include_videos', String(includeVideos));
 
     const response = await fetch(`${API_URL}/sensing/generate-from-document`, {
       method: 'POST',
@@ -655,26 +689,6 @@ export const api = {
     return data;
   },
 
-  async sensingDeepDiveFollowUp(
-    technologyName: string,
-    domain: string,
-    question: string,
-    trackingId: string,
-  ): Promise<DeepDiveFollowUpResponse> {
-    const token = getAuthToken();
-    const response = await fetch(
-      `${API_URL}/sensing/deep-dive-followup`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ technology_name: technologyName, domain, question, tracking_id: trackingId }),
-      },
-    );
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to get follow-up');
-    return data;
-  },
-
   async sensingDeepDiveHistory(): Promise<{ deep_dives: DeepDiveHistoryItem[] }> {
     const token = getAuthToken();
     const response = await fetch(
@@ -694,6 +708,36 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to load deep dive');
+    return data;
+  },
+
+  async sensingGetTopicPrefs(domain: string): Promise<TopicPreferences> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/topic-prefs?domain=${encodeURIComponent(domain)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load topic preferences');
+    return data;
+  },
+
+  async sensingUpdateTopicPref(
+    domain: string,
+    technologyName: string,
+    interest: 'interested' | 'not_interested' | 'neutral',
+  ): Promise<TopicPreferences> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/topic-prefs`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ domain, technology_name: technologyName, interest }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to update topic preference');
     return data;
   },
 
@@ -749,32 +793,6 @@ export const api = {
     return data;
   },
 
-  async sensingGetAlertPrefs(): Promise<AlertPreferences> {
-    const token = getAuthToken();
-    const response = await fetch(
-      `${API_URL}/sensing/alert-prefs`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to load alert preferences');
-    return data;
-  },
-
-  async sensingUpdateAlertPrefs(prefs: AlertPreferences): Promise<AlertPreferences> {
-    const token = getAuthToken();
-    const response = await fetch(
-      `${API_URL}/sensing/alert-prefs`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(prefs),
-      },
-    );
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || 'Failed to update alert preferences');
-    return data;
-  },
-
   async sensingGetFeedback(shareId: string): Promise<SharedReportFeedback> {
     const token = getAuthToken();
     const response = await fetch(
@@ -783,6 +801,50 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to load feedback');
+    return data;
+  },
+
+  async sensingSubmitSourceFeedback(sourceName: string, vote: 'up' | 'down'): Promise<{ status: string; feedback: Record<string, any> }> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/source-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ source_name: sourceName, vote }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to submit feedback');
+    return data;
+  },
+
+  async sensingGetSourceFeedback(): Promise<Record<string, any>> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/source-feedback`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load source feedback');
+    return data;
+  },
+
+  async sensingDashboard(): Promise<CrossDomainDashboard> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/dashboard`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load dashboard');
+    return data;
+  },
+
+  async sensingQuery(question: string, domain?: string): Promise<QueryAnswer> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ question, domain: domain || null }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to query reports');
     return data;
   },
 };

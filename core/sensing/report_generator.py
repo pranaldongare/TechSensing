@@ -40,6 +40,31 @@ from core.sensing.config import get_preset_for_domain
 logger = logging.getLogger("sensing.report")
 
 
+ROLE_PROMPTS = {
+    "cto": (
+        "AUDIENCE: Chief Technology Officer. "
+        "Emphasize strategic implications, competitive positioning, build-vs-buy decisions, "
+        "technology bets, organizational readiness, and 12-24 month horizon."
+    ),
+    "engineering_lead": (
+        "AUDIENCE: Engineering Lead / Architect. "
+        "Emphasize technical architecture, integration complexity, migration paths, "
+        "team skill requirements, and 3-12 month adoption timelines."
+    ),
+    "developer": (
+        "AUDIENCE: Software Developer. "
+        "Emphasize getting-started guides, API quality, documentation maturity, "
+        "community ecosystem, and practical hands-on evaluation."
+    ),
+    "product_manager": (
+        "AUDIENCE: Product Manager. "
+        "Emphasize user impact, market differentiation, competitor adoption, "
+        "time-to-value, and feature parity analysis."
+    ),
+    "general": "",
+}
+
+
 async def generate_report(
     classified_articles: List[ClassifiedArticle],
     domain: str = "Technology",
@@ -52,6 +77,7 @@ async def generate_report(
     preset=None,
     dynamic_generic_blocklist: set[str] | None = None,
     dynamic_legacy_blocklist: set[str] | None = None,
+    stakeholder_role: str = "general",
 ) -> TechSensingReport:
     """
     Generate the complete Tech Sensing Report from classified articles.
@@ -62,6 +88,11 @@ async def generate_report(
       Phase 3 — Insights (signals, sections, recommendations, notable articles)
       Phase 4 — Details (detailed write-up for each radar item, batched)
     """
+    # Inject stakeholder role prompt into custom_requirements
+    role_prompt = ROLE_PROMPTS.get(stakeholder_role, "")
+    if role_prompt:
+        custom_requirements = f"{role_prompt}\n\n{custom_requirements}" if custom_requirements else role_prompt
+
     # Truncate to top 50 by relevance if too many (avoid context overflow)
     sorted_articles = sorted(
         classified_articles, key=lambda a: a.relevance_score, reverse=True

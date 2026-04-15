@@ -4,7 +4,7 @@ based on number of distinct sources, source authority, and relevance scores.
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from core.llm.output_schemas.sensing_outputs import (
     ClassifiedArticle,
@@ -25,19 +25,31 @@ SOURCE_AUTHORITY: dict[str, float] = {
     "IEEE Spectrum": 0.85,
     "Nature": 0.95,
     "Science": 0.95,
-    "USPTO Patent": 0.9,
+    "Google Patents": 0.85,
 }
 DEFAULT_AUTHORITY = 0.5
 
 
-def compute_signal_strengths(
+async def compute_signal_strengths(
     report: TechSensingReport,
     classified_articles: List[ClassifiedArticle],
+    user_id: Optional[str] = None,
 ) -> TechSensingReport:
     """
     For each radar item, compute a signal_strength score (0.0-1.0) based on
     supporting articles' sources, count, and relevance.
     """
+    # Load user feedback if available
+    user_feedback = {}
+    if user_id:
+        try:
+            from core.sensing.source_feedback import load_source_feedback
+            user_feedback = await load_source_feedback(user_id)
+        except Exception:
+            pass
+
+    from core.sensing.source_feedback import get_adjusted_authority
+
     # Build tech_name -> list of supporting articles
     article_map: dict[str, list[ClassifiedArticle]] = {}
     for article in classified_articles:
@@ -59,12 +71,16 @@ def compute_signal_strengths(
         source_count = len(sources)
 
         # Count patent articles
-        patent_articles = [a for a in supporting if a.source == "USPTO Patent"]
+        patent_articles = [a for a in supporting if a.source == "Google Patents"]
         item.patent_count = len(patent_articles)
 
-        # Weighted authority
+        # Weighted authority (with user feedback adjustment)
         authority_scores = [
-            SOURCE_AUTHORITY.get(a.source, DEFAULT_AUTHORITY)
+            get_adjusted_authority(
+                SOURCE_AUTHORITY.get(a.source, DEFAULT_AUTHORITY),
+                a.source,
+                user_feedback,
+            )
             for a in supporting
         ]
         avg_authority = sum(authority_scores) / len(authority_scores)

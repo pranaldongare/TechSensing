@@ -229,6 +229,14 @@ class RadarItem(BaseModel):
         default=0,
         description="Number of related patents found for this technology.",
     )
+    lifecycle_stage: str = Field(
+        default="",
+        description="Technology lifecycle: 'research', 'prototype', 'early_adoption', 'mainstream', 'legacy'",
+    )
+    funding_signal: str = Field(
+        default="",
+        description="Recent funding or investment signal, if any.",
+    )
 
 
 class RadarItemDetail(BaseModel):
@@ -374,22 +382,6 @@ class DeepDiveReport(LLMOutputBase):
     )
 
 
-class DeepDiveFollowUpOutput(LLMOutputBase):
-    """Output for a conversational follow-up on a deep dive."""
-
-    follow_up_answer: str = Field(
-        description="Markdown answer to the follow-up question."
-    )
-    sources_used: List[str] = Field(
-        default_factory=list,
-        description="URLs of sources referenced in the answer.",
-    )
-    suggested_questions: List[str] = Field(
-        default_factory=list,
-        description="3 suggested follow-up questions the user might ask next.",
-    )
-
-
 class ReportCore(LLMOutputBase):
     """Phase 1 output: executive overview, headline moves, and key trends."""
 
@@ -445,6 +437,44 @@ class RadarDetailsOutput(LLMOutputBase):
     )
 
 
+class ModelRelease(BaseModel):
+    """A recently released AI model."""
+
+    model_name: str = Field(description="Model name (e.g., 'Llama 4 Maverick').")
+    organization: str = Field(description="Organization that released the model.")
+    release_date: str = Field(description="Release date (YYYY-MM-DD or approximate).")
+    parameters: str = Field(
+        default="Unknown",
+        description="Parameter count (e.g., '400B MoE (17B active)').",
+    )
+    license: str = Field(
+        default="Unknown",
+        description="License type (e.g., 'Apache 2.0', 'Proprietary').",
+    )
+    model_type: str = Field(
+        default="Unknown",
+        description="Architecture type (e.g., 'Transformer', 'MoE', 'Hybrid', 'Diffusion').",
+    )
+    modality: str = Field(
+        default="Text",
+        description="Modality (e.g., 'Text', 'Multimodal', 'Image', 'Code').",
+    )
+    notable_features: str = Field(
+        default="",
+        description="1-2 sentence summary of notable features.",
+    )
+    source_url: str = Field(default="", description="Link to announcement or paper.")
+
+
+class ModelReleasesOutput(LLMOutputBase):
+    """LLM extraction output for model releases."""
+
+    model_releases: List[ModelRelease] = Field(
+        default_factory=list,
+        description="List of recently released models.",
+    )
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
@@ -494,6 +524,18 @@ class TechSensingReport(LLMOutputBase):
     relationships: Optional["TechRelationshipMap"] = Field(
         default=None,
         description="Technology relationship graph with edges and clusters.",
+    )
+    model_releases: List[ModelRelease] = Field(
+        default_factory=list,
+        description="Recent model releases (GenAI domain only).",
+    )
+    report_confidence: str = Field(
+        default="medium",
+        description="Overall report confidence: 'high', 'medium', or 'low'.",
+    )
+    confidence_factors: dict = Field(
+        default_factory=dict,
+        description="Breakdown of confidence factors.",
     )
 
 
