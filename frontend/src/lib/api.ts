@@ -362,6 +362,68 @@ export interface DeepDiveFullLoad {
   meta: { tracking_id: string; technology_name: string; domain: string; generated_at: string };
 }
 
+// --- Company Analysis ---
+
+export interface CompanyTechFinding {
+  technology: string;
+  summary: string;
+  specific_products: string[];
+  recent_developments: string[];
+  partnerships: string[];
+  investment_signal: string;
+  stance: string;
+  confidence: number;
+  source_urls: string[];
+}
+
+export interface CompanyProfile {
+  company: string;
+  overall_summary: string;
+  technology_findings: CompanyTechFinding[];
+  strengths: string[];
+  gaps: string[];
+  sources_used: number;
+}
+
+export interface ComparativeRow {
+  technology: string;
+  leader: string;
+  rationale: string;
+}
+
+export interface CompanyAnalysisReport {
+  report_tracking_id: string;
+  domain: string;
+  companies_analyzed: string[];
+  technologies_analyzed: string[];
+  executive_summary: string;
+  company_profiles: CompanyProfile[];
+  comparative_matrix: ComparativeRow[];
+}
+
+export interface CompanyAnalysisMeta {
+  tracking_id: string;
+  report_tracking_id: string;
+  domain: string;
+  companies: string[];
+  technologies: string[];
+  generated_at: string;
+}
+
+export interface CompanyAnalysisHistoryItem {
+  tracking_id: string;
+  report_tracking_id: string;
+  domain: string;
+  companies: string[];
+  technologies: string[];
+  generated_at: string;
+}
+
+export interface CompanyAnalysisFullLoad {
+  report: CompanyAnalysisReport;
+  meta: CompanyAnalysisMeta;
+}
+
 export interface RadarVote {
   vote_id: string;
   user_id: string;
@@ -708,6 +770,67 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to load deep dive');
+    return data;
+  },
+
+  async sensingCompanyAnalysisStart(body: {
+    report_tracking_id: string;
+    company_names: string[];
+    technology_names?: string[];
+  }): Promise<{ status: string; tracking_id: string }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/company-analysis`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to start company analysis');
+    return data;
+  },
+
+  async sensingCompanyAnalysisStatus(
+    trackingId: string,
+  ): Promise<{ status: string; data?: { report: CompanyAnalysisReport; meta: CompanyAnalysisMeta }; error?: string }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/company-analysis/status/${trackingId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to get company analysis status');
+    return data;
+  },
+
+  async sensingCompanyAnalysisHistory(
+    reportTrackingId?: string,
+  ): Promise<{ analyses: CompanyAnalysisHistoryItem[] }> {
+    const token = getAuthToken();
+    const qs = reportTrackingId
+      ? `?report_tracking_id=${encodeURIComponent(reportTrackingId)}`
+      : '';
+    const response = await fetch(
+      `${API_URL}/sensing/company-analysis/history${qs}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load company analysis history');
+    return data;
+  },
+
+  async sensingCompanyAnalysisLoad(
+    trackingId: string,
+  ): Promise<CompanyAnalysisFullLoad> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/company-analysis/${trackingId}/full`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load company analysis');
     return data;
   },
 

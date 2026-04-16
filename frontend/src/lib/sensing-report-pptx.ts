@@ -1,5 +1,7 @@
 import PptxGenJS from 'pptxgenjs';
-import type { SensingReportData, SensingRadarItem } from './api';
+import type {
+    SensingReportData, SensingRadarItem, CompanyAnalysisReport,
+} from './api';
 import { renderRadarToCanvas } from './sensing-report-pdf';
 
 // ── Color constants ──────────────────────────────────────────────────────
@@ -359,4 +361,186 @@ function addSlideHeader(slide: PptxGenJS.Slide, title: string): void {
         x: 0.5, y: 0.15, w: 12, h: 0.6,
         fontSize: 22, bold: true, color: COLORS.white,
     });
+}
+
+
+// ── Company Analysis PPTX ────────────────────────────────────────────────
+
+function confidenceFill(c: number): string {
+    if (c >= 0.7) return 'D1FAE5';
+    if (c >= 0.4) return 'FEF3C7';
+    if (c >= 0.1) return 'FFEDD5';
+    return 'F1F5F9';
+}
+
+export async function downloadCompanyAnalysisPptx(
+    data: { report: CompanyAnalysisReport },
+    _filename?: string,
+): Promise<void> {
+    const { report } = data;
+
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_WIDE';
+    pptx.author = 'Knowledge Synthesis Platform';
+    pptx.subject = `Company Analysis - ${report.domain}`;
+    pptx.title = `Company Analysis - ${report.domain}`;
+
+    // ── Slide 1: Title ──
+    const title = pptx.addSlide();
+    title.addShape('rect' as unknown as PptxGenJS.ShapeType, {
+        x: 0, y: 0, w: '100%', h: '100%',
+        fill: { color: COLORS.banner },
+    });
+    title.addText('Company Analysis', {
+        x: 0.8, y: 1.8, w: 11.7, h: 1.0,
+        fontSize: 34, bold: true, color: COLORS.white, align: 'center',
+    });
+    title.addText(sanitize(report.domain), {
+        x: 0.8, y: 3.0, w: 11.7, h: 0.6,
+        fontSize: 22, color: COLORS.accent, align: 'center',
+    });
+    title.addText(
+        `${report.companies_analyzed.length} companies  |  ${report.technologies_analyzed.length} technologies`,
+        {
+            x: 0.8, y: 3.8, w: 11.7, h: 0.5,
+            fontSize: 14, color: 'B0BEC5', align: 'center',
+        },
+    );
+    title.addText(
+        `Companies: ${report.companies_analyzed.map(sanitize).join(', ')}`,
+        {
+            x: 0.8, y: 4.6, w: 11.7, h: 0.6,
+            fontSize: 12, color: '90A4AE', align: 'center',
+        },
+    );
+    title.addText(new Date().toLocaleDateString(), {
+        x: 0.8, y: 5.6, w: 11.7, h: 0.4,
+        fontSize: 11, color: '90A4AE', align: 'center',
+    });
+
+    // ── Slide 2: Executive Summary ──
+    if (report.executive_summary) {
+        const slide = pptx.addSlide();
+        addSlideHeader(slide, 'Executive Summary');
+        slide.addText(sanitize(report.executive_summary), {
+            x: 0.6, y: 1.2, w: 12.1, h: 5.5,
+            fontSize: 14, color: COLORS.textDark,
+            lineSpacingMultiple: 1.3,
+            valign: 'top',
+        });
+    }
+
+    // ── Slide 3: Comparative Matrix ──
+    if (report.comparative_matrix.length > 0) {
+        const slide = pptx.addSlide();
+        addSlideHeader(slide, 'Comparative Matrix');
+        const rows: PptxGenJS.TableRow[] = [
+            [
+                { text: 'Technology', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 12 } },
+                { text: 'Leader', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 12 } },
+                { text: 'Rationale', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 12 } },
+            ],
+        ];
+        for (const row of report.comparative_matrix) {
+            rows.push([
+                { text: sanitize(row.technology), options: { bold: true, fontSize: 11, color: COLORS.textDark } },
+                {
+                    text: sanitize(row.leader),
+                    options: {
+                        bold: true, fontSize: 11,
+                        color: row.leader === 'Unclear' ? COLORS.textMuted : '1E3A5F',
+                    },
+                },
+                { text: sanitize(row.rationale), options: { fontSize: 10, color: COLORS.textMuted } },
+            ]);
+        }
+        slide.addTable(rows, {
+            x: 0.5, y: 1.2, w: 12.3,
+            colW: [3.0, 2.0, 7.3],
+            border: { type: 'solid', pt: 0.5, color: COLORS.border },
+            fontFace: 'Arial',
+        });
+    }
+
+    // ── Per-company slides ──
+    for (const profile of report.company_profiles) {
+        const slide = pptx.addSlide();
+        addSlideHeader(slide, sanitize(profile.company));
+
+        // Overall summary
+        slide.addText(sanitize(profile.overall_summary), {
+            x: 0.5, y: 1.0, w: 12.3, h: 1.3,
+            fontSize: 12, color: COLORS.textDark, valign: 'top',
+            lineSpacingMultiple: 1.2,
+        });
+
+        // Strengths / Gaps
+        if (profile.strengths.length > 0) {
+            slide.addText('Strengths', {
+                x: 0.5, y: 2.3, w: 6.0, h: 0.3,
+                fontSize: 11, bold: true, color: COLORS.adopt,
+            });
+            slide.addText(
+                profile.strengths.map((s) => `• ${sanitize(s)}`).join('\n'),
+                {
+                    x: 0.5, y: 2.6, w: 6.0, h: 0.9,
+                    fontSize: 10, color: COLORS.textDark, valign: 'top',
+                },
+            );
+        }
+        if (profile.gaps.length > 0) {
+            slide.addText('Gaps', {
+                x: 6.8, y: 2.3, w: 6.0, h: 0.3,
+                fontSize: 11, bold: true, color: COLORS.impactMed,
+            });
+            slide.addText(
+                profile.gaps.map((g) => `• ${sanitize(g)}`).join('\n'),
+                {
+                    x: 6.8, y: 2.6, w: 6.0, h: 0.9,
+                    fontSize: 10, color: COLORS.textDark, valign: 'top',
+                },
+            );
+        }
+
+        // Findings table
+        if (profile.technology_findings.length > 0) {
+            const rows: PptxGenJS.TableRow[] = [
+                [
+                    { text: 'Technology', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 10 } },
+                    { text: 'Stance', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 10 } },
+                    { text: 'Conf.', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 10 } },
+                    { text: 'Summary', options: { bold: true, fill: { color: COLORS.banner }, color: COLORS.white, fontSize: 10 } },
+                ],
+            ];
+            for (const f of profile.technology_findings) {
+                rows.push([
+                    { text: sanitize(f.technology), options: { fontSize: 9, bold: true } },
+                    { text: sanitize(f.stance || '—'), options: { fontSize: 9 } },
+                    {
+                        text: `${Math.round((f.confidence || 0) * 100)}%`,
+                        options: {
+                            fontSize: 9, bold: true, align: 'center',
+                            fill: { color: confidenceFill(f.confidence) },
+                        },
+                    },
+                    {
+                        text: truncate(f.summary, 280),
+                        options: { fontSize: 8, color: COLORS.textMuted },
+                    },
+                ]);
+            }
+            slide.addTable(rows, {
+                x: 0.5, y: 3.7, w: 12.3,
+                colW: [2.3, 2.0, 1.0, 7.0],
+                border: { type: 'solid', pt: 0.5, color: COLORS.border },
+                fontFace: 'Arial',
+                autoPage: true,
+                autoPageRepeatHeader: true,
+            });
+        }
+    }
+
+    const safeName = `Company Analysis - ${report.domain}`
+        .replace(/[^a-z0-9\-\s]/gi, '').trim() || 'Company Analysis';
+    await pptx.writeFile({ fileName: `${safeName}.pptx` });
 }

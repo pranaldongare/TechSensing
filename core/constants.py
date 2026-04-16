@@ -29,6 +29,7 @@ MAIN_MODEL = settings.MAIN_MODEL
 # Tech Sensing LLM configurations
 GPU_SENSING_CLASSIFY_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
 GPU_SENSING_REPORT_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
+GPU_SENSING_COMPANY_ANALYSIS_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
 
 # Fallback LLM models
 FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"

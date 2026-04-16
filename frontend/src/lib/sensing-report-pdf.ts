@@ -4,7 +4,10 @@ type Content = any;
 
 import pdfMake from 'pdfmake/build/pdfmake';
 import 'pdfmake/build/vfs_fonts';
-import type { SensingReportData, SensingRadarItem, SensingHeadlineMove } from './api';
+import type {
+    SensingReportData, SensingRadarItem, SensingHeadlineMove,
+    CompanyAnalysisReport,
+} from './api';
 
 const g: any = (typeof window !== 'undefined' ? window : globalThis) as any;
 if (g?.pdfMake?.vfs) {
@@ -675,6 +678,189 @@ export async function downloadSensingReportPdf(data: SensingReportData, filename
     const doc = buildSensingPdf(data, radarImageDataUrl);
     const safe = (data.report.report_title || 'Tech Sensing Report')
         .replace(/[^a-z0-9\-\s]/gi, '').trim() || 'Tech Sensing Report';
+    const name = filename || `${safe}.pdf`;
+    pdfMake.createPdf(doc).download(name);
+}
+
+
+// ── Company Analysis PDF ──────────────────────────────────────────────────
+
+const companyColors = {
+    header: { bg: '#EEF2FF', text: '#3730A3' },
+    summary: { bg: '#EFF6FF', text: '#1E40AF' },
+    matrix: { bg: '#ECFDF5', text: '#047857' },
+    company: { bg: '#F5F3FF', text: '#6D28D9' },
+    strength: { bg: '#ECFDF5', text: '#047857' },
+    gap: { bg: '#FFF7ED', text: '#C2410C' },
+};
+
+function confidenceTone(c: number) {
+    if (c >= 0.7) return { bg: '#D1FAE5', text: '#065F46' };
+    if (c >= 0.4) return { bg: '#FEF3C7', text: '#92400E' };
+    if (c >= 0.1) return { bg: '#FFEDD5', text: '#9A3412' };
+    return { bg: '#F1F5F9', text: '#475569' };
+}
+
+function buildCompanyAnalysisPdf(data: { report: CompanyAnalysisReport }): TDocumentDefinitions {
+    const { report } = data;
+    const today = new Date().toLocaleDateString();
+    const content: Content[] = [];
+
+    // Title banner
+    content.push(banner(
+        'Company Analysis',
+        `${report.domain} | ${report.companies_analyzed.length} companies x ${report.technologies_analyzed.length} technologies`,
+    ));
+
+    // Meta pills
+    content.push({
+        columns: [
+            pill(`Domain: ${report.domain}`, companyColors.header),
+            pill(`Companies: ${report.companies_analyzed.length}`, companyColors.header),
+            pill(`Technologies: ${report.technologies_analyzed.length}`, companyColors.header),
+            pill(`Generated: ${today}`, companyColors.header),
+        ],
+        columnGap: 6,
+        margin: [0, 0, 0, 10],
+    });
+
+    // Executive summary
+    if (report.executive_summary) {
+        content.push(sectionHeader('Executive Summary', companyColors.summary));
+        content.push(card([
+            { text: sanitize(report.executive_summary), fontSize: 10, color: colors.slate800, lineHeight: 1.4 },
+        ]));
+    }
+
+    // Comparative matrix
+    if (report.comparative_matrix.length > 0) {
+        content.push(sectionHeader('Comparative Matrix', companyColors.matrix));
+        const tableBody: any[] = [
+            [
+                { text: 'Technology', bold: true, fillColor: companyColors.matrix.bg, color: companyColors.matrix.text, margin: [4, 4, 4, 4] },
+                { text: 'Leader', bold: true, fillColor: companyColors.matrix.bg, color: companyColors.matrix.text, margin: [4, 4, 4, 4] },
+                { text: 'Rationale', bold: true, fillColor: companyColors.matrix.bg, color: companyColors.matrix.text, margin: [4, 4, 4, 4] },
+            ],
+        ];
+        for (const row of report.comparative_matrix) {
+            tableBody.push([
+                { text: sanitize(row.technology), margin: [4, 3, 4, 3], fontSize: 9, bold: true },
+                { text: sanitize(row.leader), margin: [4, 3, 4, 3], fontSize: 9, color: row.leader === 'Unclear' ? colors.slate500 : colors.primary },
+                { text: sanitize(row.rationale), margin: [4, 3, 4, 3], fontSize: 8, color: colors.slate600 },
+            ]);
+        }
+        content.push({
+            table: { headerRows: 1, widths: ['auto', 'auto', '*'], body: tableBody },
+            layout: {
+                hLineColor: () => colors.border, vLineColor: () => colors.border,
+                hLineWidth: () => 0.5, vLineWidth: () => 0.5,
+            },
+        });
+    }
+
+    // Per-company profiles
+    for (const profile of report.company_profiles) {
+        content.push(sectionHeader(profile.company, companyColors.company));
+
+        content.push(card([
+            { text: sanitize(profile.overall_summary), fontSize: 10, color: colors.slate800, lineHeight: 1.4 },
+        ]));
+
+        if (profile.strengths.length > 0 || profile.gaps.length > 0) {
+            const strengthsCol: Content[] = [
+                { text: 'Strengths', fontSize: 10, bold: true, color: companyColors.strength.text, margin: [0, 0, 0, 3] },
+                ...(profile.strengths.length > 0
+                    ? [{ ul: profile.strengths.map((s) => ({ text: sanitize(s), fontSize: 9, color: colors.slate600 })) } as any]
+                    : [{ text: '(none identified)', fontSize: 9, color: colors.slate500, italics: true } as any]),
+            ];
+            const gapsCol: Content[] = [
+                { text: 'Gaps', fontSize: 10, bold: true, color: companyColors.gap.text, margin: [0, 0, 0, 3] },
+                ...(profile.gaps.length > 0
+                    ? [{ ul: profile.gaps.map((g) => ({ text: sanitize(g), fontSize: 9, color: colors.slate600 })) } as any]
+                    : [{ text: '(none identified)', fontSize: 9, color: colors.slate500, italics: true } as any]),
+            ];
+            content.push({
+                columns: [
+                    { stack: strengthsCol, width: '*' },
+                    { stack: gapsCol, width: '*' },
+                ],
+                columnGap: 12,
+                margin: [0, 4, 0, 6],
+            });
+        }
+
+        // Per-technology findings table
+        if (profile.technology_findings.length > 0) {
+            const findingsBody: any[] = [
+                [
+                    { text: 'Technology', bold: true, fillColor: companyColors.company.bg, color: companyColors.company.text, margin: [4, 4, 4, 4] },
+                    { text: 'Stance', bold: true, fillColor: companyColors.company.bg, color: companyColors.company.text, margin: [4, 4, 4, 4] },
+                    { text: 'Confidence', bold: true, fillColor: companyColors.company.bg, color: companyColors.company.text, margin: [4, 4, 4, 4] },
+                    { text: 'Summary', bold: true, fillColor: companyColors.company.bg, color: companyColors.company.text, margin: [4, 4, 4, 4] },
+                ],
+            ];
+            for (const f of profile.technology_findings) {
+                const conf = confidenceTone(f.confidence);
+                findingsBody.push([
+                    { text: sanitize(f.technology), margin: [4, 3, 4, 3], fontSize: 8, bold: true },
+                    { text: sanitize(f.stance || '—'), margin: [4, 3, 4, 3], fontSize: 8 },
+                    {
+                        text: `${Math.round((f.confidence || 0) * 100)}%`,
+                        margin: [4, 3, 4, 3], fontSize: 8, bold: true,
+                        color: conf.text, fillColor: conf.bg, alignment: 'center',
+                    },
+                    {
+                        stack: [
+                            { text: sanitize(f.summary), fontSize: 8, color: colors.slate600 },
+                            ...(f.specific_products.length > 0
+                                ? [{ text: `Products: ${sanitize(f.specific_products.join(', '))}`, fontSize: 7, color: colors.slate500, margin: [0, 2, 0, 0] } as any]
+                                : []),
+                            ...(f.recent_developments.length > 0
+                                ? [{ text: `Recent: ${sanitize(f.recent_developments.slice(0, 2).join(' | '))}`, fontSize: 7, color: colors.slate500, margin: [0, 2, 0, 0] } as any]
+                                : []),
+                        ],
+                        margin: [4, 3, 4, 3],
+                    },
+                ]);
+            }
+            content.push({
+                table: { headerRows: 1, widths: ['auto', 'auto', 'auto', '*'], body: findingsBody },
+                layout: {
+                    hLineColor: () => colors.border, vLineColor: () => colors.border,
+                    hLineWidth: () => 0.5, vLineWidth: () => 0.5,
+                },
+                margin: [0, 4, 0, 12],
+            });
+        }
+    }
+
+    return {
+        info: {
+            title: `Company Analysis - ${report.domain}`,
+            author: 'Knowledge Synthesis Platform',
+            subject: `Company Analysis - ${report.domain}`,
+            keywords: 'tech sensing, company analysis, competitive intelligence',
+        },
+        pageMargins: [36, 50, 36, 50],
+        footer: (currentPage: number, pageCount: number) => ({
+            columns: [
+                { text: `Company Analysis | ${report.domain} | ${today}`, color: colors.slate500, fontSize: 8 },
+                { text: `${currentPage} / ${pageCount}`, alignment: 'right', color: colors.slate500, fontSize: 8 },
+            ],
+            margin: [36, 10, 36, 0],
+        }),
+        content,
+        defaultStyle: { fontSize: 10, color: colors.slate800 },
+    };
+}
+
+export async function downloadCompanyAnalysisPdf(
+    data: { report: CompanyAnalysisReport },
+    filename?: string,
+) {
+    const doc = buildCompanyAnalysisPdf(data);
+    const safe = `Company Analysis - ${data.report.domain}`
+        .replace(/[^a-z0-9\-\s]/gi, '').trim() || 'Company Analysis';
     const name = filename || `${safe}.pdf`;
     pdfMake.createPdf(doc).download(name);
 }

@@ -996,6 +996,234 @@ async def load_deep_dive(request: Request, tracking_id: str):
     })
 
 
+# --- Company Analysis ---
+
+
+class CompanyAnalysisRequest(BaseModel):
+    report_tracking_id: str = Field(
+        description="Tracking ID of the parent Tech Sensing report",
+    )
+    company_names: List[str] = Field(
+        description="Company names to analyze (1-10)",
+    )
+    technology_names: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Radar item names to analyze; empty means top radar items by "
+            "signal strength"
+        ),
+    )
+
+
+@router.post("/company-analysis")
+async def start_company_analysis(
+    request: Request,
+    body: CompanyAnalysisRequest = Body(...),
+):
+    """Start an async company analysis for a specific report."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    if not body.company_names or not any(c.strip() for c in body.company_names):
+        raise HTTPException(
+            status_code=400, detail="At least one company name is required"
+        )
+
+    user_id = payload.userId
+    tracking_id = str(uuid.uuid4())
+    sensing_dir = _get_sensing_dir(user_id)
+    os.makedirs(sensing_dir, exist_ok=True)
+    status_path = os.path.join(
+        sensing_dir, f"company_analysis_status_{tracking_id}.json"
+    )
+    await write_pending_status(status_path)
+
+    async def _run():
+        try:
+            from core.sensing.company_analysis import (
+                run_company_analysis,
+                save_company_analysis,
+            )
+
+            async def _progress_cb(stage, pct, msg):
+                await sio.emit(
+                    f"{user_id}/sensing_progress",
+                    {
+                        "tracking_id": tracking_id,
+                        "stage": stage,
+                        "progress": pct,
+                        "message": msg,
+                    },
+                )
+
+            report = await run_company_analysis(
+                report_tracking_id=body.report_tracking_id,
+                user_id=user_id,
+                company_names=body.company_names,
+                technology_names=body.technology_names,
+                progress_callback=_progress_cb,
+            )
+
+            await save_company_analysis(
+                user_id=user_id,
+                tracking_id=tracking_id,
+                report=report,
+                companies=report.companies_analyzed,
+                technologies=report.technologies_analyzed,
+            )
+
+            payload_out = {
+                "report": report.model_dump(),
+                "meta": {
+                    "tracking_id": tracking_id,
+                    "report_tracking_id": body.report_tracking_id,
+                    "domain": report.domain,
+                    "companies": report.companies_analyzed,
+                    "technologies": report.technologies_analyzed,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+            await write_result(status_path, payload_out)
+
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "stage": "complete",
+                    "progress": 100,
+                    "message": "Company analysis ready",
+                },
+            )
+
+        except Exception:
+            error_details = traceback.format_exc()
+            await write_failed_status(status_path, error_details)
+            print(f"[Sensing:route] Company analysis failed: {error_details}")
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "stage": "error",
+                    "progress": 0,
+                    "message": "Company analysis failed",
+                },
+            )
+
+    asyncio.create_task(_run())
+
+    return JSONResponse(
+        content={
+            "status": "pending",
+            "tracking_id": tracking_id,
+            "message": "Company analysis starting",
+        }
+    )
+
+
+@router.get("/company-analysis/status/{tracking_id}")
+async def company_analysis_status(request: Request, tracking_id: str):
+    """Poll for company analysis status."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    status_path = os.path.join(
+        _get_sensing_dir(user_id),
+        f"company_analysis_status_{tracking_id}.json",
+    )
+
+    gen_status = await _read_sensing_status(status_path)
+    if gen_status is None:
+        raise HTTPException(status_code=404, detail="Company analysis not found")
+
+    if gen_status["state"] == "pending":
+        return JSONResponse(content={"status": "pending"})
+    elif gen_status["state"] == "failed":
+        return JSONResponse(
+            content={"status": "failed", "error": gen_status.get("error", "")}
+        )
+    else:
+        return JSONResponse(
+            content={"status": "completed", "data": gen_status["data"]}
+        )
+
+
+@router.get("/company-analysis/history")
+async def company_analysis_history(request: Request, report_tracking_id: Optional[str] = None):
+    """List past company analyses, optionally filtered by parent report."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    sensing_dir = _get_sensing_dir(user_id)
+
+    if not os.path.exists(sensing_dir):
+        return JSONResponse(content={"analyses": []})
+
+    analyses = []
+    for fname in os.listdir(sensing_dir):
+        if not fname.startswith("company_analysis_") or not fname.endswith(".json"):
+            continue
+        if fname.startswith("company_analysis_status_"):
+            continue
+
+        try:
+            fpath = os.path.join(sensing_dir, fname)
+            async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+
+            meta = data.get("meta", {}) if isinstance(data, dict) else {}
+            tracking_id = meta.get("tracking_id") or fname.replace(
+                "company_analysis_", ""
+            ).replace(".json", "")
+            parent_id = meta.get("report_tracking_id", "")
+
+            if report_tracking_id and parent_id != report_tracking_id:
+                continue
+
+            analyses.append({
+                "tracking_id": tracking_id,
+                "report_tracking_id": parent_id,
+                "domain": meta.get("domain", ""),
+                "companies": meta.get("companies", []),
+                "technologies": meta.get("technologies", []),
+                "generated_at": meta.get("generated_at", ""),
+            })
+        except Exception:
+            continue
+
+    analyses.sort(key=lambda d: d.get("generated_at", ""), reverse=True)
+    return JSONResponse(content={"analyses": analyses})
+
+
+@router.get("/company-analysis/{tracking_id}/full")
+async def load_company_analysis(request: Request, tracking_id: str):
+    """Load a specific saved company analysis."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    sensing_dir = _get_sensing_dir(user_id)
+    path = os.path.join(sensing_dir, f"company_analysis_{tracking_id}.json")
+
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Company analysis not found")
+
+    try:
+        async with aiofiles.open(path, "r", encoding="utf-8") as f:
+            data = json.loads(await f.read())
+    except Exception:
+        raise HTTPException(
+            status_code=500, detail="Failed to read company analysis"
+        )
+
+    return JSONResponse(content=data)
+
+
 # --- Collaboration ---
 
 
