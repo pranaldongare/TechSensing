@@ -1256,6 +1256,230 @@ async def load_company_analysis(request: Request, tracking_id: str):
     return JSONResponse(content=data)
 
 
+# --- Key Companies (weekly cross-domain briefings) ---
+
+
+class KeyCompaniesRequest(BaseModel):
+    company_names: List[str] = Field(
+        description="Company names to include in the weekly briefing (1-12)."
+    )
+    highlight_domain: Optional[str] = Field(
+        default="",
+        description=(
+            "Optional domain to emphasize (e.g., 'Generative AI'). When "
+            "empty, the briefing is cross-domain."
+        ),
+    )
+    period_days: Optional[int] = Field(
+        default=7,
+        description="Length of the briefing window in days (1-30).",
+    )
+
+
+@router.post("/key-companies")
+async def start_key_companies(
+    request: Request,
+    body: KeyCompaniesRequest = Body(...),
+):
+    """Start an async Key Companies weekly briefing."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    if not body.company_names or not any(c.strip() for c in body.company_names):
+        raise HTTPException(
+            status_code=400, detail="At least one company name is required"
+        )
+
+    user_id = payload.userId
+    tracking_id = str(uuid.uuid4())
+    sensing_dir = _get_sensing_dir(user_id)
+    os.makedirs(sensing_dir, exist_ok=True)
+    status_path = os.path.join(
+        sensing_dir, f"key_companies_status_{tracking_id}.json"
+    )
+    await write_pending_status(status_path)
+
+    highlight_domain = (body.highlight_domain or "").strip()
+    period_days = int(body.period_days or 7)
+
+    async def _run():
+        try:
+            from core.sensing.key_companies import (
+                run_key_companies,
+                save_key_companies,
+            )
+
+            async def _progress_cb(stage, pct, msg):
+                await sio.emit(
+                    f"{user_id}/sensing_progress",
+                    {
+                        "tracking_id": tracking_id,
+                        "stage": stage,
+                        "progress": pct,
+                        "message": msg,
+                    },
+                )
+
+            report = await run_key_companies(
+                user_id=user_id,
+                company_names=body.company_names,
+                highlight_domain=highlight_domain,
+                period_days=period_days,
+                progress_callback=_progress_cb,
+            )
+
+            await save_key_companies(
+                user_id=user_id,
+                tracking_id=tracking_id,
+                report=report,
+            )
+
+            payload_out = {
+                "report": report.model_dump(),
+                "meta": {
+                    "tracking_id": tracking_id,
+                    "companies": report.companies_analyzed,
+                    "highlight_domain": report.highlight_domain,
+                    "period_days": report.period_days,
+                    "period_start": report.period_start,
+                    "period_end": report.period_end,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+            await write_result(status_path, payload_out)
+
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "stage": "complete",
+                    "progress": 100,
+                    "message": "Key Companies briefing ready",
+                },
+            )
+        except Exception:
+            error_details = traceback.format_exc()
+            await write_failed_status(status_path, error_details)
+            print(f"[Sensing:route] Key Companies failed: {error_details}")
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "stage": "error",
+                    "progress": 0,
+                    "message": "Key Companies briefing failed",
+                },
+            )
+
+    asyncio.create_task(_run())
+
+    return JSONResponse(
+        content={
+            "status": "pending",
+            "tracking_id": tracking_id,
+            "message": "Key Companies briefing starting",
+        }
+    )
+
+
+@router.get("/key-companies/status/{tracking_id}")
+async def key_companies_status(request: Request, tracking_id: str):
+    """Poll for Key Companies briefing status."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    status_path = os.path.join(
+        _get_sensing_dir(user_id),
+        f"key_companies_status_{tracking_id}.json",
+    )
+
+    gen_status = await _read_sensing_status(status_path)
+    if gen_status is None:
+        raise HTTPException(status_code=404, detail="Key Companies briefing not found")
+
+    if gen_status["state"] == "pending":
+        return JSONResponse(content={"status": "pending"})
+    elif gen_status["state"] == "failed":
+        return JSONResponse(
+            content={"status": "failed", "error": gen_status.get("error", "")}
+        )
+    else:
+        return JSONResponse(
+            content={"status": "completed", "data": gen_status["data"]}
+        )
+
+
+@router.get("/key-companies/history")
+async def key_companies_history(request: Request):
+    """List past Key Companies briefings for the current user."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    sensing_dir = _get_sensing_dir(user_id)
+
+    if not os.path.exists(sensing_dir):
+        return JSONResponse(content={"briefings": []})
+
+    briefings = []
+    for fname in os.listdir(sensing_dir):
+        if not fname.startswith("key_companies_") or not fname.endswith(".json"):
+            continue
+        if fname.startswith("key_companies_status_"):
+            continue
+        try:
+            fpath = os.path.join(sensing_dir, fname)
+            async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            meta = data.get("meta", {}) if isinstance(data, dict) else {}
+            tracking_id = meta.get("tracking_id") or fname.replace(
+                "key_companies_", ""
+            ).replace(".json", "")
+            briefings.append({
+                "tracking_id": tracking_id,
+                "companies": meta.get("companies", []),
+                "highlight_domain": meta.get("highlight_domain", ""),
+                "period_days": meta.get("period_days", 7),
+                "period_start": meta.get("period_start", ""),
+                "period_end": meta.get("period_end", ""),
+                "generated_at": meta.get("generated_at", ""),
+            })
+        except Exception:
+            continue
+
+    briefings.sort(key=lambda d: d.get("generated_at", ""), reverse=True)
+    return JSONResponse(content={"briefings": briefings})
+
+
+@router.get("/key-companies/{tracking_id}/full")
+async def load_key_companies(request: Request, tracking_id: str):
+    """Load a specific saved Key Companies briefing."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    sensing_dir = _get_sensing_dir(user_id)
+    path = os.path.join(sensing_dir, f"key_companies_{tracking_id}.json")
+
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Key Companies briefing not found")
+
+    try:
+        async with aiofiles.open(path, "r", encoding="utf-8") as f:
+            data = json.loads(await f.read())
+    except Exception:
+        raise HTTPException(
+            status_code=500, detail="Failed to read Key Companies briefing"
+        )
+
+    return JSONResponse(content=data)
+
+
 # --- Collaboration ---
 
 

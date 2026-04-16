@@ -425,6 +425,61 @@ export interface CompanyAnalysisFullLoad {
   meta: CompanyAnalysisMeta;
 }
 
+// ---- Key Companies ----
+
+export interface KeyCompanyUpdate {
+  category: string;
+  headline: string;
+  summary: string;
+  date: string;
+  domain: string;
+  source_url: string;
+}
+
+export interface KeyCompanyBriefing {
+  company: string;
+  overall_summary: string;
+  domains_active: string[];
+  updates: KeyCompanyUpdate[];
+  key_themes: string[];
+  sources_used: number;
+}
+
+export interface KeyCompaniesReport {
+  companies_analyzed: string[];
+  highlight_domain: string;
+  period_days: number;
+  period_start: string;
+  period_end: string;
+  cross_company_summary: string;
+  briefings: KeyCompanyBriefing[];
+}
+
+export interface KeyCompaniesMeta {
+  tracking_id: string;
+  companies: string[];
+  highlight_domain: string;
+  period_days: number;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+}
+
+export interface KeyCompaniesHistoryItem {
+  tracking_id: string;
+  companies: string[];
+  highlight_domain: string;
+  period_days: number;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+}
+
+export interface KeyCompaniesFullLoad {
+  report: KeyCompaniesReport;
+  meta: KeyCompaniesMeta;
+}
+
 export interface RadarVote {
   vote_id: string;
   user_id: string;
@@ -833,6 +888,60 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to load company analysis');
+    return data;
+  },
+
+  async sensingKeyCompaniesStart(body: {
+    company_names: string[];
+    highlight_domain?: string;
+    period_days?: number;
+  }): Promise<{ status: string; tracking_id: string }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/key-companies`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to start Key Companies briefing');
+    return data;
+  },
+
+  async sensingKeyCompaniesStatus(
+    trackingId: string,
+  ): Promise<{ status: string; data?: { report: KeyCompaniesReport; meta: KeyCompaniesMeta }; error?: string }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/key-companies/status/${trackingId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to get Key Companies status');
+    return data;
+  },
+
+  async sensingKeyCompaniesHistory(): Promise<{ briefings: KeyCompaniesHistoryItem[] }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/key-companies/history`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load Key Companies history');
+    return data;
+  },
+
+  async sensingKeyCompaniesLoad(trackingId: string): Promise<KeyCompaniesFullLoad> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/key-companies/${trackingId}/full`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load Key Companies briefing');
     return data;
   },
 
