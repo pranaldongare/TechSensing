@@ -6,6 +6,7 @@ Main entry point called by the route handler.
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -266,6 +267,16 @@ async def run_sensing_pipeline(
     logger.info(
         f"[Stage 3/7] CLASSIFY COMPLETE: {len(classified)} classified articles [{_elapsed()}]"
     )
+
+    # Post-classification date filter: catch articles with dates assigned by the LLM
+    # from article content (e.g., DuckDuckGo results that had no RawArticle date)
+    before_post_filter = len(classified)
+    classified = _filter_classified_by_date(classified, lookback_days)
+    if len(classified) < before_post_filter:
+        logger.info(
+            f"[Stage 3/7] Post-classify date filter: "
+            f"{before_post_filter} -> {len(classified)}"
+        )
 
     # --- Stage 4: Extract full text (only for classified articles) ---
     classified_urls = {a.url for a in classified}
@@ -573,16 +584,88 @@ def _merge_patent_keywords(
     return keywords or must_include
 
 
+# Date pattern regexes for extracting dates from article text
+_DATE_PATTERN_ISO = re.compile(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b")
+_DATE_PATTERN_MONTH_YEAR = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|"
+    r"September|October|November|December)\s+(\d{1,2},?\s+)?(20\d{2})\b",
+    re.IGNORECASE,
+)
+_DATE_PATTERN_YEAR = re.compile(r"\b(20\d{2})\b")
+
+_MONTH_MAP = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _extract_date_from_text(text: str) -> Optional[datetime]:
+    """Extract a date from free text. Returns UTC datetime or None.
+
+    Tries progressively less specific patterns:
+    1. YYYY-MM-DD (ISO)
+    2. Month DD, YYYY or Month YYYY
+    3. Just YYYY (returns Jan 1 of that year)
+    """
+    if not text:
+        return None
+
+    # Try ISO pattern first
+    m = _DATE_PATTERN_ISO.search(text)
+    if m:
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            return datetime(y, mo, d, tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+
+    # Try "Month [DD,] YYYY"
+    m = _DATE_PATTERN_MONTH_YEAR.search(text)
+    if m:
+        try:
+            month_num = _MONTH_MAP[m.group(1).lower()]
+            year = int(m.group(3))
+            return datetime(year, month_num, 15, tzinfo=timezone.utc)
+        except (ValueError, KeyError):
+            pass
+
+    # Fall back to year only
+    m = _DATE_PATTERN_YEAR.search(text)
+    if m:
+        try:
+            return datetime(int(m.group(1)), 6, 15, tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+
+    return None
+
+
+def _parse_iso_date(date_str: str) -> Optional[datetime]:
+    """Parse ISO date string into UTC datetime."""
+    if not date_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
 def _filter_by_date(
     articles: List[RawArticle],
     lookback_days: int,
-    buffer_multiplier: float = 2.0,
+    buffer_multiplier: float = 1.5,
 ) -> List[RawArticle]:
-    """Remove articles with published_date outside the allowed window.
+    """Remove articles older than the allowed window.
 
-    Articles with no date or unparseable dates are KEPT (benefit of doubt).
-    Buffer multiplier allows 2x the lookback window to account for
-    articles published slightly before the range but still relevant.
+    For articles without published_date, tries to extract a date from
+    title/snippet/content. If a date is found anywhere in the text that
+    indicates the article describes an old event, it is filtered out.
+
+    Only articles with NO extractable date are kept (benefit of doubt).
     """
     if lookback_days <= 0:
         return articles
@@ -592,27 +675,89 @@ def _filter_by_date(
     )
     kept = []
     filtered = 0
+    filtered_by_content = 0
+
     for a in articles:
-        if not a.published_date:
+        # First try the article's published_date
+        pub_dt = _parse_iso_date(a.published_date) if a.published_date else None
+
+        # If no valid published_date, try extracting from text
+        extracted_from_content = False
+        if pub_dt is None:
+            text = f"{a.title} {a.snippet} {a.content}"
+            pub_dt = _extract_date_from_text(text)
+            extracted_from_content = pub_dt is not None
+
+        if pub_dt is None:
+            # No date anywhere — keep with benefit of doubt
             kept.append(a)
             continue
-        try:
-            pub_dt = datetime.fromisoformat(
-                a.published_date.replace("Z", "+00:00")
-            )
-            if pub_dt.tzinfo is None:
-                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-            if pub_dt < cutoff:
-                filtered += 1
-                continue
-        except (ValueError, TypeError):
-            pass
+
+        if pub_dt < cutoff:
+            filtered += 1
+            if extracted_from_content:
+                filtered_by_content += 1
+            continue
+
         kept.append(a)
 
     if filtered:
         logger.info(
             f"Date filter: removed {filtered} articles older than "
-            f"{int(lookback_days * buffer_multiplier)} days"
+            f"{int(lookback_days * buffer_multiplier)} days "
+            f"({filtered_by_content} via content-based date extraction)"
+        )
+    return kept
+
+
+def _filter_classified_by_date(
+    classified: list,
+    lookback_days: int,
+    buffer_multiplier: float = 1.5,
+) -> list:
+    """Hard post-classification date filter.
+
+    The LLM often extracts accurate publication dates from article content
+    and stores them in ClassifiedArticle.published_date. This filter uses
+    those dates to remove articles that slipped through the pre-filter
+    (e.g., DuckDuckGo results with no RawArticle date).
+    """
+    if lookback_days <= 0 or not classified:
+        return classified
+
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=int(lookback_days * buffer_multiplier)
+    )
+    kept = []
+    filtered = 0
+
+    for c in classified:
+        pub_dt = _parse_iso_date(c.published_date) if c.published_date else None
+
+        # If LLM didn't provide a valid date, try extracting from title + summary
+        if pub_dt is None:
+            text = f"{c.title} {c.summary}"
+            pub_dt = _extract_date_from_text(text)
+
+        if pub_dt is None:
+            # Still no date — keep with benefit of doubt
+            kept.append(c)
+            continue
+
+        if pub_dt < cutoff:
+            filtered += 1
+            logger.debug(
+                f"Post-classify date filter: removing '{c.title[:60]}' "
+                f"(date={c.published_date}, cutoff={cutoff.date()})"
+            )
+            continue
+
+        kept.append(c)
+
+    if filtered:
+        logger.info(
+            f"Post-classify date filter: removed {filtered} classified articles "
+            f"older than {int(lookback_days * buffer_multiplier)} days"
         )
     return kept
 
@@ -1050,6 +1195,16 @@ async def run_sensing_pipeline_from_document(
     logger.info(
         f"[Stage 6/9] CLASSIFY COMPLETE: {len(classified)} [{_elapsed()}]"
     )
+
+    # Post-classification date filter: catch articles with dates assigned by the LLM
+    # from article content (e.g., DuckDuckGo results that had no RawArticle date)
+    before_post_filter = len(classified)
+    classified = _filter_classified_by_date(classified, lookback_days)
+    if len(classified) < before_post_filter:
+        logger.info(
+            f"[Stage 6/9] Post-classify date filter: "
+            f"{before_post_filter} -> {len(classified)}"
+        )
 
     # --- Stage 7: Extract full text (only for classified articles) ---
     classified_urls = {a.url for a in classified}
