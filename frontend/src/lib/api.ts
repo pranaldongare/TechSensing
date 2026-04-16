@@ -774,9 +774,10 @@ export const api = {
   },
 
   async sensingCompanyAnalysisStart(body: {
-    report_tracking_id: string;
+    report_tracking_id?: string;
     company_names: string[];
     technology_names?: string[];
+    domain?: string;
   }): Promise<{ status: string; tracking_id: string }> {
     const token = getAuthToken();
     const response = await fetch(

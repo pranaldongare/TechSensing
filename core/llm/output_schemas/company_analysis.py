@@ -124,7 +124,11 @@ class CompanyAnalysisReport(LLMOutputBase):
     """Full company analysis output."""
 
     report_tracking_id: str = Field(
-        description="Parent Tech Sensing report tracking ID."
+        default="",
+        description=(
+            "Parent Tech Sensing report tracking ID. Empty string when "
+            "the analysis was run in standalone mode (no parent report)."
+        ),
     )
     domain: str = Field(description="Domain inherited from parent report.")
     companies_analyzed: List[str] = Field(

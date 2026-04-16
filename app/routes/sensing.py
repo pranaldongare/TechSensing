@@ -1001,7 +1001,11 @@ async def load_deep_dive(request: Request, tracking_id: str):
 
 class CompanyAnalysisRequest(BaseModel):
     report_tracking_id: str = Field(
-        description="Tracking ID of the parent Tech Sensing report",
+        default="",
+        description=(
+            "Tracking ID of the parent Tech Sensing report. "
+            "Leave empty to run in standalone mode."
+        ),
     )
     company_names: List[str] = Field(
         description="Company names to analyze (1-10)",
@@ -1009,8 +1013,17 @@ class CompanyAnalysisRequest(BaseModel):
     technology_names: List[str] = Field(
         default_factory=list,
         description=(
-            "Radar item names to analyze; empty means top radar items by "
-            "signal strength"
+            "Technology/area names to analyze. In report-linked mode these "
+            "are matched against radar items (or top items by signal "
+            "strength when empty). In standalone mode this list is "
+            "required and used verbatim."
+        ),
+    )
+    domain: Optional[str] = Field(
+        default=None,
+        description=(
+            "Domain label. Required for standalone mode; overrides the "
+            "parent report's domain when provided in report-linked mode."
         ),
     )
 
@@ -1029,6 +1042,24 @@ async def start_company_analysis(
         raise HTTPException(
             status_code=400, detail="At least one company name is required"
         )
+
+    # Standalone mode needs explicit technologies + domain
+    if not body.report_tracking_id:
+        if not body.technology_names or not any(
+            t.strip() for t in body.technology_names
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Standalone analysis requires at least one technology "
+                    "or area to analyze"
+                ),
+            )
+        if not body.domain or not body.domain.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Standalone analysis requires a domain",
+            )
 
     user_id = payload.userId
     tracking_id = str(uuid.uuid4())
@@ -1058,10 +1089,11 @@ async def start_company_analysis(
                 )
 
             report = await run_company_analysis(
-                report_tracking_id=body.report_tracking_id,
                 user_id=user_id,
                 company_names=body.company_names,
                 technology_names=body.technology_names,
+                report_tracking_id=body.report_tracking_id,
+                domain=body.domain,
                 progress_callback=_progress_cb,
             )
 

@@ -327,17 +327,26 @@ async def _build_comparative_view(
 
 
 async def run_company_analysis(
-    report_tracking_id: str,
     user_id: str,
     company_names: List[str],
     technology_names: List[str],
+    report_tracking_id: str = "",
+    domain: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
 ) -> CompanyAnalysisReport:
     """
-    Run a company analysis for a given Tech Sensing report.
+    Run a company analysis.
+
+    Two modes:
+    - Report-linked: ``report_tracking_id`` is provided and a parent Tech
+      Sensing report is loaded. ``domain`` and technology filter come from
+      the parent when not explicitly overridden.
+    - Standalone: ``report_tracking_id`` is empty. Caller must provide
+      ``domain`` and ``technology_names`` (technologies are used verbatim,
+      capped at ``MAX_TECHNOLOGIES``).
 
     Stages:
-    1. Load parent report and select technologies
+    1. Load parent report (if any) and select technologies
     2. Per-company search + extract (parallel, bounded)
     3. Per-company LLM synthesis (parallel, bounded)
     4. Cross-company comparative LLM call
@@ -348,24 +357,44 @@ async def run_company_analysis(
         if progress_callback:
             await progress_callback("company_analysis", pct, msg)
 
-    # --- Stage 1: Load & select ---
-    await _emit(5, "Loading parent report...")
-    parent = await _load_parent_report(user_id, report_tracking_id)
-    parent_report = parent.get("report", {})
-    meta = parent.get("meta", {})
-
-    domain = parent_report.get("domain") or meta.get("domain", "Technology")
-    date_range = parent_report.get("date_range", "")
-
     companies = [c.strip() for c in company_names if c and c.strip()][:MAX_COMPANIES]
     if not companies:
         raise ValueError("At least one company name is required")
 
-    technologies = _select_technologies(parent, technology_names)
-    if not technologies:
-        raise ValueError(
-            "No technologies to analyze — parent report has no radar items"
+    # --- Stage 1: Load & select ---
+    if report_tracking_id:
+        await _emit(5, "Loading parent report...")
+        parent = await _load_parent_report(user_id, report_tracking_id)
+        parent_report = parent.get("report", {})
+        meta = parent.get("meta", {})
+
+        resolved_domain = (
+            domain
+            or parent_report.get("domain")
+            or meta.get("domain")
+            or "Technology"
         )
+        date_range = parent_report.get("date_range", "")
+        technologies = _select_technologies(parent, technology_names)
+        if not technologies:
+            raise ValueError(
+                "No technologies to analyze — parent report has no radar items"
+            )
+    else:
+        # Standalone mode: caller supplies everything
+        await _emit(5, "Preparing standalone analysis...")
+        resolved_domain = (domain or "Technology").strip() or "Technology"
+        date_range = ""
+        technologies = [
+            t.strip() for t in (technology_names or []) if t and t.strip()
+        ][:MAX_TECHNOLOGIES]
+        if not technologies:
+            raise ValueError(
+                "At least one technology is required for standalone analysis"
+            )
+
+    # Use resolved_domain throughout the rest of the flow
+    domain = resolved_domain
 
     logger.info(
         f"Company analysis: {len(companies)} companies x "

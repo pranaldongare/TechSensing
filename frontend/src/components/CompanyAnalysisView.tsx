@@ -5,7 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Progress } from '@/components/ui/progress';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Accordion,
   AccordionContent,
@@ -35,11 +34,17 @@ interface RadarItemLite {
 interface CompanyAnalysisViewProps {
   reportTrackingId?: string;
   domain?: string;
-  radarItems: RadarItemLite[];
+  radarItems?: RadarItemLite[];
+  /** Standalone mode: user inputs both companies and technology areas
+   *  manually (no parent report). Defaults to true when reportTrackingId
+   *  is not provided. */
+  standalone?: boolean;
 }
 
 const POLL_INTERVAL_MS = 4_000;
 const MAX_POLL_COUNT = 300; // ~20 minutes
+const MAX_TECHS = 8;
+const MAX_COMPANIES = 10;
 
 const ringTone = (ring?: string): string => {
   switch ((ring || '').toLowerCase()) {
@@ -66,14 +71,23 @@ const confidencePct = (c: number): string => `${Math.round((c || 0) * 100)}%`;
 const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
   reportTrackingId,
   domain,
-  radarItems,
+  radarItems = [],
+  standalone,
 }) => {
+  const isStandalone = standalone ?? !reportTrackingId;
+
   const [companyInput, setCompanyInput] = useState('');
   const [companies, setCompanies] = useState<string[]>([]);
+  // In standalone mode there are no radar items, so initial selection is empty
   const [selectedTechs, setSelectedTechs] = useState<string[]>(() =>
-    radarItems.slice(0, 8).map((r) => r.name),
+    isStandalone ? [] : radarItems.slice(0, MAX_TECHS).map((r) => r.name),
   );
+  const [customTechs, setCustomTechs] = useState<string[]>([]);
+  const [customTechInput, setCustomTechInput] = useState('');
   const [showTechs, setShowTechs] = useState(true);
+
+  // Standalone-only: editable domain
+  const [domainInput, setDomainInput] = useState(domain || '');
 
   const [status, setStatus] = useState<'idle' | 'running' | 'complete' | 'error'>('idle');
   const [progress, setProgress] = useState(0);
@@ -88,23 +102,36 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
   const pollRef = useRef<number | null>(null);
   const pollCountRef = useRef(0);
 
-  // Reset selectedTechs when radarItems changes for a new parent report
+  // Reset state when radarItems / parent report changes
   useEffect(() => {
-    setSelectedTechs(radarItems.slice(0, 8).map((r) => r.name));
-  }, [radarItems]);
+    if (!isStandalone) {
+      setSelectedTechs(radarItems.slice(0, MAX_TECHS).map((r) => r.name));
+    }
+  }, [radarItems, isStandalone]);
+
+  useEffect(() => {
+    setDomainInput(domain || '');
+  }, [domain]);
 
   const loadHistory = useCallback(async () => {
-    if (!reportTrackingId) return;
     setHistoryLoading(true);
     try {
-      const res = await api.sensingCompanyAnalysisHistory(reportTrackingId);
-      setHistory(res.analyses || []);
-    } catch (e) {
+      // In report-linked mode, filter by the parent id; otherwise list all
+      const res = await api.sensingCompanyAnalysisHistory(
+        isStandalone ? undefined : reportTrackingId,
+      );
+      const items = res.analyses || [];
+      // In standalone mode, only show standalone (no parent) analyses
+      const filtered = isStandalone
+        ? items.filter((a) => !a.report_tracking_id)
+        : items;
+      setHistory(filtered);
+    } catch {
       // Silent failure — history is nice-to-have
     } finally {
       setHistoryLoading(false);
     }
-  }, [reportTrackingId]);
+  }, [reportTrackingId, isStandalone]);
 
   useEffect(() => {
     loadHistory();
@@ -153,7 +180,6 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
             variant: 'destructive',
           });
         } else {
-          // Still pending — nudge progress upward as feedback
           setProgress((p) => Math.min(p + 2, 90));
         }
       } catch {
@@ -165,9 +191,8 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
   const addCompanyFromInput = () => {
     const raw = companyInput.trim();
     if (!raw) return;
-    // Accept comma-separated in one go
     const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    const next = Array.from(new Set([...companies, ...parts])).slice(0, 10);
+    const next = Array.from(new Set([...companies, ...parts])).slice(0, MAX_COMPANIES);
     setCompanies(next);
     setCompanyInput('');
   };
@@ -176,30 +201,86 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
     setCompanies((prev) => prev.filter((c) => c !== name));
   };
 
+  const allSelectedTechs = useMemo(
+    () => [...selectedTechs, ...customTechs],
+    [selectedTechs, customTechs],
+  );
+
   const toggleTech = (name: string) => {
-    setSelectedTechs((prev) =>
-      prev.includes(name)
-        ? prev.filter((t) => t !== name)
-        : prev.length < 8
-        ? [...prev, name]
-        : prev,
-    );
+    setSelectedTechs((prev) => {
+      if (prev.includes(name)) return prev.filter((t) => t !== name);
+      if (allSelectedTechs.length >= MAX_TECHS) return prev;
+      return [...prev, name];
+    });
   };
 
-  const selectAllTechs = () => setSelectedTechs(radarItems.slice(0, 8).map((r) => r.name));
-  const clearTechs = () => setSelectedTechs([]);
-
-  const handleRun = async () => {
-    if (!reportTrackingId) {
-      toast({ title: 'No report loaded', description: 'Open a Tech Sensing report first.', variant: 'destructive' });
+  const addCustomTech = () => {
+    const raw = customTechInput.trim();
+    if (!raw) return;
+    if (allSelectedTechs.length >= MAX_TECHS) {
+      toast({
+        title: 'Max technologies reached',
+        description: `Up to ${MAX_TECHS} technologies can be analyzed at a time.`,
+      });
       return;
     }
+    // Split comma-separated entries, dedup across both lists
+    const parts = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    const lower = new Set(allSelectedTechs.map((t) => t.toLowerCase()));
+    const fresh = parts.filter((p) => !lower.has(p.toLowerCase()));
+    const remaining = MAX_TECHS - allSelectedTechs.length;
+    setCustomTechs((prev) => [...prev, ...fresh.slice(0, remaining)]);
+    setCustomTechInput('');
+  };
+
+  const removeCustomTech = (name: string) => {
+    setCustomTechs((prev) => prev.filter((t) => t !== name));
+  };
+
+  const selectAllTechs = () => {
+    const top = radarItems.slice(0, MAX_TECHS - customTechs.length).map((r) => r.name);
+    setSelectedTechs(top);
+  };
+  const clearTechs = () => {
+    setSelectedTechs([]);
+    setCustomTechs([]);
+  };
+
+  const handleRun = async () => {
     const finalCompanies = companies.length > 0
       ? companies
       : companyInput.trim().split(',').map((s) => s.trim()).filter(Boolean);
 
     if (finalCompanies.length === 0) {
       toast({ title: 'Add at least one company', description: 'Enter company names to analyze.', variant: 'destructive' });
+      return;
+    }
+
+    const finalTechs = allSelectedTechs;
+    if (isStandalone && finalTechs.length === 0) {
+      toast({
+        title: 'Add at least one technology',
+        description: 'Enter technology or area names to analyze.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (isStandalone && !domainInput.trim()) {
+      toast({
+        title: 'Domain required',
+        description: 'Enter the industry or domain label for this analysis.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (!isStandalone && !reportTrackingId) {
+      toast({
+        title: 'No report loaded',
+        description: 'Open a Tech Sensing report first.',
+        variant: 'destructive',
+      });
       return;
     }
 
@@ -210,12 +291,13 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
 
     try {
       const res = await api.sensingCompanyAnalysisStart({
-        report_tracking_id: reportTrackingId,
-        company_names: finalCompanies.slice(0, 10),
-        technology_names: selectedTechs,
+        report_tracking_id: isStandalone ? '' : (reportTrackingId || ''),
+        company_names: finalCompanies.slice(0, MAX_COMPANIES),
+        technology_names: finalTechs,
+        domain: isStandalone ? domainInput.trim() : (domain || undefined),
       });
       setTrackingId(res.tracking_id);
-      setCompanies(finalCompanies.slice(0, 10));
+      setCompanies(finalCompanies.slice(0, MAX_COMPANIES));
       setCompanyInput('');
       startPolling(res.tracking_id);
     } catch (e: unknown) {
@@ -241,7 +323,19 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
       const res = await api.sensingCompanyAnalysisLoad(tid);
       setReport(res.report);
       setCompanies(res.meta.companies || []);
-      setSelectedTechs(res.meta.technologies || []);
+      // Restore tech lists: treat everything as "custom" when in standalone
+      // (no radar items to match against)
+      const techs = res.meta.technologies || [];
+      if (isStandalone) {
+        setSelectedTechs([]);
+        setCustomTechs(techs);
+      } else {
+        const radarSet = new Set(radarItems.map((r) => r.name.toLowerCase()));
+        const matched = techs.filter((t) => radarSet.has(t.toLowerCase()));
+        const custom = techs.filter((t) => !radarSet.has(t.toLowerCase()));
+        setSelectedTechs(matched);
+        setCustomTechs(custom);
+      }
       setTrackingId(tid);
       setStatus('complete');
       setProgress(100);
@@ -282,7 +376,7 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
         {historyLoading && <Loader2 className="w-3 h-3 animate-spin" />}
       </button>
       {showHistory && history.length > 0 && (
-        <ScrollArea className="max-h-40 px-3 pb-2">
+        <div className="max-h-40 overflow-y-auto px-3 pb-2">
           <div className="space-y-1">
             {history.map((h) => (
               <button
@@ -306,21 +400,12 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
               </button>
             ))}
           </div>
-        </ScrollArea>
+        </div>
       )}
     </div>
   );
 
   // --- Rendering ---
-
-  if (!reportTrackingId) {
-    return (
-      <div className="p-6 text-center text-muted-foreground">
-        <Building2 className="w-10 h-10 mx-auto mb-2 opacity-40" />
-        <p className="text-sm">Generate or load a Tech Sensing report to enable Company Analysis.</p>
-      </div>
-    );
-  }
 
   if (status === 'running') {
     return (
@@ -368,15 +453,40 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="text-xs text-muted-foreground">
-            Enter competitor, partner, or vendor names and select which
-            technologies from the radar to analyze. For each pair, we search
-            the web, synthesize findings with an LLM, and produce a
-            comparative view. Domain: <strong>{domain || 'Unknown'}</strong>
+            {isStandalone ? (
+              <>
+                Analyze any companies against any set of technology areas.
+                For each pair we search the web, synthesize findings with
+                an LLM, and produce a comparative view.
+              </>
+            ) : (
+              <>
+                Enter competitor, partner, or vendor names and select which
+                technologies from the radar to analyze. For each pair, we
+                search the web, synthesize findings with an LLM, and produce
+                a comparative view. Domain: <strong>{domain || 'Unknown'}</strong>
+              </>
+            )}
           </div>
+
+          {/* Standalone-only: domain */}
+          {isStandalone && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Domain / industry</label>
+              <Input
+                placeholder="e.g. Generative AI, Electric Vehicles, Quantum Computing"
+                value={domainInput}
+                onChange={(e) => setDomainInput(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                This label anchors web searches and is referenced in the LLM prompt.
+              </p>
+            </div>
+          )}
 
           {/* Companies */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Companies ({companies.length}/10)</label>
+            <label className="text-sm font-medium">Companies ({companies.length}/{MAX_COMPANIES})</label>
             <div className="flex gap-2">
               <Input
                 placeholder="Add company (e.g. OpenAI, Anthropic) — comma-separated OK"
@@ -388,13 +498,13 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
                     addCompanyFromInput();
                   }
                 }}
-                disabled={companies.length >= 10}
+                disabled={companies.length >= MAX_COMPANIES}
               />
               <Button
                 type="button"
                 variant="outline"
                 onClick={addCompanyFromInput}
-                disabled={!companyInput.trim() || companies.length >= 10}
+                disabled={!companyInput.trim() || companies.length >= MAX_COMPANIES}
               >
                 <Plus className="w-4 h-4" />
               </Button>
@@ -417,22 +527,24 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
             )}
           </div>
 
-          {/* Technologies */}
+          {/* Technologies / Areas */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">
-                Technologies ({selectedTechs.length}/8)
+                {isStandalone ? 'Technology areas' : 'Technologies'} ({allSelectedTechs.length}/{MAX_TECHS})
               </label>
               <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={selectAllTechs}
-                >
-                  Top 8
-                </Button>
+                {!isStandalone && radarItems.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={selectAllTechs}
+                  >
+                    Top {Math.min(MAX_TECHS, radarItems.length)}
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="ghost"
@@ -442,57 +554,122 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
                 >
                   Clear
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => setShowTechs((v) => !v)}
-                >
-                  {showTechs ? 'Hide' : 'Show'}
-                </Button>
+                {!isStandalone && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setShowTechs((v) => !v)}
+                  >
+                    {showTechs ? 'Hide list' : 'Show list'}
+                  </Button>
+                )}
               </div>
             </div>
-            {showTechs && (
-              <ScrollArea className="max-h-64 border rounded-md p-2">
-                <div className="space-y-1.5">
-                  {radarItems.length === 0 && (
-                    <div className="text-xs text-muted-foreground p-2">
-                      No radar items available for this report.
-                    </div>
-                  )}
-                  {radarItems.map((r) => {
-                    const checked = selectedTechs.includes(r.name);
-                    const disabled = !checked && selectedTechs.length >= 8;
-                    return (
-                      <label
-                        key={r.name}
-                        className={`flex items-center gap-2 py-1 px-1.5 rounded hover:bg-muted/50 text-sm ${
-                          disabled ? 'opacity-50' : 'cursor-pointer'
-                        }`}
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={() => toggleTech(r.name)}
-                          disabled={disabled}
-                        />
-                        <span className="flex-1 truncate">{r.name}</span>
-                        {r.ring && (
-                          <Badge variant="outline" className={`text-[10px] h-5 ${ringTone(r.ring)}`}>
-                            {r.ring}
-                          </Badge>
-                        )}
-                        {r.quadrant && (
-                          <Badge variant="outline" className="text-[10px] h-5">
-                            {r.quadrant}
-                          </Badge>
-                        )}
-                      </label>
-                    );
-                  })}
+
+            {/* Radar items list (report-linked mode only) */}
+            {!isStandalone && showTechs && (
+              <div className="border rounded-md">
+                <div
+                  className="h-64 overflow-y-auto p-2"
+                  onWheelCapture={(e) => e.stopPropagation()}
+                >
+                  <div className="space-y-1.5">
+                    {radarItems.length === 0 && (
+                      <div className="text-xs text-muted-foreground p-2">
+                        No radar items available for this report.
+                      </div>
+                    )}
+                    {radarItems.map((r) => {
+                      const checked = selectedTechs.includes(r.name);
+                      const disabled = !checked && allSelectedTechs.length >= MAX_TECHS;
+                      return (
+                        <label
+                          key={r.name}
+                          className={`flex items-center gap-2 py-1 px-1.5 rounded hover:bg-muted/50 text-sm ${
+                            disabled ? 'opacity-50' : 'cursor-pointer'
+                          }`}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => toggleTech(r.name)}
+                            disabled={disabled}
+                          />
+                          <span className="flex-1 truncate">{r.name}</span>
+                          {r.ring && (
+                            <Badge variant="outline" className={`text-[10px] h-5 ${ringTone(r.ring)}`}>
+                              {r.ring}
+                            </Badge>
+                          )}
+                          {r.quadrant && (
+                            <Badge variant="outline" className="text-[10px] h-5">
+                              {r.quadrant}
+                            </Badge>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
-              </ScrollArea>
+              </div>
             )}
+
+            {/* Custom / manual tech input */}
+            <div className="space-y-2 pt-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                {isStandalone
+                  ? 'Enter technology or area names'
+                  : 'Add custom technology (not in radar)'}
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder={
+                    isStandalone
+                      ? 'e.g. Small language models, LiDAR, Solid-state batteries — comma-separated OK'
+                      : 'e.g. In-house compiler, proprietary format — comma-separated OK'
+                  }
+                  value={customTechInput}
+                  onChange={(e) => setCustomTechInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addCustomTech();
+                    }
+                  }}
+                  disabled={allSelectedTechs.length >= MAX_TECHS}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addCustomTech}
+                  disabled={!customTechInput.trim() || allSelectedTechs.length >= MAX_TECHS}
+                >
+                  <Plus className="w-4 h-4" />
+                </Button>
+              </div>
+              {customTechs.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {customTechs.map((t) => (
+                    <Badge
+                      key={t}
+                      variant="secondary"
+                      className="gap-1 pr-1 border-dashed"
+                    >
+                      <Sparkles className="w-3 h-3 opacity-60" />
+                      {t}
+                      <button
+                        onClick={() => removeCustomTech(t)}
+                        className="ml-0.5 rounded-sm opacity-60 hover:opacity-100"
+                        aria-label={`Remove ${t}`}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Run button */}
