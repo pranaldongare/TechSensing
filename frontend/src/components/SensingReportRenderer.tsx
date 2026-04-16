@@ -387,6 +387,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Model</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Organization</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Date</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Status</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Parameters</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Type</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Modality</th>
@@ -415,6 +416,24 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                       </td>
                       <td className="py-2 pr-3 text-muted-foreground">{mr.organization}</td>
                       <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
+                      <td className="py-2 pr-3">
+                        {(() => {
+                          const st = (mr.release_status || 'Unknown').trim();
+                          const cls =
+                            st === 'Released'
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200 border-emerald-300'
+                              : st === 'Announced'
+                              ? 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200 border-sky-300'
+                              : st === 'Upcoming'
+                              ? 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200 border-violet-300'
+                              : st === 'Preview'
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 border-amber-300'
+                              : 'bg-muted text-muted-foreground';
+                          return (
+                            <Badge variant="outline" className={`text-xs whitespace-nowrap ${cls}`}>{st}</Badge>
+                          );
+                        })()}
+                      </td>
                       <td className="py-2 pr-3">
                         <Badge variant="outline" className="text-xs font-mono">{mr.parameters}</Badge>
                       </td>

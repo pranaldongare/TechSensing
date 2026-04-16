@@ -13,6 +13,7 @@ from typing import Callable, List, Optional
 from core.constants import GPU_SENSING_REPORT_LLM
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.sensing_outputs import DeepDiveReport
+from core.llm.prompts.shared import tense_rules_block
 from core.sensing.ingest import RawArticle, extract_full_text, search_duckduckgo
 
 logger = logging.getLogger("sensing.deep_dive")
@@ -43,7 +44,8 @@ def _deep_dive_prompt(
                 "7. Actionable recommendations\n\n"
                 "Be thorough, specific, and actionable. Use markdown formatting "
                 "in text fields.\n\n"
-                "OUTPUT REQUIREMENT:\n"
+                + tense_rules_block()
+                + "OUTPUT REQUIREMENT:\n"
                 "Return the entire response strictly as a valid JSON object matching the schema below.\n"
                 "Do NOT include markdown, comments, or text outside the JSON object.\n\n"
                 f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n\n"

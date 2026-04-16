@@ -444,11 +444,27 @@ class ModelRelease(BaseModel):
     organization: str = Field(description="Organization that released the model.")
     release_date: str = Field(
         description=(
-            "Release date in YYYY-MM-DD format. Use the exact date when "
-            "known; if only a month is known, use the first of the month. "
-            "Leave empty if no release date can be established from the "
-            "sources."
+            "Release / announcement date in YYYY-MM-DD format. Use the "
+            "exact date when known; if only a month is known, use the "
+            "first of the month. This may be a FUTURE date if the model "
+            "has been announced but not yet shipped. Leave empty if no "
+            "date can be established from the sources."
         )
+    )
+    release_status: str = Field(
+        default="Unknown",
+        description=(
+            "Current status of the model. One of: 'Released' (generally "
+            "available / weights downloadable as of today), 'Announced' "
+            "(publicly announced but not yet shipped — includes private "
+            "preview, waitlist, early access, and any future-dated "
+            "launch), 'Upcoming' (dated release scheduled for a future "
+            "date), 'Preview' (public preview/beta accessible to some "
+            "users), or 'Unknown'. When the article says 'plans to "
+            "release', 'will launch', 'is expected to ship', 'coming "
+            "soon', or gives a future date, use 'Announced' or "
+            "'Upcoming' — NOT 'Released'."
+        ),
     )
     parameters: str = Field(
         default="Unknown",

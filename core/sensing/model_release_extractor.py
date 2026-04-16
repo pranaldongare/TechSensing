@@ -12,6 +12,7 @@ from typing import List, Optional
 from core.constants import GPU_SENSING_REPORT_LLM
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.sensing_outputs import ModelRelease, ModelReleasesOutput
+from core.llm.prompts.shared import tense_rules_block
 from core.sensing.ingest import RawArticle
 
 logger = logging.getLogger("sensing.model_release_extractor")
@@ -20,6 +21,11 @@ logger = logging.getLogger("sensing.model_release_extractor")
 # occasionally lag the actual release by a few days, so we allow a small
 # grace window.
 RELEASE_DATE_BUFFER = 1.25
+
+# How far into the future we accept announced-but-not-yet-shipped models.
+# An article announcing a launch 6 months out is still a valid "this week"
+# signal for the radar; beyond that it is usually speculation.
+FUTURE_RELEASE_HORIZON_DAYS = 180
 
 _ISO_DATE_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
 
@@ -110,6 +116,54 @@ def _normalize_modality(value: str) -> str:
     return value.strip().title() or "Other"
 
 
+_STATUS_CANON = {
+    "released": "Released", "release": "Released", "ga": "Released",
+    "generally available": "Released", "live": "Released",
+    "available": "Released", "shipped": "Released", "launched": "Released",
+    "out": "Released",
+    "announced": "Announced", "announcement": "Announced",
+    "unveiled": "Announced", "revealed": "Announced",
+    "waitlist": "Announced", "waitlisted": "Announced",
+    "early access": "Announced", "private preview": "Announced",
+    "upcoming": "Upcoming", "planned": "Upcoming", "scheduled": "Upcoming",
+    "coming soon": "Upcoming", "future": "Upcoming",
+    "preview": "Preview", "beta": "Preview", "public preview": "Preview",
+    "public beta": "Preview",
+    "unknown": "Unknown", "": "Unknown",
+}
+
+
+def _normalize_release_status(
+    value: str,
+    release_dt: Optional[datetime],
+    now_dt: datetime,
+) -> str:
+    """Coerce free-form status to Released/Announced/Upcoming/Preview/Unknown.
+
+    Falls back to date-based inference when the LLM did not emit a useful
+    label: a future-dated event becomes 'Upcoming', otherwise 'Released'.
+    """
+    v = (value or "").strip().lower()
+    if v in _STATUS_CANON:
+        canon = _STATUS_CANON[v]
+    else:
+        canon = "Unknown"
+        for hint, label in _STATUS_CANON.items():
+            if hint and hint in v:
+                canon = label
+                break
+
+    if canon == "Unknown" and release_dt is not None:
+        canon = "Upcoming" if release_dt > now_dt else "Released"
+    # Safety net: if LLM said 'Released' but the date is clearly in the
+    # future, override. The tense-rules block instructs the LLM not to do
+    # this, but we don't want to ship a report that says "Released" for
+    # something shipping next month.
+    if canon == "Released" and release_dt is not None and release_dt > now_dt:
+        canon = "Upcoming"
+    return canon
+
+
 async def extract_model_releases(
     articles: List[RawArticle],
     lookback_days: int = 30,
@@ -152,17 +206,33 @@ async def extract_model_releases(
                 "You are an AI model release tracker. Given a collection of articles "
                 "about AI model announcements, extract structured information about "
                 "each distinct model release.\n\n"
-                f"TODAY IS {today_str}. Only include models whose FIRST PUBLIC "
-                f"RELEASE is within the last {lookback_days} days of this date. "
+                f"TODAY IS {today_str}. Include models that were either\n"
+                f"  (a) released within the last {lookback_days} days, OR\n"
+                f"  (b) publicly ANNOUNCED within the last {lookback_days} days "
+                f"with a release scheduled for a date AFTER {today_str}.\n"
                 "If an article merely mentions or retrospectively discusses an "
                 "older model, DO NOT emit an entry for it. If you cannot "
-                "confidently establish a release date inside the window from "
-                "the article text, SKIP that model entirely.\n\n"
-                "For each model, extract:\n"
+                "confidently establish either a release date or an announcement "
+                "within the window, SKIP that model entirely.\n\n"
+                + tense_rules_block(today_str)
+                + "For each model, extract:\n"
                 "- model_name: Official name (e.g., 'GPT-4.1', 'Llama 4 Scout')\n"
                 "- organization: Who released it\n"
-                "- release_date: Exact date in YYYY-MM-DD format. If only month is "
-                "known, use the first of the month. Leave EMPTY if not derivable.\n"
+                "- release_date: Exact date in YYYY-MM-DD format. If only month "
+                "is known, use the first of the month. MAY be a FUTURE date if "
+                "the model has been announced but not yet shipped (e.g., "
+                "'plans to release on 2026-05-01' → release_date='2026-05-01'). "
+                "Leave EMPTY if not derivable.\n"
+                "- release_status: Exactly one of 'Released', 'Announced', "
+                "'Upcoming', 'Preview', or 'Unknown'. Use 'Released' ONLY when "
+                f"the model is already publicly available on or before "
+                f"{today_str} (GA, weights downloadable, or API live). Use "
+                "'Announced' when it has been publicly announced but is not "
+                "yet available (waitlist, private preview, upcoming launch "
+                "with a future date). Use 'Upcoming' when a specific future "
+                "launch date is named. Use 'Preview' for public preview/beta "
+                "accessible to some users. Use 'Unknown' if the article does "
+                "not make the status clear.\n"
                 "- parameters: Parameter count if known (e.g., '70B', '400B MoE (17B active)')\n"
                 "- license: Specific license text if stated (e.g., 'Apache 2.0', "
                 "'Llama Community', 'Proprietary', 'API only')\n"
@@ -184,7 +254,9 @@ async def extract_model_releases(
                 "(robotics / VLA / agentic control), 'Embedding' "
                 "(retrieval/encoder), '3D' (3D/scene generation), "
                 "'Reasoning' (reasoning-focused), or 'Other'.\n"
-                "- notable_features: 1-2 sentence summary of what's notable\n"
+                "- notable_features: 1-2 sentence summary of what's notable. "
+                "Use future/progressive wording (\"is expected to\", \"will "
+                "offer\") when release_status is 'Upcoming' or 'Announced'.\n"
                 "- source_url: Best URL for the announcement\n\n"
                 "DEDUPLICATION: If multiple articles mention the same model, merge "
                 "into a single entry with the most complete info.\n\n"
@@ -203,9 +275,12 @@ async def extract_model_releases(
             "role": "user",
             "parts": (
                 f"ARTICLES:\n\n{articles_json}\n\n"
-                "Extract all distinct model releases whose release date falls "
-                f"within the last {lookback_days} days of {today_str}. Return "
-                "ONLY valid JSON."
+                "Extract all distinct model releases that were either released "
+                f"within the last {lookback_days} days of {today_str}, OR "
+                f"announced within the last {lookback_days} days with a "
+                "release date in the future. Set release_status correctly "
+                "for each (Released / Announced / Upcoming / Preview). "
+                "Return ONLY valid JSON."
             ),
         },
     ]
@@ -221,15 +296,20 @@ async def extract_model_releases(
 
         # ── Date cutoff for post-extraction filtering ───────────────────
         # LLMs occasionally emit older models despite the prompt; enforce
-        # the release-date window here with a small buffer.
+        # the release-date window here with a small buffer. Upcoming
+        # (future-dated) announcements are allowed up to
+        # FUTURE_RELEASE_HORIZON_DAYS ahead so we don't drop models that
+        # were announced this week but ship next month.
         now_dt = datetime.now(timezone.utc)
         max_age_days = max(int(lookback_days * RELEASE_DATE_BUFFER), lookback_days)
         cutoff_dt = now_dt - timedelta(days=max_age_days)
+        future_horizon_dt = now_dt + timedelta(days=FUTURE_RELEASE_HORIZON_DAYS)
 
         # Deduplicate by normalized model name, filter by date, normalize fields
         seen_names: set = set()
         unique: List[ModelRelease] = []
         dropped_old = 0
+        dropped_far_future = 0
         dropped_undated = 0
 
         for m in validated.model_releases:
@@ -245,14 +325,20 @@ async def extract_model_releases(
             if release_dt < cutoff_dt:
                 dropped_old += 1
                 continue
-            # Clamp future-dated announcements to today.
-            if release_dt > now_dt:
-                release_dt = now_dt
+            if release_dt > future_horizon_dt:
+                # More than ~6 months out → almost always speculation.
+                dropped_far_future += 1
+                continue
+            # Preserve the LLM's future date — this is how we surface
+            # "announced but upcoming" releases correctly in the UI.
             m.release_date = release_dt.strftime("%Y-%m-%d")
 
             # Canonicalize classification fields.
             m.is_open_source = _normalize_open_source(m.is_open_source, m.license)
             m.modality = _normalize_modality(m.modality)
+            m.release_status = _normalize_release_status(
+                m.release_status, release_dt, now_dt
+            )
 
             seen_names.add(key)
             unique.append(m)
@@ -260,7 +346,8 @@ async def extract_model_releases(
         logger.info(
             f"Model release extraction: {len(unique)} unique models "
             f"from {len(articles)} articles "
-            f"(dropped {dropped_old} out-of-window, {dropped_undated} undated)"
+            f"(dropped {dropped_old} out-of-window, "
+            f"{dropped_far_future} far-future, {dropped_undated} undated)"
         )
         return unique
 

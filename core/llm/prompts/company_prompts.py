@@ -12,6 +12,7 @@ from core.llm.output_schemas.company_analysis import (
     CompanyAnalysisReport,
     CompanyProfile,
 )
+from core.llm.prompts.shared import tense_rules_block
 
 
 def company_profile_prompt(
@@ -65,6 +66,7 @@ def company_profile_prompt(
                 "- Populate source_urls with URLs of articles that directly "
                 "support each finding.\n\n"
                 + recency_block
+                + tense_rules_block()
                 + "CONFIDENCE SCORING:\n"
                 "- 0.0 = no evidence found\n"
                 "- 0.1-0.3 = single weak source or indirect mention\n"
@@ -134,7 +136,8 @@ def company_comparative_prompt(
                 "provided, not re-synthesized. Copy them verbatim.\n"
                 "- Use markdown formatting in executive_summary (bold for "
                 "company names, bullet points for key takeaways).\n\n"
-                "OUTPUT REQUIREMENT:\n"
+                + tense_rules_block()
+                + "OUTPUT REQUIREMENT:\n"
                 "Return ONLY a valid JSON object matching the schema below.\n\n"
                 f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n\n"
                 "OUTPUT RULES:\n"

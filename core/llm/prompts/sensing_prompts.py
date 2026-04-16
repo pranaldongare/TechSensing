@@ -1,3 +1,5 @@
+from core.llm.prompts.shared import tense_rules_block
+
 _DEFAULT_QUADRANT_DEFS = (
     "QUADRANT DEFINITIONS:\n"
     "- Techniques: Processes, methodologies, architectural patterns\n"
@@ -201,6 +203,7 @@ def sensing_report_core_prompt(
                 "do NOT create a headline_move or key_trend for it — only for NEW developments.\n"
                 "- Old product launches, discontinued products, and legacy technologies "
                 "should not appear as headline moves or trends.\n\n"
+                + tense_rules_block()
                 + (
                     f"ADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n\n"
                     if custom_requirements
@@ -380,7 +383,8 @@ def sensing_report_insights_prompt(
                 "- Focus on developments from the DATE RANGE. Do not feature old events as current.\n"
                 "- Old product launches, discontinued products, and legacy technologies "
                 "should not appear in market signals, sections, or recommendations.\n\n"
-                "ATTRIBUTION ACCURACY RULES:\n"
+                + tense_rules_block()
+                + "ATTRIBUTION ACCURACY RULES:\n"
                 "- Distinguish between research authors and implementation authors.\n"
                 "- For market_signals: The company_or_player must be the entity that TOOK THE ACTION.\n"
                 "- If the articles don't clearly state who built something, say so.\n\n"
@@ -448,7 +452,8 @@ def sensing_details_prompt(
                 "- Every claim MUST be grounded in the provided articles.\n"
                 "- Use article URLs to populate source_urls (1-5 per entry).\n"
                 "- Do NOT fabricate information not present in the articles.\n\n"
-                "OUTPUT RULES:\n"
+                + tense_rules_block()
+                + "OUTPUT RULES:\n"
                 "- Return ONLY a valid JSON object with one key: radar_item_details (array).\n"
                 "- Each element must have: technology_name, what_it_is, why_it_matters, "
                 "current_state, key_players, practical_applications, source_urls.\n"

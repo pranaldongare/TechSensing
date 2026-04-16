@@ -13,6 +13,7 @@ from core.llm.output_schemas.key_companies import (
     KeyCompaniesReport,
     UPDATE_CATEGORIES,
 )
+from core.llm.prompts.shared import tense_rules_block
 
 
 def company_weekly_brief_prompt(
@@ -67,7 +68,8 @@ def company_weekly_brief_prompt(
                 "week, include the new event (not the old context).\n"
                 "- If you cannot confidently date an event to within the "
                 "window, DROP it.\n\n"
-                "CATEGORIZATION:\n"
+                + tense_rules_block()
+                + "CATEGORIZATION:\n"
                 f"- Each update's category MUST be exactly one of: "
                 f"{categories}.\n"
                 "- 'Technical' is for architectural/capability announcements "
@@ -145,7 +147,8 @@ def key_companies_cross_prompt(
                 "- briefings MUST be the EXACT briefings provided, copied "
                 "verbatim — do not re-synthesize them.\n"
                 "- Use markdown in cross_company_summary (bullets OK).\n\n"
-                "OUTPUT REQUIREMENT:\n"
+                + tense_rules_block()
+                + "OUTPUT REQUIREMENT:\n"
                 "Return ONLY a valid JSON object matching the schema below.\n\n"
                 f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n\n"
                 "OUTPUT RULES:\n"
