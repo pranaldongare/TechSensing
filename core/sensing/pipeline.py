@@ -428,6 +428,7 @@ async def run_sensing_pipeline(
                 domain=domain,
                 generic_blocklist=set(domain_ref.generic_terms_blocklist),
                 legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
+                lookback_days=lookback_days,
             )
             report.weak_signals = weak
             logger.info(f"Weak signals: {len(weak)} detected [{_elapsed()}]")
@@ -1335,6 +1336,7 @@ async def run_sensing_pipeline_from_document(
                 domain=domain,
                 generic_blocklist=set(domain_ref.generic_terms_blocklist),
                 legacy_blocklist=set(domain_ref.legacy_terms_blocklist),
+                lookback_days=lookback_days,
             )
             report.weak_signals = weak
         except Exception as e:

@@ -390,6 +390,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Parameters</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Type</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Modality</th>
+                    <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">Source</th>
                     <th className="py-2 pr-3 font-semibold text-xs text-muted-foreground">License</th>
                     <th className="py-2 font-semibold text-xs text-muted-foreground">Notable Features</th>
                   </tr>
@@ -422,6 +423,22 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                       </td>
                       <td className="py-2 pr-3">
                         <Badge variant="secondary" className="text-xs">{mr.modality}</Badge>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {(() => {
+                          const src = (mr.is_open_source || 'Unknown').trim();
+                          const cls =
+                            src === 'Open'
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200 border-emerald-300'
+                              : src === 'Closed'
+                              ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200 border-rose-300'
+                              : src === 'Mixed'
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 border-amber-300'
+                              : 'bg-muted text-muted-foreground';
+                          return (
+                            <Badge variant="outline" className={`text-xs ${cls}`}>{src}</Badge>
+                          );
+                        })()}
                       </td>
                       <td className="py-2 pr-3">
                         <Badge variant="outline" className="text-xs">{mr.license}</Badge>

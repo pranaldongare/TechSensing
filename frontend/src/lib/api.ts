@@ -131,6 +131,7 @@ export interface ModelRelease {
   release_date: string;
   parameters: string;
   license: string;
+  is_open_source: string;
   model_type: string;
   modality: string;
   notable_features: string;

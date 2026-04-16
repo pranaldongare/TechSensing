@@ -442,7 +442,14 @@ class ModelRelease(BaseModel):
 
     model_name: str = Field(description="Model name (e.g., 'Llama 4 Maverick').")
     organization: str = Field(description="Organization that released the model.")
-    release_date: str = Field(description="Release date (YYYY-MM-DD or approximate).")
+    release_date: str = Field(
+        description=(
+            "Release date in YYYY-MM-DD format. Use the exact date when "
+            "known; if only a month is known, use the first of the month. "
+            "Leave empty if no release date can be established from the "
+            "sources."
+        )
+    )
     parameters: str = Field(
         default="Unknown",
         description="Parameter count (e.g., '400B MoE (17B active)').",
@@ -451,13 +458,36 @@ class ModelRelease(BaseModel):
         default="Unknown",
         description="License type (e.g., 'Apache 2.0', 'Proprietary').",
     )
+    is_open_source: str = Field(
+        default="Unknown",
+        description=(
+            "Open-source status. One of: 'Open' (weights publicly "
+            "downloadable under an OSI/open-weights license such as MIT, "
+            "Apache 2.0, Llama Community, Mistral-style, etc.), 'Closed' "
+            "(API-only or proprietary weights), 'Mixed' (partially open — "
+            "e.g. small variants open, flagship closed), or 'Unknown'."
+        ),
+    )
     model_type: str = Field(
         default="Unknown",
-        description="Architecture type (e.g., 'Transformer', 'MoE', 'Hybrid', 'Diffusion').",
+        description=(
+            "Architecture type (e.g., 'Transformer', 'MoE', 'Mamba', "
+            "'Hybrid', 'Diffusion', 'State-space', 'Flow-matching')."
+        ),
     )
     modality: str = Field(
         default="Text",
-        description="Modality (e.g., 'Text', 'Multimodal', 'Image', 'Code').",
+        description=(
+            "Primary modality or task category. Prefer one of: 'Text' "
+            "(LLMs), 'Multimodal' (accepts multiple modalities), 'Image' "
+            "(image generation/editing), 'Video' (video generation or "
+            "understanding), 'Audio' (speech/music/general audio), "
+            "'Speech' (ASR/TTS), 'Code' (code generation), 'World Model' "
+            "(world simulation / predictive world models), 'Action' "
+            "(robotic action / VLA / agentic control), 'Embedding' "
+            "(retrieval/encoder), '3D' (3D/scene generation), 'Reasoning' "
+            "(reasoning-focused), 'Other'."
+        ),
     )
     notable_features: str = Field(
         default="",

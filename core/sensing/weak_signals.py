@@ -11,6 +11,7 @@ domains don't bleed into each other.
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Set
 
@@ -26,7 +27,38 @@ from core.llm.output_schemas.sensing_outputs import (
 logger = logging.getLogger("sensing.weak_signals")
 
 # Signals whose first_seen is older than this are no longer "emerging"
-MAX_EMERGING_AGE_DAYS = 90
+MAX_EMERGING_AGE_DAYS = 60
+
+# Multiplier on lookback_days for per-article recency check.
+RECENCY_BUFFER = 1.5
+
+# Hard cap on article age when no lookback is supplied.
+DEFAULT_ARTICLE_MAX_AGE_DAYS = 45
+
+_ISO_DATE_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
+
+
+def _parse_article_date(value: str) -> Optional[datetime]:
+    """Parse an article's ``published_date`` into tz-aware UTC datetime."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        pass
+    m = _ISO_DATE_RE.search(value)
+    if m:
+        try:
+            return datetime(
+                int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                tzinfo=timezone.utc,
+            )
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 def _history_path(user_id: str) -> str:
@@ -83,6 +115,7 @@ async def detect_weak_signals(
     domain: str = "",
     generic_blocklist: Optional[Set[str]] = None,
     legacy_blocklist: Optional[Set[str]] = None,
+    lookback_days: int = 0,
 ) -> List[WeakSignal]:
     """Detect weak signals by comparing current run metrics against history.
 
@@ -109,7 +142,14 @@ async def detect_weak_signals(
        - appeared in ``>= 2`` runs for this domain (not first-time noise).
 
     8. Exclude items that are generic, legacy, or have been emerging for
-       more than 90 days (they're established, not emerging).
+       more than ``MAX_EMERGING_AGE_DAYS`` days (they're established,
+       not emerging).
+    9. Before counting articles for the current run, drop any article
+       whose ``published_date`` is older than
+       ``lookback_days * RECENCY_BUFFER`` (default 45 days when no
+       lookback is supplied). This prevents stale articles left over
+       from permissive upstream filtering from inflating a signal's
+       "current" visibility.
     """
     if not user_id:
         return []
@@ -120,9 +160,24 @@ async def detect_weak_signals(
     blocklist_generic = generic_blocklist or set()
     blocklist_legacy = legacy_blocklist or set()
 
+    # ── Per-article recency cutoff ───────────────────────────────────────
+    # Keep articles whose published_date is within the report window (with
+    # a small buffer). Articles with no parseable date are kept so we don't
+    # discard legitimate signals that lack timestamps.
+    if lookback_days and lookback_days > 0:
+        max_article_age_days = int(lookback_days * RECENCY_BUFFER)
+    else:
+        max_article_age_days = DEFAULT_ARTICLE_MAX_AGE_DAYS
+    article_cutoff = now_dt - timedelta(days=max_article_age_days)
+
     # ── Build tech → article stats from current run ──────────────────────
     tech_stats: dict[str, dict] = {}
+    dropped_stale = 0
     for article in classified_articles:
+        pub_dt = _parse_article_date(getattr(article, "published_date", ""))
+        if pub_dt is not None and pub_dt < article_cutoff:
+            dropped_stale += 1
+            continue
         key = article.technology_name.lower().strip()
         if key not in tech_stats:
             tech_stats[key] = {
@@ -133,6 +188,12 @@ async def detect_weak_signals(
         tech_stats[key]["article_count"] += 1
         tech_stats[key]["sources"].add(article.source)
         tech_stats[key]["relevance_sum"] += article.relevance_score
+
+    if dropped_stale:
+        logger.info(
+            f"Weak signals: dropped {dropped_stale} articles older than "
+            f"{max_article_age_days}d from current-run stats"
+        )
 
     # ── Build radar-item strength lookup ─────────────────────────────────
     strength_map = {
