@@ -22,6 +22,7 @@ import type {
   KeyCompanyUpdate,
 } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
+import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 
 const POLL_INTERVAL_MS = 4_000;
 const MAX_POLL_COUNT = 300; // ~20 minutes
@@ -422,9 +423,13 @@ const KeyCompaniesView: React.FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm whitespace-pre-wrap leading-relaxed">
-                {report.cross_company_summary || 'No cross-company summary generated.'}
-              </p>
+              {report.cross_company_summary ? (
+                <SafeMarkdownRenderer content={report.cross_company_summary} />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No cross-company summary generated.
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -471,9 +476,9 @@ const BriefingCard: React.FC<{ briefing: KeyCompanyBriefing }> = ({ briefing }) 
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-sm leading-relaxed whitespace-pre-wrap">
-          {briefing.overall_summary}
-        </p>
+        {briefing.overall_summary && (
+          <SafeMarkdownRenderer content={briefing.overall_summary} />
+        )}
         {briefing.key_themes && briefing.key_themes.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {briefing.key_themes.map((t, i) => (
@@ -543,9 +548,9 @@ const UpdateRow: React.FC<{ update: KeyCompanyUpdate }> = ({ update }) => {
         )}
       </div>
       {update.summary && (
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          {update.summary}
-        </p>
+        <div className="text-xs text-muted-foreground leading-relaxed">
+          <SafeMarkdownRenderer content={update.summary} />
+        </div>
       )}
     </div>
   );
