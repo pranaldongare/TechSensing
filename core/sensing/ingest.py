@@ -97,7 +97,14 @@ async def search_duckduckgo(
     lookback_days: int = LOOKBACK_DAYS,
     must_include: Optional[List[str]] = None,
 ) -> List[RawArticle]:
-    """Run DuckDuckGo searches and return results as RawArticle."""
+    """Run DuckDuckGo searches and return results as RawArticle.
+
+    Runs **both** the news endpoint (returns articles with publication
+    dates) and the text endpoint (catches blogs, company announcements,
+    and other non-news pages) for each query, then merges and deduplicates
+    by URL.  News results are preferred when duplicates exist because they
+    carry ``published_date``.
+    """
     search_queries = queries or get_search_queries_for_domain(domain, must_include)
 
     # Map lookback_days to DDG timelimit (0 = no time filter)
@@ -111,33 +118,62 @@ async def search_duckduckgo(
         timelimit = "y"  # past year
 
     articles: List[RawArticle] = []
+    seen_urls: set = set()
 
     logger.info(f"[DDG] Running {len(search_queries)} searches (timelimit={timelimit})")
 
     for i, query in enumerate(search_queries):
         try:
             logger.info(f"[DDG {i+1}/{len(search_queries)}] Query: '{query}'")
-            results = await asyncio.to_thread(
-                _ddgs_search, query, MAX_SEARCH_RESULTS, timelimit
+
+            # 1. News endpoint — returns articles WITH dates.
+            news_results = await asyncio.to_thread(
+                _ddgs_news, query, MAX_SEARCH_RESULTS, timelimit
             )
-            for r in results:
+            for r in news_results:
+                url = r.get("url", r.get("href", r.get("link", "")))
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
                 articles.append(
                     RawArticle(
                         title=r.get("title", "Untitled"),
-                        url=r.get("href", r.get("link", "")),
+                        url=url,
+                        source=r.get("source", "DuckDuckGo News"),
+                        snippet=r.get("body", "")[:500],
+                        published_date=r.get("date", "")[:25] if r.get("date") else None,
+                    )
+                )
+
+            # 2. Text endpoint — catches blogs, company pages, docs, etc.
+            text_results = await asyncio.to_thread(
+                _ddgs_search, query, MAX_SEARCH_RESULTS, timelimit
+            )
+            for r in text_results:
+                url = r.get("href", r.get("link", ""))
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                articles.append(
+                    RawArticle(
+                        title=r.get("title", "Untitled"),
+                        url=url,
                         source="DuckDuckGo",
                         snippet=r.get("body", "")[:500],
                     )
                 )
+
             logger.info(
-                f"[DDG {i+1}/{len(search_queries)}] Got {len(results)} results"
+                f"[DDG {i+1}/{len(search_queries)}] "
+                f"news={len(news_results)}, text={len(text_results)}, "
+                f"unique_total={len(articles)}"
             )
         except Exception as e:
             logger.warning(
                 f"[DDG {i+1}/{len(search_queries)}] FAILED ('{query}'): {e}"
             )
 
-    logger.info(f"[DDG] Done. Total articles from DDG: {len(articles)}")
+    logger.info(f"[DDG] Done. Total unique articles from DDG: {len(articles)}")
     return articles
 
 
@@ -177,10 +213,24 @@ async def extract_full_text(article: RawArticle) -> RawArticle:
     return article
 
 
+def _ddgs_news(query: str, max_results: int, timelimit: Optional[str] = "w") -> list:
+    """Synchronous DuckDuckGo **news** search — returns articles with dates."""
+    try:
+        with DDGS() as ddgs:
+            return list(ddgs.news(query, max_results=max_results, timelimit=timelimit))
+    except Exception as e:
+        logger.debug(f"[DDG] news endpoint failed for '{query}': {e}")
+        return []
+
+
 def _ddgs_search(query: str, max_results: int, timelimit: Optional[str] = "w") -> list:
-    """Synchronous DuckDuckGo search wrapper."""
-    with DDGS() as ddgs:
-        return list(ddgs.text(query, max_results=max_results, timelimit=timelimit))
+    """Synchronous DuckDuckGo **text** search — catches blogs/docs/announcements."""
+    try:
+        with DDGS() as ddgs:
+            return list(ddgs.text(query, max_results=max_results, timelimit=timelimit))
+    except Exception as e:
+        logger.debug(f"[DDG] text endpoint failed for '{query}': {e}")
+        return []
 
 
 def _parse_feed_date(entry) -> Optional[datetime]:
