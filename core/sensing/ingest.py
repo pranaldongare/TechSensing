@@ -142,21 +142,38 @@ async def search_duckduckgo(
 
 
 async def extract_full_text(article: RawArticle) -> RawArticle:
-    """Extract full article text using trafilatura with snippet fallback."""
-    if article.content:
+    """Extract full article text and published date using trafilatura.
+
+    Uses JSON output with metadata to also populate ``published_date``
+    when the article doesn't already have one — this is critical for
+    date filtering since DDG results arrive without dates.
+    """
+    if article.content and article.published_date:
         return article
     try:
         downloaded = await asyncio.to_thread(trafilatura.fetch_url, article.url)
         if downloaded:
-            text = trafilatura.extract(downloaded)
-            if text:
-                article.content = text[:5000]  # Cap to avoid token overflow
+            import json as _json
+            raw = trafilatura.extract(
+                downloaded,
+                output_format="json",
+                with_metadata=True,
+            )
+            if raw:
+                meta = _json.loads(raw)
+                text = meta.get("text", "")
+                if text and not article.content:
+                    article.content = text[:5000]
+                # Populate published_date from page metadata if missing.
+                if not article.published_date and meta.get("date"):
+                    article.published_date = meta["date"]
                 return article
     except Exception:
         pass
 
     # Fallback: use snippet
-    article.content = article.snippet or article.title
+    if not article.content:
+        article.content = article.snippet or article.title
     return article
 
 

@@ -130,10 +130,8 @@ async def _gather_articles_for_company(
     # items.
     results = ctx.filter_exclusions(results, company)
 
-    # Pre-LLM date filter: drop articles whose extracted date falls outside
-    # the period window.  Use buffer_multiplier=1.5 so a 7-day period keeps
-    # articles up to ~10 days old (accounts for timezone drift and DDG's
-    # coarse timelimit buckets).
+    # Quick pre-extraction filter — catches articles whose title/snippet
+    # already reveals an old date (cheap, runs on all results).
     results = filter_articles_by_date(
         results, period_days, buffer_multiplier=1.5, label=company,
     )
@@ -151,9 +149,25 @@ async def _gather_articles_for_company(
                 logger.debug(f"[{company}] extract failed for {a.url}: {e}")
                 return a
 
-    enriched = await asyncio.gather(
+    enriched = list(await asyncio.gather(
         *[_extract(a) for a in unique[:TOP_ARTICLES_PER_COMPANY]]
+    ))
+
+    # Post-extraction date filter — now that trafilatura has populated
+    # published_date and full content, re-filter to drop articles that
+    # are actually old.  This is the key filter that catches DDG results
+    # whose age was unknown from the snippet alone.
+    before = len(enriched)
+    enriched = filter_articles_by_date(
+        enriched, period_days, buffer_multiplier=1.5,
+        label=f"{company}/post-extract",
     )
+    if len(enriched) < before:
+        logger.info(
+            f"[{company}] Post-extraction date filter: "
+            f"{before - len(enriched)} old articles removed"
+        )
+
     return enriched
 
 
