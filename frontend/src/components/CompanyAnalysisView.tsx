@@ -17,6 +17,7 @@ import {
   FileSpreadsheet, Presentation,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import type {
   CompanyAnalysisReport,
   CompanyAnalysisHistoryItem,
@@ -837,10 +838,8 @@ const ReportView: React.FC<ReportViewProps> = ({
             <Sparkles className="w-4 h-4" /> Executive Summary
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">
-            {executive_summary}
-          </div>
+        <CardContent className="text-sm text-muted-foreground">
+          <SafeMarkdownRenderer content={executive_summary} />
         </CardContent>
       </Card>
 
@@ -871,7 +870,9 @@ const ReportView: React.FC<ReportViewProps> = ({
                           <Badge className="bg-primary text-primary-foreground">{row.leader}</Badge>
                         )}
                       </td>
-                      <td className="py-2 pr-3 text-muted-foreground text-xs">{row.rationale}</td>
+                      <td className="py-2 pr-3 text-muted-foreground text-xs">
+                        <SafeMarkdownRenderer content={row.rationale} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -931,8 +932,8 @@ const ReportView: React.FC<ReportViewProps> = ({
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap">
-                {profile.overall_summary}
+              <div className="text-sm text-muted-foreground">
+                <SafeMarkdownRenderer content={profile.overall_summary} />
               </div>
 
               {(profile.strengths.length > 0 || profile.gaps.length > 0) && (
@@ -978,7 +979,9 @@ const ReportView: React.FC<ReportViewProps> = ({
                         </div>
                       </AccordionTrigger>
                       <AccordionContent className={`space-y-2 text-xs ${dim ? 'opacity-80' : ''}`}>
-                        <p className="text-muted-foreground leading-relaxed">{f.summary}</p>
+                        <div className="text-muted-foreground leading-relaxed">
+                          <SafeMarkdownRenderer content={f.summary} />
+                        </div>
                         {f.specific_products.length > 0 && (
                           <div>
                             <span className="font-semibold">Products: </span>
