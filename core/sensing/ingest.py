@@ -19,6 +19,7 @@ from core.sensing.config import (
     get_feeds_for_domain,
     get_search_queries_for_domain,
 )
+from core.sensing.date_filter import title_mentions_old_year
 
 logger = logging.getLogger("sensing.ingest")
 
@@ -67,9 +68,18 @@ async def fetch_rss_feeds(
                 if cutoff and pub_date and pub_date < cutoff:
                     continue
 
+                entry_title = entry.get("title", "Untitled")
+
+                # Early stale-title detection: RSS aggregators (Google News)
+                # re-surface old articles with fresh pub dates.  If the title
+                # references an old year, skip it.
+                if title_mentions_old_year(entry_title, max_age_days=max(lookback_days * 3, 180)):
+                    logger.debug(f"[RSS] Skipping stale-titled entry: {entry_title[:80]}")
+                    continue
+
                 articles.append(
                     RawArticle(
-                        title=entry.get("title", "Untitled"),
+                        title=entry_title,
                         url=entry.get("link", ""),
                         source=source_name,
                         published_date=(
@@ -126,6 +136,8 @@ async def search_duckduckgo(
         try:
             logger.info(f"[DDG {i+1}/{len(search_queries)}] Query: '{query}'")
 
+            stale_age = max(lookback_days * 3, 180)
+
             # 1. News endpoint — returns articles WITH dates.
             news_results = await asyncio.to_thread(
                 _ddgs_news, query, MAX_SEARCH_RESULTS, timelimit
@@ -134,10 +146,15 @@ async def search_duckduckgo(
                 url = r.get("url", r.get("href", r.get("link", "")))
                 if not url or url in seen_urls:
                     continue
+                r_title = r.get("title", "Untitled")
+                # Skip re-syndicated old news
+                if title_mentions_old_year(r_title, max_age_days=stale_age):
+                    logger.debug(f"[DDG] Skipping stale-titled news: {r_title[:80]}")
+                    continue
                 seen_urls.add(url)
                 articles.append(
                     RawArticle(
-                        title=r.get("title", "Untitled"),
+                        title=r_title,
                         url=url,
                         source=r.get("source", "DuckDuckGo News"),
                         snippet=r.get("body", "")[:500],
@@ -153,10 +170,14 @@ async def search_duckduckgo(
                 url = r.get("href", r.get("link", ""))
                 if not url or url in seen_urls:
                     continue
+                r_title = r.get("title", "Untitled")
+                if title_mentions_old_year(r_title, max_age_days=stale_age):
+                    logger.debug(f"[DDG] Skipping stale-titled text: {r_title[:80]}")
+                    continue
                 seen_urls.add(url)
                 articles.append(
                     RawArticle(
-                        title=r.get("title", "Untitled"),
+                        title=r_title,
                         url=url,
                         source="DuckDuckGo",
                         snippet=r.get("body", "")[:500],
@@ -183,6 +204,11 @@ async def extract_full_text(article: RawArticle) -> RawArticle:
     Uses JSON output with metadata to also populate ``published_date``
     when the article doesn't already have one — this is critical for
     date filtering since DDG results arrive without dates.
+
+    Also cross-validates the source-provided date against the page's
+    actual metadata date.  If they differ significantly (>90 days) and
+    the page date is older, the page date is preferred — this catches
+    re-syndicated old content served with fresh aggregator dates.
     """
     if article.content and article.published_date:
         return article
@@ -200,9 +226,31 @@ async def extract_full_text(article: RawArticle) -> RawArticle:
                 text = meta.get("text", "")
                 if text and not article.content:
                     article.content = text[:5000]
-                # Populate published_date from page metadata if missing.
-                if not article.published_date and meta.get("date"):
-                    article.published_date = meta["date"]
+
+                page_date = meta.get("date", "")
+
+                if not article.published_date and page_date:
+                    # No source date — use page metadata date
+                    article.published_date = page_date
+                elif article.published_date and page_date:
+                    # Cross-validate: prefer the OLDER of the two dates
+                    # because aggregators assign fresh dates to old content.
+                    try:
+                        from core.sensing.date_filter import parse_iso_date
+                        source_dt = parse_iso_date(article.published_date)
+                        page_dt = parse_iso_date(page_date)
+                        if source_dt and page_dt:
+                            diff = abs((source_dt - page_dt).days)
+                            if diff > 90 and page_dt < source_dt:
+                                logger.debug(
+                                    f"[extract] Date mismatch for {article.title[:60]}: "
+                                    f"source={article.published_date}, page={page_date} "
+                                    f"— using page date"
+                                )
+                                article.published_date = page_date
+                    except Exception:
+                        pass
+
                 return article
     except Exception:
         pass

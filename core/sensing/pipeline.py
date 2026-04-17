@@ -302,6 +302,22 @@ async def run_sensing_pipeline(
         f"[Stage 4/7] EXTRACT COMPLETE: {content_count}/{len(enriched)} with substantial content [{_elapsed()}]"
     )
 
+    # Post-extraction date reconciliation: trafilatura may have populated
+    # published_date with the actual page date.  Cross-validate against the
+    # source-provided date and remove re-syndicated old content.
+    enriched, reconciled_removed = reconcile_dates(
+        enriched, lookback_days, label="pipeline-post-extract",
+    )
+    if reconciled_removed:
+        # Also remove stale articles from the classified set
+        enriched_urls = {a.url for a in enriched}
+        before_recon = len(classified)
+        classified = [c for c in classified if c.url in enriched_urls]
+        logger.info(
+            f"[Stage 4/7] Date reconciliation: removed {reconciled_removed} stale articles "
+            f"(classified: {before_recon} -> {len(classified)})"
+        )
+
     # Build URL→content excerpt map so report LLM gets real article text
     url_content_map = {
         a.url: (a.content or "")[:800]
@@ -591,6 +607,7 @@ from core.sensing.date_filter import (
     filter_articles_by_date,
     filter_findings_by_date,
     parse_iso_date as _parse_iso_date,
+    reconcile_dates,
 )
 
 
@@ -1090,6 +1107,19 @@ async def run_sensing_pipeline_from_document(
     logger.info(
         f"[Stage 7/9] EXTRACT COMPLETE: {content_count}/{len(enriched)} with content [{_elapsed()}]"
     )
+
+    # Post-extraction date reconciliation
+    enriched, reconciled_removed = reconcile_dates(
+        enriched, lookback_days, label="doc-pipeline-post-extract",
+    )
+    if reconciled_removed:
+        enriched_urls = {a.url for a in enriched}
+        before_recon = len(classified)
+        classified = [c for c in classified if c.url in enriched_urls]
+        logger.info(
+            f"[Stage 7/9] Date reconciliation: removed {reconciled_removed} stale articles "
+            f"(classified: {before_recon} -> {len(classified)})"
+        )
 
     # Build URL→content excerpt map for report grounding
     url_content_map = {

@@ -1239,104 +1239,108 @@ const TechSensing: React.FC = () => {
         </Card>
       </div>
 
-      {/* Report display */}
-      {reportData ? (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
-          <TabsList className="shrink-0">
-            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-            <TabsTrigger value="report">Report</TabsTrigger>
-            <TabsTrigger value="radar">Technology Radar</TabsTrigger>
-            <TabsTrigger value="relationships" disabled={!reportData?.report?.relationships}>Relationships</TabsTrigger>
-            <TabsTrigger value="compare" disabled={history.length < 2}>Compare</TabsTrigger>
-            <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
-            <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
-            <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
-          </TabsList>
-          <TabsContent value="dashboard" className="flex-1 min-h-0 mt-2 overflow-auto">
-            <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
-          </TabsContent>
-          <TabsContent value="report" className="flex-1 min-h-0 mt-2">
+      {/* Report display — tabs always visible; report-dependent tabs disabled when no report */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
+        <TabsList className="shrink-0">
+          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+          <TabsTrigger value="report" disabled={!reportData}>Report</TabsTrigger>
+          <TabsTrigger value="radar" disabled={!reportData}>Technology Radar</TabsTrigger>
+          <TabsTrigger value="relationships" disabled={!reportData?.report?.relationships}>Relationships</TabsTrigger>
+          <TabsTrigger value="compare" disabled={!reportData || history.length < 2}>Compare</TabsTrigger>
+          <TabsTrigger value="timeline" disabled={!reportData} onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
+          <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
+          <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
+        </TabsList>
+        <TabsContent value="dashboard" className="flex-1 min-h-0 mt-2 overflow-auto">
+          <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
+        </TabsContent>
+        <TabsContent value="report" className="flex-1 min-h-0 mt-2">
+          {reportData ? (
             <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} />
-          </TabsContent>
-          <TabsContent value="radar" className="flex-1 min-h-0 mt-2 overflow-auto">
-            <TechRadar items={reportData.report.radar_items || []} onBlipClick={(name) => { setHighlightTech(name); setActiveTab('report'); }} customQuadrants={orgContext.radar_customization?.quadrants} />
-          </TabsContent>
-          <TabsContent value="relationships" className="flex-1 min-h-0 mt-2">
-            {reportData.report.relationships && (
-              <SensingRelationshipGraph
-                relationships={reportData.report.relationships}
-                radarItems={reportData.report.radar_items || []}
-                onTechClick={(name) => { setHighlightTech(name); setActiveTab('report'); }}
-              />
-            )}
-          </TabsContent>
-          <TabsContent value="compare" className="flex-1 min-h-0 mt-2 overflow-auto">
-            <div className="space-y-4">
-              <div className="flex items-end gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Older Report</label>
-                  <Select value={compareA} onValueChange={setCompareA}>
-                    <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
-                    <SelectContent>
-                      {history.map(h => (
-                        <SelectItem key={h.tracking_id} value={h.tracking_id}>
-                          {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Newer Report</label>
-                  <Select value={compareB} onValueChange={setCompareB}>
-                    <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
-                    <SelectContent>
-                      {history.map(h => (
-                        <SelectItem key={h.tracking_id} value={h.tracking_id}>
-                          {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button onClick={handleCompare} disabled={!compareA || !compareB || compareA === compareB || compareLoading}>
-                  {compareLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Compare'}
-                </Button>
+          ) : !isGenerating ? (
+            <div className="flex-1 flex items-center justify-center text-muted-foreground py-12">
+              <div className="text-center space-y-2">
+                <Radar className="w-12 h-12 mx-auto opacity-20" />
+                <p className="text-sm">Generate a report or select one from history</p>
               </div>
-              {comparison && <SensingComparisonView comparison={comparison} />}
             </div>
-          </TabsContent>
-          <TabsContent value="timeline" className="flex-1 min-h-0 mt-2 overflow-auto">
-            {timelineLoading ? (
-              <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>
-            ) : timelineData ? (
-              <SensingTimeline data={timelineData} />
-            ) : (
-              <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">Loading timeline...</div>
-            )}
-          </TabsContent>
-          <TabsContent value="company-analysis" className="flex-1 min-h-0 mt-2 overflow-auto">
+          ) : null}
+        </TabsContent>
+        <TabsContent value="radar" className="flex-1 min-h-0 mt-2 overflow-auto">
+          {reportData && (
+            <TechRadar items={reportData.report.radar_items || []} onBlipClick={(name) => { setHighlightTech(name); setActiveTab('report'); }} customQuadrants={orgContext.radar_customization?.quadrants} />
+          )}
+        </TabsContent>
+        <TabsContent value="relationships" className="flex-1 min-h-0 mt-2">
+          {reportData?.report?.relationships && (
+            <SensingRelationshipGraph
+              relationships={reportData.report.relationships}
+              radarItems={reportData.report.radar_items || []}
+              onTechClick={(name) => { setHighlightTech(name); setActiveTab('report'); }}
+            />
+          )}
+        </TabsContent>
+        <TabsContent value="compare" className="flex-1 min-h-0 mt-2 overflow-auto">
+          <div className="space-y-4">
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Older Report</label>
+                <Select value={compareA} onValueChange={setCompareA}>
+                  <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
+                  <SelectContent>
+                    {history.map(h => (
+                      <SelectItem key={h.tracking_id} value={h.tracking_id}>
+                        {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex-1">
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">Newer Report</label>
+                <Select value={compareB} onValueChange={setCompareB}>
+                  <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
+                  <SelectContent>
+                    {history.map(h => (
+                      <SelectItem key={h.tracking_id} value={h.tracking_id}>
+                        {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={handleCompare} disabled={!compareA || !compareB || compareA === compareB || compareLoading}>
+                {compareLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Compare'}
+              </Button>
+            </div>
+            {comparison && <SensingComparisonView comparison={comparison} />}
+          </div>
+        </TabsContent>
+        <TabsContent value="timeline" className="flex-1 min-h-0 mt-2 overflow-auto">
+          {timelineLoading ? (
+            <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>
+          ) : timelineData ? (
+            <SensingTimeline data={timelineData} />
+          ) : (
+            <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">Loading timeline...</div>
+          )}
+        </TabsContent>
+        <TabsContent value="company-analysis" className="flex-1 min-h-0 mt-2 overflow-auto">
+          {reportData && (
             <CompanyAnalysisView
               reportTrackingId={reportData?.meta?.tracking_id}
               domain={reportData?.report?.domain}
               radarItems={reportData?.report?.radar_items || []}
             />
-          </TabsContent>
-          <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
-            <LIRCandidateFeed />
-            <div className="mt-6 border-t border-border pt-4">
-              <LIRBacktestViewer />
-            </div>
-          </TabsContent>
-        </Tabs>
-      ) : !isGenerating ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <div className="text-center space-y-2">
-            <Radar className="w-12 h-12 mx-auto opacity-20" />
-            <p className="text-sm">Generate a report or select one from history</p>
+          )}
+        </TabsContent>
+        <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
+          <LIRCandidateFeed />
+          <div className="mt-6 border-t border-border pt-4">
+            <LIRBacktestViewer />
           </div>
-        </div>
-      ) : null}
+        </TabsContent>
+      </Tabs>
 
       {/* Schedule dialog */}
       <Dialog open={showScheduleDialog} onOpenChange={setShowScheduleDialog}>
