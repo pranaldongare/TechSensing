@@ -52,6 +52,7 @@ import SensingDashboard from '@/components/SensingDashboard';
 import SensingDeepDive from '@/components/SensingDeepDive';
 import SensingCollaboration from '@/components/SensingCollaboration';
 import CompanyAnalysisView from '@/components/CompanyAnalysisView';
+import LIRCandidateFeed from '@/components/LIRCandidateFeed';
 import { toast } from '@/components/ui/use-toast';
 import type { DeepDiveReport, DeepDiveHistoryItem, SharedReport } from '@/lib/api';
 import { downloadSensingReportPdf } from '@/lib/sensing-report-pdf';
@@ -665,6 +666,7 @@ const TechSensing: React.FC = () => {
               <TabsTrigger value="compare" disabled={history.length < 2}>Compare</TabsTrigger>
               <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
               <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
+              <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
             </TabsList>
           </div>
           <TabsContent value="dashboard" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
@@ -736,6 +738,9 @@ const TechSensing: React.FC = () => {
               domain={reportData?.report?.domain}
               radarItems={reportData?.report?.radar_items || []}
             />
+          </TabsContent>
+          <TabsContent value="leading-indicators" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
+            <LIRCandidateFeed />
           </TabsContent>
         </Tabs>
       </div>
@@ -1241,6 +1246,7 @@ const TechSensing: React.FC = () => {
             <TabsTrigger value="compare" disabled={history.length < 2}>Compare</TabsTrigger>
             <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
             <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
+            <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
           </TabsList>
           <TabsContent value="dashboard" className="flex-1 min-h-0 mt-2 overflow-auto">
             <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
@@ -1311,6 +1317,9 @@ const TechSensing: React.FC = () => {
               domain={reportData?.report?.domain}
               radarItems={reportData?.report?.radar_items || []}
             />
+          </TabsContent>
+          <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
+            <LIRCandidateFeed />
           </TabsContent>
         </Tabs>
       ) : !isGenerating ? (

@@ -712,6 +712,97 @@ export const getCurrentUser = (): User | null => {
 export const setCurrentUser = (user: User) => localStorage.setItem('current_user', JSON.stringify(user));
 export const removeCurrentUser = () => localStorage.removeItem('current_user');
 
+// ── Leading Indicator Radar (LIR) types ──
+
+export interface LIRScoreSet {
+  convergence: number;
+  velocity: number;
+  novelty: number;
+  authority: number;
+  pattern_match: number;
+}
+
+export interface LIREvidence {
+  url: string;
+  title: string;
+  source: string;
+  date: string;
+}
+
+export interface LIRCandidate {
+  concept_id: string;
+  canonical_name: string;
+  description: string;
+  ring: string;
+  scores: LIRScoreSet;
+  composite_score: number;
+  signal_count: number;
+  source_tiers: string[];
+  domain_tags: string[];
+  top_evidence: LIREvidence[];
+  first_seen: string;
+  last_seen: string;
+  velocity_trend?: number[];
+}
+
+export interface LIRSignalEvidence {
+  signal_id: string;
+  source_id: string;
+  tier: string;
+  url: string;
+  summary: string;
+  evidence_quote: string;
+  stated_novelty: number;
+  relevance_score: number;
+  published_date: string;
+}
+
+export interface LIRConceptDetail {
+  concept_id: string;
+  canonical_name: string;
+  aliases: string[];
+  description: string;
+  domain_tags: string[];
+  ring: string;
+  scores: LIRScoreSet;
+  composite_score: number;
+  signal_count: number;
+  source_tiers: string[];
+  created_at: string;
+  updated_at: string;
+  evidence: LIRSignalEvidence[];
+}
+
+export interface LIRTimeseriesPoint {
+  week: string;
+  signal_count: number;
+  composite_score: number;
+}
+
+export interface LIRSourceInfo {
+  source_id: string;
+  tier: string;
+  lead_time_prior_days: number;
+  authority_prior: number;
+  enabled: boolean;
+}
+
+export interface LIRRefreshResult {
+  candidates: LIRCandidate[];
+  meta: {
+    tracking_id: string;
+    total_items_ingested: number;
+    total_items_after_dedup: number;
+    total_signals_extracted: number;
+    total_concepts: number;
+    new_concepts: number;
+    execution_time_seconds: number;
+    sources_polled: string[];
+    errors: string[];
+    generated_at: string;
+  };
+}
+
 // API functions
 export const api = {
   async register(name: string, email: string, password: string) {
@@ -1654,6 +1745,94 @@ export const api = {
     const data = await res.json();
     if (!res.ok && res.status !== 207)
       throw new Error(data.detail || 'Linear export failed');
+    return data;
+  },
+
+  // ── Leading Indicator Radar (LIR) ──
+
+  async lirRefresh(body?: {
+    lookback_days?: number;
+    max_per_source?: number;
+  }): Promise<{ status: string; tracking_id: string; message: string }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR refresh failed');
+    return data;
+  },
+
+  async lirStatus(trackingId: string): Promise<{
+    status: string;
+    data?: LIRRefreshResult;
+    error?: string;
+  }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/status/${trackingId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR status check failed');
+    return data;
+  },
+
+  async lirCandidates(params?: {
+    ring?: string;
+    limit?: number;
+    min_score?: number;
+  }): Promise<{ candidates: LIRCandidate[]; total: number }> {
+    const token = getAuthToken();
+    const query = new URLSearchParams();
+    if (params?.ring) query.set('ring', params.ring);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.min_score) query.set('min_score', String(params.min_score));
+    const qs = query.toString();
+    const res = await fetch(`${API_URL}/lir/candidates${qs ? `?${qs}` : ''}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR candidates fetch failed');
+    return data;
+  },
+
+  async lirConceptDetail(conceptId: string): Promise<LIRConceptDetail> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/concepts/${encodeURIComponent(conceptId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR concept detail failed');
+    return data;
+  },
+
+  async lirConceptTimeseries(
+    conceptId: string,
+    weeks?: number,
+  ): Promise<{ concept_id: string; timeseries: LIRTimeseriesPoint[]; weeks: number }> {
+    const token = getAuthToken();
+    const qs = weeks ? `?weeks=${weeks}` : '';
+    const res = await fetch(
+      `${API_URL}/lir/concepts/${encodeURIComponent(conceptId)}/timeseries${qs}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR timeseries failed');
+    return data;
+  },
+
+  async lirSources(): Promise<{ sources: LIRSourceInfo[]; total: number }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/sources`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR sources failed');
     return data;
   },
 };

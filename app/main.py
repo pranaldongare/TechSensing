@@ -4,7 +4,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import socketio
 
 from app.middlewares.auth import UserJwtPayload
-from app.routes import sensing
+from app.routes import lir, sensing
 from app.socket_handler import cancel_all_heartbeats, sio
 
 fastapi_app = FastAPI(title="Tech Sensing Platform")
@@ -44,6 +44,7 @@ fastapi_app.add_middleware(
 )
 
 fastapi_app.include_router(sensing.router)
+fastapi_app.include_router(lir.router)
 
 
 @fastapi_app.get("/health")

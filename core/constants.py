@@ -31,6 +31,10 @@ GPU_SENSING_CLASSIFY_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
 GPU_SENSING_REPORT_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
 GPU_SENSING_COMPANY_ANALYSIS_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
 
+# Leading Indicator Radar (LIR) LLM configurations
+GPU_LIR_EXTRACT_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
+GPU_LIR_CANON_LLM = GPULLMConfig(model=MAIN_MODEL, port=PORT1)
+
 # Fallback LLM models
 FALLBACK_GEMINI_MODEL = "gemini-2.5-flash"
 FALLBACK_OPENAI_MODEL = "gpt-4o-mini"
@@ -91,6 +95,17 @@ SENSING_FEATURES = {
     "hallucination_probe": _env_flag("SENSING_FEATURE_HALLUCINATION", False),
     "hiring_signals": _env_flag("SENSING_FEATURE_HIRING", False),
     "opportunity_threat": _env_flag("SENSING_FEATURE_OPP_THREAT", True),
+    # Leading Indicator Radar (LIR)
+    "lir_enabled": _env_flag("SENSING_FEATURE_LIR", True),
+    "lir_arxiv": _env_flag("SENSING_FEATURE_LIR_ARXIV", True),
+    "lir_github": _env_flag("SENSING_FEATURE_LIR_GITHUB", True),
+    "lir_hackernews": _env_flag("SENSING_FEATURE_LIR_HN", True),
+    "lir_reddit": _env_flag("SENSING_FEATURE_LIR_REDDIT", True),
+    "lir_semantic_scholar": _env_flag("SENSING_FEATURE_LIR_SEMSCHOLAR", True),
+    "lir_huggingface": _env_flag("SENSING_FEATURE_LIR_HF", True),
+    "lir_pypi_npm": _env_flag("SENSING_FEATURE_LIR_PYPI", True),
+    "lir_vendor_changelogs": _env_flag("SENSING_FEATURE_LIR_VENDOR", True),
+    "lir_standards": _env_flag("SENSING_FEATURE_LIR_STANDARDS", True),
 }
 
 
