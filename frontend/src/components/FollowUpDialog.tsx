@@ -10,7 +10,9 @@ import {
 } from '@/components/ui/dialog';
 import { Loader2, Search } from 'lucide-react';
 import { api } from '@/lib/api';
+import type { DeepDiveReport } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
+import SensingDeepDive from '@/components/SensingDeepDive';
 
 interface Props {
   /** Pre-filled technology name / headline for the deep dive. */
@@ -29,7 +31,7 @@ interface Props {
  * "Deep dive" dialog triggered from an update/finding row (#17).
  *
  * Kicks off the existing deep-dive pipeline pre-seeded with the
- * update's headline and source URLs, then navigates to the results.
+ * update's headline and source URLs, then shows the results inline.
  */
 const FollowUpDialog: React.FC<Props> = ({
   technologyName,
@@ -41,6 +43,7 @@ const FollowUpDialog: React.FC<Props> = ({
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [trackingId, setTrackingId] = useState<string | null>(null);
+  const [report, setReport] = useState<DeepDiveReport | null>(null);
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>(
     'idle',
   );
@@ -48,6 +51,7 @@ const FollowUpDialog: React.FC<Props> = ({
   const handleStart = async () => {
     setLoading(true);
     setStatus('running');
+    setReport(null);
     try {
       const res = await api.sensingDeepDive(
         technologyName,
@@ -86,6 +90,9 @@ const FollowUpDialog: React.FC<Props> = ({
           window.clearInterval(interval);
           setStatus('done');
           setLoading(false);
+          if (res.data) {
+            setReport(res.data);
+          }
           toast({
             title: 'Deep dive complete',
             description: `Analysis of "${technologyName}" is ready.`,
@@ -122,7 +129,7 @@ const FollowUpDialog: React.FC<Props> = ({
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+        <DialogContent className={report ? 'max-w-3xl max-h-[85vh]' : undefined}>
           <DialogHeader>
             <DialogTitle>Deep Dive: {technologyName}</DialogTitle>
             <DialogDescription>
@@ -132,25 +139,33 @@ const FollowUpDialog: React.FC<Props> = ({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="min-h-[120px] flex flex-col items-center justify-center py-4">
-            {loading && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+          {loading && (
+            <div className="min-h-[120px] flex flex-col items-center justify-center py-8 gap-3">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">
                 Researching and analyzing...
-              </div>
-            )}
-            {status === 'done' && (
-              <p className="text-sm text-green-600 dark:text-green-400">
-                Analysis complete. You can find it in the Deep Dive
-                history on the main Sensing page.
               </p>
-            )}
-            {status === 'error' && (
+              <p className="text-xs text-muted-foreground">
+                This may take a few minutes.
+              </p>
+            </div>
+          )}
+
+          {status === 'done' && report && (
+            <SensingDeepDive
+              report={report}
+              trackingId={trackingId || undefined}
+              domain={domain}
+            />
+          )}
+
+          {status === 'error' && (
+            <div className="min-h-[120px] flex flex-col items-center justify-center py-4">
               <p className="text-sm text-destructive">
                 The deep dive encountered an error. Try again later.
               </p>
-            )}
-          </div>
+            </div>
+          )}
 
           <DialogFooter>
             {status === 'error' && (
