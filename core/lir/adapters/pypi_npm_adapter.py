@@ -57,6 +57,11 @@ class PyPINpmLIRAdapter:
         logger.info(f"PyPI/npm LIR adapter: {len(all_items)} packages")
         return all_items[:max_results]
 
+    async def backfill(self, start_date: str, end_date: str) -> List[LIRRawItem]:
+        """Backfill PyPI packages for a date range."""
+        since = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        return await self.poll(since, max_results=200)
+
     async def _fetch_pypi(
         self,
         since: datetime,

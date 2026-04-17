@@ -106,6 +106,7 @@ SENSING_FEATURES = {
     "lir_pypi_npm": _env_flag("SENSING_FEATURE_LIR_PYPI", True),
     "lir_vendor_changelogs": _env_flag("SENSING_FEATURE_LIR_VENDOR", True),
     "lir_standards": _env_flag("SENSING_FEATURE_LIR_STANDARDS", True),
+    "lir_patents": _env_flag("SENSING_FEATURE_LIR_PATENTS", False),
 }
 
 

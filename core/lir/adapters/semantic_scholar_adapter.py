@@ -75,3 +75,8 @@ class SemanticScholarLIRAdapter:
 
         logger.info(f"Semantic Scholar LIR adapter: {len(all_items)} papers")
         return all_items[:max_results]
+
+    async def backfill(self, start_date: str, end_date: str) -> List[LIRRawItem]:
+        """Backfill Semantic Scholar papers for a date range."""
+        since = datetime.fromisoformat(start_date)
+        return await self.poll(since, max_results=200)

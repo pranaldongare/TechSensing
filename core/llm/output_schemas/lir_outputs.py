@@ -93,3 +93,32 @@ class LIRCanonicalization(LLMOutputBase):
         default_factory=list,
         description="Canonicalization decisions for each input concept label.",
     )
+
+
+# ──────────────────────── Rationale generation ────────────────────────
+
+
+class LIRRationale(LLMOutputBase):
+    """LLM output: human-readable rationale for a concept's LIR ranking."""
+
+    summary: str = Field(
+        description=(
+            "A 2-3 sentence summary explaining why this concept is on the radar "
+            "and what its trajectory suggests. Written for a technical decision-maker."
+        )
+    )
+    key_drivers: List[str] = Field(
+        default_factory=list,
+        description="1-3 bullet points identifying the main score drivers.",
+    )
+    risk_factors: List[str] = Field(
+        default_factory=list,
+        description="0-2 bullet points on risks or caveats (e.g., hype risk, narrow applicability).",
+    )
+    recommended_action: str = Field(
+        default="",
+        description=(
+            "One-line recommended action for engineering teams "
+            "(e.g., 'Assign a spike to evaluate X for your Y pipeline')."
+        ),
+    )

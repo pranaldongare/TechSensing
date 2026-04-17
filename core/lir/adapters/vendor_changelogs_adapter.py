@@ -123,3 +123,8 @@ class VendorChangelogsLIRAdapter:
             )
 
         return items
+
+    async def backfill(self, start_date: str, end_date: str) -> List[LIRRawItem]:
+        """Backfill vendor changelogs for a date range."""
+        since = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        return await self.poll(since, max_results=200)

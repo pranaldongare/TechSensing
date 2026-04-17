@@ -102,3 +102,8 @@ class HuggingFaceLIRAdapter:
             logger.warning(f"HuggingFace fetch failed: {e}")
 
         return all_items[:max_results]
+
+    async def backfill(self, start_date: str, end_date: str) -> List[LIRRawItem]:
+        """Backfill HuggingFace models for a date range."""
+        since = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        return await self.poll(since, max_results=200)

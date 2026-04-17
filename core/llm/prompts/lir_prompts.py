@@ -1,5 +1,6 @@
 """
-LIR prompt templates — signal extraction and concept canonicalization.
+LIR prompt templates — signal extraction, concept canonicalization,
+and rationale generation.
 """
 
 
@@ -105,6 +106,77 @@ def lir_canonicalization_prompt(
                 "For each label, decide: match, alias, or new. "
                 "If match/alias, provide the matched_concept_id. "
                 "If new, provide canonical_name, description, and domain_tags."
+            ),
+        },
+    ]
+
+
+def lir_rationale_prompt(
+    concept_name: str,
+    description: str,
+    scores: dict,
+    signal_count: int,
+    source_tiers: list[str],
+    top_evidence: list[dict],
+    ring: str,
+    pattern_matches: list[dict] | None = None,
+) -> list[dict]:
+    """Build chat prompt for generating a human-readable rationale.
+
+    Args:
+        concept_name: Canonical concept name.
+        description: Concept description.
+        scores: Dict of {convergence, velocity, novelty, authority, pattern_match}.
+        signal_count: Number of linked signals.
+        source_tiers: List of unique tiers (T1, T2, etc.).
+        top_evidence: Top evidence items [{url, title, source, date}].
+        ring: Current ring assignment.
+        pattern_matches: Optional matched fingerprint patterns.
+
+    Returns:
+        Chat messages list for invoke_llm.
+    """
+    evidence_lines = []
+    for ev in top_evidence[:5]:
+        evidence_lines.append(
+            f"  - [{ev.get('source', '?')}] {ev.get('title', 'untitled')} "
+            f"({ev.get('date', 'unknown date')})"
+        )
+    evidence_block = "\n".join(evidence_lines) if evidence_lines else "  (no evidence)"
+
+    pattern_block = ""
+    if pattern_matches:
+        pm_lines = [f"  - {p['name']} (score: {p['score']:.2f})" for p in pattern_matches[:3]]
+        pattern_block = f"\nMATCHED PATTERNS:\n" + "\n".join(pm_lines)
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a technology strategist writing concise, actionable rationales "
+                "for an early-warning technology radar. Your audience is engineering "
+                "leadership who need to decide what to investigate.\n\n"
+                "Be specific, evidence-based, and avoid hype. Mention concrete signals."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"CONCEPT: {concept_name}\n"
+                f"DESCRIPTION: {description}\n"
+                f"RING: {ring}\n"
+                f"SIGNAL COUNT: {signal_count}\n"
+                f"SOURCE TIERS: {', '.join(source_tiers)}\n"
+                f"SCORES:\n"
+                f"  Convergence: {scores.get('convergence', 0):.2f}\n"
+                f"  Velocity:    {scores.get('velocity', 0):.2f}\n"
+                f"  Novelty:     {scores.get('novelty', 0):.2f}\n"
+                f"  Authority:   {scores.get('authority', 0):.2f}\n"
+                f"  Pattern:     {scores.get('pattern_match', 0):.2f}\n"
+                f"\nTOP EVIDENCE:\n{evidence_block}"
+                f"{pattern_block}\n\n"
+                "Write a rationale explaining why this concept deserves attention, "
+                "what's driving its score, any risks, and a recommended action."
             ),
         },
     ]

@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { ArrowLeft, ExternalLink, Loader2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Lightbulb, Loader2, Sparkles } from 'lucide-react';
 import { api } from '@/lib/api';
-import type { LIRConceptDetail as LIRConceptDetailType } from '@/lib/api';
+import type { LIRConceptDetail as LIRConceptDetailType, LIRRationale } from '@/lib/api';
 import LIRScoreRadar from '@/components/LIRScoreRadar';
 
 interface Props {
@@ -30,10 +30,13 @@ const TIER_LABELS: Record<string, string> = {
 const LIRConceptDetail: React.FC<Props> = ({ conceptId, onBack }) => {
   const [detail, setDetail] = useState<LIRConceptDetailType | null>(null);
   const [loading, setLoading] = useState(true);
+  const [rationale, setRationale] = useState<LIRRationale | null>(null);
+  const [rationaleLoading, setRationaleLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setRationale(null);
     api
       .lirConceptDetail(conceptId)
       .then((d) => {
@@ -47,6 +50,15 @@ const LIRConceptDetail: React.FC<Props> = ({ conceptId, onBack }) => {
       cancelled = true;
     };
   }, [conceptId]);
+
+  const loadRationale = () => {
+    setRationaleLoading(true);
+    api
+      .lirConceptRationale(conceptId)
+      .then(setRationale)
+      .catch(() => {})
+      .finally(() => setRationaleLoading(false));
+  };
 
   if (loading) {
     return (
@@ -146,6 +158,84 @@ const LIRConceptDetail: React.FC<Props> = ({ conceptId, onBack }) => {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Pattern matches overlay */}
+      {rationale && rationale.pattern_matches.length > 0 && (
+        <div className="p-3 rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30">
+          <h3 className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+            Pattern Matches
+          </h3>
+          <div className="space-y-1">
+            {rationale.pattern_matches.map((pm) => (
+              <div key={pm.pattern_id} className="flex items-center gap-2 text-[11px]">
+                <Badge variant="outline" className="text-[9px]">
+                  {(pm.score * 100).toFixed(0)}%
+                </Badge>
+                <span className="font-medium">{pm.name}</span>
+                <span className="text-muted-foreground">{pm.description}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rationale section */}
+      <div>
+        {rationale ? (
+          <div className="p-3 rounded-md border border-border bg-card/50 space-y-2">
+            <h3 className="text-xs font-semibold flex items-center gap-1.5">
+              <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+              Rationale
+            </h3>
+            <p className="text-xs text-foreground">{rationale.summary}</p>
+            {rationale.key_drivers.length > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-muted-foreground">Key Drivers</span>
+                <ul className="list-disc list-inside text-xs text-foreground mt-0.5">
+                  {rationale.key_drivers.map((d, i) => (
+                    <li key={i}>{d}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {rationale.risk_factors.length > 0 && (
+              <div>
+                <span className="text-[10px] font-semibold text-muted-foreground">Risks</span>
+                <ul className="list-disc list-inside text-xs text-muted-foreground mt-0.5">
+                  {rationale.risk_factors.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {rationale.recommended_action && (
+              <div className="text-xs bg-primary/5 p-2 rounded">
+                <span className="font-semibold">Recommended: </span>
+                {rationale.recommended_action}
+              </div>
+            )}
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadRationale}
+            disabled={rationaleLoading}
+            className="text-xs"
+          >
+            {rationaleLoading ? (
+              <>
+                <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Generating...
+              </>
+            ) : (
+              <>
+                <Lightbulb className="w-3 h-3 mr-1" /> Generate Rationale
+              </>
+            )}
+          </Button>
+        )}
       </div>
 
       {/* Evidence list */}

@@ -28,6 +28,7 @@ from core.lir.models import (
     LIRScoreSet,
     LIRSignalRecord,
 )
+from core.lir.patterns import load_fingerprints
 from core.lir.scoring import compute_scores
 from core.lir.storage import (
     load_concept_signals,
@@ -119,12 +120,15 @@ async def run_lir_pipeline(
     # Save raw items for audit trail
     save_raw_items(deduped)
 
+    # Pre-load fingerprints once for scoring
+    fingerprints = load_fingerprints()
+
     if not deduped:
         # No new items — still re-score existing data
         logger.info("No new items; re-scoring existing concepts")
         concepts = load_concepts()
         concept_signals_map = load_concept_signals()
-        scores = compute_scores(concepts, existing_signals, concept_signals_map)
+        scores = compute_scores(concepts, existing_signals, concept_signals_map, fingerprints)
         candidates = _build_candidates(concepts, scores, existing_signals, concept_signals_map)
         save_scores({cid: asdict(s) for cid, s in scores.items()})
         elapsed = time.time() - start
@@ -187,7 +191,7 @@ async def run_lir_pipeline(
                 concept_signals_map[cid].append(sig.signal_id)
 
     # ─── 6. Score ───
-    scores = compute_scores(concepts, all_signals, concept_signals_map)
+    scores = compute_scores(concepts, all_signals, concept_signals_map, fingerprints)
     await _progress("score", 90, f"Scored {len(scores)} concepts")
 
     # ─── 7. Build candidates ───

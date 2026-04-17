@@ -52,6 +52,11 @@ class ArxivLIRAdapter:
         logger.info(f"arXiv adapter: {len(all_items)} unique papers from {len(ARXIV_CATEGORIES)} categories")
         return all_items
 
+    async def backfill(self, start_date: str, end_date: str) -> List[LIRRawItem]:
+        """Backfill arXiv papers for a date range."""
+        since = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        return await self.poll(since, max_results=200)
+
     async def _fetch_category(
         self,
         category: str,

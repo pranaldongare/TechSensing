@@ -28,6 +28,10 @@ class LIRAdapter(Protocol):
         self, since: datetime, max_results: int = 50
     ) -> List[LIRRawItem]: ...
 
+    async def backfill(
+        self, start_date: str, end_date: str
+    ) -> List[LIRRawItem]: ...
+
 
 def get_enabled_lir_adapters() -> List[LIRAdapter]:
     """Return adapter instances for all enabled LIR sources."""
@@ -70,6 +74,10 @@ def get_enabled_lir_adapters() -> List[LIRAdapter]:
     if sensing_feature("lir_standards"):
         from core.lir.adapters.standards_adapter import StandardsLIRAdapter
         adapters.append(StandardsLIRAdapter())
+
+    if sensing_feature("lir_patents"):
+        from core.lir.adapters.patent_adapter import PatentLIRAdapter
+        adapters.append(PatentLIRAdapter())
 
     return adapters
 

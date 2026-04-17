@@ -1,0 +1,133 @@
+# Protocol Standardization Pattern
+# Typical trajectory: Industry need → draft proposals → working groups →
+# reference implementations → formal standard → widespread adoption.
+#
+# Example: HTTP/2, WebAssembly, WebRTC, OAuth 2.0
+# Lead time: ~24-36 months from first drafts to formal standard.
+
+pattern_id: protocol-standardization
+name: Protocol Standardization
+description: >
+  A technology need drives creation of formal standards through W3C,
+  IETF, or similar bodies. Slow, steady growth through draft phases,
+  with a step function when reference implementations ship and
+  another when the standard is formally ratified.
+
+duration_weeks: 104  # ~24 months
+expected_ring: assess
+consensus_week: 80
+tags:
+  - Standards
+  - Protocols
+  - Infrastructure
+
+# Weekly signal counts (normalized, oldest first)
+# Phase 1 (weeks 1-25): Draft proposals, working group formation
+# Phase 2 (weeks 26-50): Active drafting, reference implementations
+# Phase 3 (weeks 51-80): Implementation experience, revisions
+# Phase 4 (weeks 81-104): Ratification, early adoption
+timeseries:
+  - 0.01
+  - 0.01
+  - 0.02
+  - 0.02
+  - 0.02
+  - 0.03
+  - 0.03
+  - 0.03
+  - 0.04
+  - 0.04
+  - 0.05
+  - 0.05
+  - 0.06
+  - 0.06
+  - 0.07
+  - 0.07
+  - 0.08
+  - 0.08
+  - 0.09
+  - 0.09
+  - 0.10
+  - 0.10
+  - 0.11
+  - 0.11
+  - 0.12
+  - 0.15
+  - 0.18
+  - 0.20
+  - 0.22
+  - 0.24
+  - 0.26
+  - 0.28
+  - 0.30
+  - 0.32
+  - 0.34
+  - 0.36
+  - 0.38
+  - 0.40
+  - 0.42
+  - 0.44
+  - 0.46
+  - 0.48
+  - 0.50
+  - 0.52
+  - 0.54
+  - 0.56
+  - 0.58
+  - 0.60
+  - 0.62
+  - 0.64
+  - 0.65
+  - 0.66
+  - 0.68
+  - 0.70
+  - 0.72
+  - 0.74
+  - 0.76
+  - 0.78
+  - 0.80
+  - 0.82
+  - 0.84
+  - 0.85
+  - 0.86
+  - 0.87
+  - 0.88
+  - 0.89
+  - 0.90
+  - 0.90
+  - 0.91
+  - 0.91
+  - 0.92
+  - 0.92
+  - 0.93
+  - 0.93
+  - 0.94
+  - 0.94
+  - 0.95
+  - 0.95
+  - 0.96
+  - 0.96
+  - 0.98
+  - 1.00
+  - 1.00
+  - 0.98
+  - 0.96
+  - 0.95
+  - 0.93
+  - 0.92
+  - 0.90
+  - 0.88
+  - 0.86
+  - 0.84
+  - 0.82
+  - 0.80
+  - 0.78
+  - 0.76
+  - 0.74
+  - 0.72
+  - 0.70
+  - 0.68
+  - 0.66
+  - 0.64
+  - 0.62
+  - 0.60

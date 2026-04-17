@@ -53,6 +53,7 @@ import SensingDeepDive from '@/components/SensingDeepDive';
 import SensingCollaboration from '@/components/SensingCollaboration';
 import CompanyAnalysisView from '@/components/CompanyAnalysisView';
 import LIRCandidateFeed from '@/components/LIRCandidateFeed';
+import LIRBacktestViewer from '@/components/LIRBacktestViewer';
 import { toast } from '@/components/ui/use-toast';
 import type { DeepDiveReport, DeepDiveHistoryItem, SharedReport } from '@/lib/api';
 import { downloadSensingReportPdf } from '@/lib/sensing-report-pdf';
@@ -741,6 +742,9 @@ const TechSensing: React.FC = () => {
           </TabsContent>
           <TabsContent value="leading-indicators" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
             <LIRCandidateFeed />
+            <div className="mt-6 border-t border-border pt-4">
+              <LIRBacktestViewer />
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -1320,6 +1324,9 @@ const TechSensing: React.FC = () => {
           </TabsContent>
           <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
             <LIRCandidateFeed />
+            <div className="mt-6 border-t border-border pt-4">
+              <LIRBacktestViewer />
+            </div>
           </TabsContent>
         </Tabs>
       ) : !isGenerating ? (

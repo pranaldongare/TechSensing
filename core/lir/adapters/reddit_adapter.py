@@ -73,3 +73,8 @@ class RedditLIRAdapter:
 
         logger.info(f"Reddit LIR adapter: {len(all_items)} posts")
         return all_items[:max_results]
+
+    async def backfill(self, start_date: str, end_date: str) -> List[LIRRawItem]:
+        """Backfill Reddit posts for a date range."""
+        since = datetime.fromisoformat(start_date)
+        return await self.poll(since, max_results=200)

@@ -1,0 +1,81 @@
+# Developer Primitive Cambrian Explosion Pattern
+# Typical trajectory: A new platform capability triggers a wave of
+# new tools, libraries, and frameworks.
+#
+# Example: React ecosystem, LLM tooling (LangChain, etc.), WebAssembly
+# Lead time: ~12-18 months from first framework to ecosystem maturity.
+
+pattern_id: dev-primitive-cambrian
+name: Developer Primitive Cambrian Explosion
+description: >
+  A new platform primitive or API capability triggers rapid creation
+  of developer tools, frameworks, and libraries. Characterized by
+  sudden appearance of many competing implementations, followed
+  by consolidation around winners.
+
+duration_weeks: 52  # ~12 months
+expected_ring: trial
+consensus_week: 40
+tags:
+  - Developer Tools
+  - Frameworks
+  - MLOps
+
+# Weekly signal counts (normalized, oldest first)
+# Phase 1 (weeks 1-10): Platform capability appears, few notice
+# Phase 2 (weeks 11-25): Rapid tool creation, many competing implementations
+# Phase 3 (weeks 26-40): Peak activity, community picks winners
+# Phase 4 (weeks 41-52): Consolidation, stragglers fade
+timeseries:
+  - 0.03
+  - 0.04
+  - 0.05
+  - 0.06
+  - 0.08
+  - 0.10
+  - 0.15
+  - 0.20
+  - 0.28
+  - 0.35
+  - 0.45
+  - 0.55
+  - 0.65
+  - 0.72
+  - 0.78
+  - 0.83
+  - 0.87
+  - 0.90
+  - 0.93
+  - 0.95
+  - 0.97
+  - 0.98
+  - 0.99
+  - 1.00
+  - 1.00
+  - 0.99
+  - 0.98
+  - 0.97
+  - 0.95
+  - 0.93
+  - 0.90
+  - 0.88
+  - 0.85
+  - 0.82
+  - 0.80
+  - 0.78
+  - 0.75
+  - 0.72
+  - 0.70
+  - 0.68
+  - 0.65
+  - 0.62
+  - 0.58
+  - 0.55
+  - 0.52
+  - 0.48
+  - 0.45
+  - 0.42
+  - 0.40
+  - 0.38
+  - 0.35
+  - 0.32

@@ -1,15 +1,15 @@
 """
 LIR scoring engine — computes the 5-component score for each concept.
 
-Phase 1: convergence + velocity active; novelty + authority use priors;
-          pattern_match stubbed at 0.0.
+All 5 components active: convergence, velocity, novelty, authority,
+and pattern_match (DTW/cosine against fingerprint library).
 """
 
 import logging
 import math
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from core.lir.config import (
     CONVERGENCE_TIER_BONUS,
@@ -21,6 +21,7 @@ from core.lir.config import (
     VELOCITY_SIGMOID_X0,
 )
 from core.lir.models import LIRConcept, LIRScoreSet, LIRSignalRecord
+from core.lir.patterns import Fingerprint, compute_pattern_match
 
 logger = logging.getLogger("lir.scoring")
 
@@ -29,6 +30,7 @@ def compute_scores(
     concepts: Dict[str, LIRConcept],
     signals: Dict[str, LIRSignalRecord],
     concept_signals: Dict[str, List[str]],
+    fingerprints: Optional[Dict[str, Fingerprint]] = None,
 ) -> Dict[str, LIRScoreSet]:
     """Compute 5-component scores for all concepts.
 
@@ -36,10 +38,16 @@ def compute_scores(
         concepts: Concept registry.
         signals: All signal records.
         concept_signals: concept_id -> [signal_ids] mapping.
+        fingerprints: Pre-loaded fingerprints for pattern matching.
 
     Returns:
         concept_id -> LIRScoreSet mapping.
     """
+    # Load fingerprints once for all concepts
+    if fingerprints is None:
+        from core.lir.patterns import load_fingerprints
+        fingerprints = load_fingerprints()
+
     scores: Dict[str, LIRScoreSet] = {}
 
     for cid, concept in concepts.items():
@@ -54,14 +62,14 @@ def compute_scores(
         velocity = _compute_velocity(concept_sigs)
         novelty = _compute_novelty(concept_sigs)
         authority = _compute_authority(concept_sigs)
-        pattern_match = 0.0  # Phase 3
+        pattern_match_score = _compute_pattern_match(concept_sigs, fingerprints)
 
         scores[cid] = LIRScoreSet(
             convergence=convergence,
             velocity=velocity,
             novelty=novelty,
             authority=authority,
-            pattern_match=pattern_match,
+            pattern_match=pattern_match_score,
         )
 
     logger.info(f"Scored {len(scores)} concepts")
@@ -189,3 +197,35 @@ def _compute_authority(signals: List[LIRSignalRecord]) -> float:
         return 0.5
 
     return min(1.0, weighted_authority / total_weight)
+
+
+def _compute_pattern_match(
+    signals: List[LIRSignalRecord],
+    fingerprints: Dict[str, Fingerprint],
+) -> float:
+    """Pattern match score: DTW/cosine similarity against fingerprint library.
+
+    Builds weekly signal counts and compares against known emergence patterns.
+    """
+    if not signals or not fingerprints:
+        return 0.0
+
+    # Build weekly counts (last 52 weeks, oldest first)
+    now = datetime.now(timezone.utc)
+    weekly_counts = [0.0] * 52
+
+    for sig in signals:
+        try:
+            pub = datetime.fromisoformat(
+                sig.published_date.replace("Z", "+00:00")
+            )
+            weeks_ago = (now - pub).days // 7
+            if 0 <= weeks_ago < 52:
+                weekly_counts[51 - weeks_ago] += 1.0
+        except (ValueError, TypeError):
+            continue
+
+    if sum(weekly_counts) == 0:
+        return 0.0
+
+    return compute_pattern_match(weekly_counts, fingerprints)

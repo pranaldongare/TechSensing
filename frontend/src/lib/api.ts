@@ -803,6 +803,67 @@ export interface LIRRefreshResult {
   };
 }
 
+// Phase 3/4: Rationale
+export interface LIRRationale {
+  concept_id: string;
+  summary: string;
+  key_drivers: string[];
+  risk_factors: string[];
+  recommended_action: string;
+  pattern_matches: LIRPatternMatch[];
+  generated_at: string;
+}
+
+export interface LIRPatternMatch {
+  pattern_id: string;
+  name: string;
+  description: string;
+  score: number;
+  expected_ring: string;
+  consensus_week: number;
+}
+
+// Phase 3/4: Patterns
+export interface LIRPattern {
+  pattern_id: string;
+  name: string;
+  description: string;
+  duration_weeks: number;
+  expected_ring: string;
+  consensus_week: number;
+  tags: string[];
+}
+
+// Phase 3/4: Backtest
+export interface LIRBacktestSnapshot {
+  week_offset: number;
+  date: string;
+  signal_count: number;
+  scores: Record<string, number>;
+  composite: number;
+  ring: string;
+}
+
+export interface LIRBacktestConceptResult {
+  concept_id: string;
+  canonical_name: string;
+  first_assess_week: number | null;
+  first_trial_week: number | null;
+  first_adopt_week: number | null;
+  snapshots: LIRBacktestSnapshot[];
+}
+
+export interface LIRBacktestResult {
+  run_id: string;
+  start_date: string;
+  end_date: string;
+  weights_used: Record<string, number>;
+  total_concepts: number;
+  execution_time_seconds: number;
+  errors: string[];
+  concept_results: LIRBacktestConceptResult[];
+}
+
 // API functions
 export const api = {
   async register(name: string, email: string, password: string) {
@@ -1833,6 +1894,72 @@ export const api = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'LIR sources failed');
+    return data;
+  },
+
+  async lirConceptRationale(conceptId: string): Promise<LIRRationale> {
+    const token = getAuthToken();
+    const res = await fetch(
+      `${API_URL}/lir/concepts/${encodeURIComponent(conceptId)}/rationale`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR rationale failed');
+    return data;
+  },
+
+  async lirPatterns(): Promise<{ patterns: LIRPattern[]; total: number }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/patterns`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR patterns failed');
+    return data;
+  },
+
+  async lirBacktestRun(body?: {
+    start_date?: string;
+    end_date?: string;
+    step_weeks?: number;
+    concept_ids?: string[];
+  }): Promise<{ status: string; tracking_id: string; run_id: string; message: string }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/backtest/run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR backtest failed');
+    return data;
+  },
+
+  async lirBacktestStatus(trackingId: string): Promise<{
+    status: string;
+    data?: LIRBacktestResult;
+    error?: string;
+  }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/backtest/${trackingId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'LIR backtest status failed');
+    return data;
+  },
+
+  async lirSourceRefresh(sourceId: string): Promise<{ source_id: string; items_fetched: number }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/lir/sources/${encodeURIComponent(sourceId)}/refresh`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Source refresh failed');
     return data;
   },
 };
