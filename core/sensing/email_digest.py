@@ -146,3 +146,126 @@ def _escape(s: str) -> str:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
+
+
+async def send_key_companies_digest(
+    to_email: str,
+    *,
+    period_start: str,
+    period_end: str,
+    companies: list,
+    cross_company_summary: str,
+    briefings: list,
+    report_url: str = "",
+) -> bool:
+    """Send a Key Companies weekly digest (#16).
+
+    ``briefings`` is a list of dicts (``CompanyBriefing.model_dump()``)
+    so the caller doesn't need to import the pydantic schema. We render
+    the top 3 updates per company plus the cross-company summary.
+    """
+    config = _get_smtp_config()
+    if not config or not to_email:
+        return False
+
+    # Build per-company blocks with up to 3 top updates.
+    blocks = []
+    for b in briefings or []:
+        updates = (b.get("updates") or [])[:3]
+        updates_html = "".join(
+            f"""<li style="margin-bottom: 8px; list-style: none;">
+              <span style="font-size: 11px; font-weight: 600; color: #64748b;">
+                [{_escape(u.get('category') or 'Other')}]
+              </span>
+              <span style="color: #1e3a5f; font-weight: 600;">
+                {_escape((u.get('headline') or '')[:160])}
+              </span><br/>
+              <span style="font-size: 12px; color: #475569;">
+                {_escape((u.get('summary') or '')[:240])}
+              </span>
+            </li>"""
+            for u in updates
+        )
+        blocks.append(
+            f"""<div style="background: white; padding: 14px; border-radius: 6px;
+                  border: 1px solid #e2e8f0; margin-bottom: 12px;">
+              <div style="font-size: 15px; font-weight: 700; color: #1e3a5f;
+                          margin-bottom: 6px;">{_escape(b.get('company') or '')}</div>
+              <ul style="padding: 0; margin: 0;">{updates_html or
+                  '<li style="color:#94a3b8;font-size:12px;">No notable updates this period.</li>'}</ul>
+            </div>"""
+        )
+
+    html = f"""
+    <html>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 640px; margin: 0 auto; padding: 20px;">
+        <div style="background: #1e3a5f; color: white; padding: 24px; border-radius: 8px 8px 0 0;">
+            <h1 style="margin: 0; font-size: 20px;">Key Companies Weekly Digest</h1>
+            <p style="margin: 8px 0 0; opacity: 0.85; font-size: 14px;">
+                {_escape(period_start)} → {_escape(period_end)} · {len(companies or [])} companies
+            </p>
+        </div>
+        <div style="background: #f8fafc; padding: 24px; border: 1px solid #e2e8f0; border-top: none;">
+            <h2 style="color: #1e3a5f; font-size: 16px; margin-top: 0;">Cross-company summary</h2>
+            <p style="color: #475569; font-size: 13px; line-height: 1.6;">
+                {_escape((cross_company_summary or '')[:900])}
+                {'...' if len(cross_company_summary or '') > 900 else ''}
+            </p>
+            <div style="margin-top: 16px;">{''.join(blocks)}</div>
+            {f'''<a href="{_escape(report_url)}"
+                style="display: inline-block; background: #1e3a5f; color: white; padding: 10px 24px;
+                       border-radius: 6px; text-decoration: none; font-size: 14px; margin-top: 12px;">
+                Open Briefing
+            </a>''' if report_url else ''}
+        </div>
+        <div style="padding: 16px; text-align: center; color: #94a3b8; font-size: 11px;">
+            Tech Sensing · Key Companies
+        </div>
+    </body>
+    </html>
+    """
+
+    plain_blocks = []
+    for b in briefings or []:
+        plain_blocks.append(f"\n--- {b.get('company','')} ---")
+        for u in (b.get("updates") or [])[:3]:
+            plain_blocks.append(
+                f"[{u.get('category','Other')}] {(u.get('headline') or '')[:160]}"
+            )
+
+    plain = (
+        f"Key Companies Weekly Digest\n"
+        f"{period_start} → {period_end}\n\n"
+        f"Cross-company summary:\n{(cross_company_summary or '')[:900]}\n"
+        + "\n".join(plain_blocks)
+        + ("\n\nView: " + report_url if report_url else "")
+    )
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = (
+            f"Key Companies: {period_start} → {period_end} "
+            f"({len(companies or [])} companies)"
+        )
+        msg["From"] = config["from_addr"]
+        msg["To"] = to_email
+        msg.attach(MIMEText(plain, "plain"))
+        msg.attach(MIMEText(html, "html"))
+
+        if config["use_tls"]:
+            server = smtplib.SMTP(config["host"], config["port"])
+            server.ehlo()
+            server.starttls()
+        else:
+            server = smtplib.SMTP(config["host"], config["port"])
+
+        if config["user"] and config["password"]:
+            server.login(config["user"], config["password"])
+
+        server.sendmail(config["from_addr"], [to_email], msg.as_string())
+        server.quit()
+        logger.info(f"Key Companies digest sent to {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send KC digest to {to_email}: {e}")
+        return False

@@ -14,6 +14,7 @@ import {
 import {
   Building2, Loader2, Plus, X, History, Play, RotateCcw,
   Download, FileText, ChevronDown, ChevronRight, Sparkles,
+  FileSpreadsheet, Presentation,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
@@ -23,6 +24,29 @@ import type {
 import { toast } from '@/components/ui/use-toast';
 import { downloadCompanyAnalysisPdf } from '@/lib/sensing-report-pdf';
 import { downloadCompanyAnalysisPptx } from '@/lib/sensing-report-pptx';
+import {
+  downloadCompanyAnalysisCsv,
+  downloadCompanyAnalysisXls,
+} from '@/lib/sensing-report-csv';
+import { downloadCompanyAnalysisMarkdown } from '@/lib/sensing-report-md';
+import { FileCode, Globe } from 'lucide-react';
+import ContradictionAlert from '@/components/ContradictionAlert';
+import HallucinationFlag from '@/components/HallucinationFlag';
+import OpportunityThreatPanel from '@/components/OpportunityThreatPanel';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import ConfidenceDot from '@/components/ConfidenceDot';
+import SourceEvidencePanel from '@/components/SourceEvidencePanel';
+import CostTelemetryBadge from '@/components/CostTelemetryBadge';
+import CompetitiveOverlapMatrix from '@/components/CompetitiveOverlapMatrix';
+import StrategicThemesCluster from '@/components/StrategicThemesCluster';
+import InvestmentSignalChart from '@/components/InvestmentSignalChart';
+import CompanyTimelineView from '@/components/CompanyTimelineView';
 
 interface RadarItemLite {
   name: string;
@@ -432,6 +456,7 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
   if (status === 'complete' && report) {
     return <ReportView
       report={report}
+      trackingId={trackingId}
       onRerun={handleRerun}
       onDownloadPdf={handleDownloadPdf}
       onDownloadPptx={handleDownloadPptx}
@@ -689,6 +714,7 @@ const CompanyAnalysisView: React.FC<CompanyAnalysisViewProps> = ({
 
 interface ReportViewProps {
   report: CompanyAnalysisReport;
+  trackingId: string | null;
   onRerun: () => void;
   onDownloadPdf: () => void;
   onDownloadPptx: () => void;
@@ -696,7 +722,7 @@ interface ReportViewProps {
 }
 
 const ReportView: React.FC<ReportViewProps> = ({
-  report, onRerun, onDownloadPdf, onDownloadPptx, historyPanel,
+  report, trackingId, onRerun, onDownloadPdf, onDownloadPptx, historyPanel,
 }) => {
   const { companies_analyzed, technologies_analyzed, company_profiles, comparative_matrix, executive_summary } = report;
 
@@ -720,17 +746,84 @@ const ReportView: React.FC<ReportViewProps> = ({
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 className="text-lg font-bold">Company Analysis</h2>
-          <div className="text-xs text-muted-foreground">
-            {companies_analyzed.length} companies × {technologies_analyzed.length} technologies
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>
+              {companies_analyzed.length} companies × {technologies_analyzed.length} technologies
+            </span>
+            <CostTelemetryBadge trackingId={trackingId} />
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={onDownloadPdf}>
-            <FileText className="w-4 h-4 mr-1" /> PDF
-          </Button>
-          <Button variant="outline" size="sm" onClick={onDownloadPptx}>
-            <Download className="w-4 h-4 mr-1" /> PPTX
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <Download className="w-4 h-4 mr-1.5" /> Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onClick={onDownloadPdf}>
+                <FileText className="w-4 h-4 mr-2" />
+                PDF (formatted report)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onDownloadPptx}>
+                <Presentation className="w-4 h-4 mr-2" />
+                PowerPoint (PPTX)
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => downloadCompanyAnalysisCsv(report)}
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-2" />
+                CSV (per-finding rows)
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => downloadCompanyAnalysisXls(report)}
+              >
+                <FileSpreadsheet className="w-4 h-4 mr-2" />
+                Excel (Findings / Matrix / Investment)
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => downloadCompanyAnalysisMarkdown(report)}
+              >
+                <FileCode className="w-4 h-4 mr-2" />
+                Markdown (.md)
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={async () => {
+                  if (!trackingId) {
+                    toast({
+                      title: 'Not available',
+                      description:
+                        'Run/load an analysis first so it is saved server-side.',
+                      variant: 'destructive',
+                    });
+                    return;
+                  }
+                  try {
+                    const res =
+                      await api.sensingExportCompanyAnalysisToNotion({
+                        tracking_id: trackingId,
+                      });
+                    toast({
+                      title: 'Exported to Notion',
+                      description: res.page?.url || 'Page created.',
+                    });
+                  } catch (err) {
+                    toast({
+                      title: 'Notion export failed',
+                      description:
+                        err instanceof Error ? err.message : 'Unknown error',
+                      variant: 'destructive',
+                    });
+                  }
+                }}
+              >
+                <Globe className="w-4 h-4 mr-2" />
+                Notion page
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" size="sm" onClick={onRerun}>
             <RotateCcw className="w-4 h-4 mr-1" /> New
           </Button>
@@ -788,6 +881,40 @@ const ReportView: React.FC<ReportViewProps> = ({
         </Card>
       )}
 
+      {/* Phase 6 — Opportunity/Threat framing */}
+      <OpportunityThreatPanel data={report.opportunity_threat} />
+
+      {/* Phase 3 — Strategic themes (LLM-extracted) */}
+      <StrategicThemesCluster themes={report.strategic_themes} />
+
+      {/* Phase 3 — Competitive overlap matrix */}
+      <CompetitiveOverlapMatrix
+        cells={report.overlap_matrix}
+        technologies={technologies_analyzed}
+      />
+
+      {/* Phase 3 — Investment signals */}
+      <InvestmentSignalChart events={report.investment_signals} />
+
+      {/* Phase 3 — Cross-run company timeline (read-only) */}
+      <CompanyTimelineView
+        companies={companies_analyzed}
+        heading="Company activity timeline"
+      />
+
+      {/* Phase 6 — Contradiction + hallucination alerts */}
+      {(report.contradictions?.length || report.unsupported_claims?.length) ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Trust signals</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-4">
+            <ContradictionAlert contradictions={report.contradictions} />
+            <HallucinationFlag unsupportedClaims={report.unsupported_claims} />
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* Per-company profiles */}
       <div className="space-y-3">
         {company_profiles.map((profile) => (
@@ -844,7 +971,8 @@ const ReportView: React.FC<ReportViewProps> = ({
                               {f.stance}
                             </Badge>
                           )}
-                          <span className="text-xs text-muted-foreground ml-auto mr-2">
+                          <span className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto mr-2">
+                            <ConfidenceDot confidence={f.confidence} size={8} />
                             confidence {confidencePct(f.confidence)}
                           </span>
                         </div>
@@ -877,25 +1005,13 @@ const ReportView: React.FC<ReportViewProps> = ({
                             <span className="text-muted-foreground">{f.investment_signal}</span>
                           </div>
                         )}
-                        {f.source_urls.length > 0 && (
-                          <div>
-                            <div className="font-semibold mb-0.5">Sources</div>
-                            <ul className="space-y-0.5">
-                              {f.source_urls.map((u, i) => (
-                                <li key={i}>
-                                  <a
-                                    href={u}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-primary underline truncate inline-block max-w-full"
-                                  >
-                                    {u}
-                                  </a>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
+                        <SourceEvidencePanel
+                          evidence={
+                            (f as unknown as { evidence?: import('@/lib/api').ClaimEvidence[] })
+                              .evidence
+                          }
+                          sourceUrls={f.source_urls}
+                        />
                       </AccordionContent>
                     </AccordionItem>
                   );

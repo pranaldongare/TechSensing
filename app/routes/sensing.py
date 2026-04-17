@@ -16,7 +16,7 @@ import os
 import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import aiofiles
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
@@ -672,6 +672,51 @@ async def delete_schedule(request: Request, schedule_id: str):
     return JSONResponse(content={"status": "deleted"})
 
 
+# --- Key Companies scheduled digests (#16) ---
+
+
+class KeyCompaniesScheduleRequest(BaseModel):
+    """Create a scheduled Key Companies briefing."""
+
+    frequency: Literal["daily", "weekly", "biweekly", "monthly"] = "weekly"
+    email: str = ""
+    watchlist_id: str = ""
+    companies: List[str] = Field(default_factory=list)
+    highlight_domain: str = ""
+    period_days: int = 7
+
+
+@router.post("/key-companies/schedule")
+async def create_key_companies_schedule(
+    request: Request,
+    body: KeyCompaniesScheduleRequest = Body(...),
+):
+    """Create a scheduled Key Companies briefing (#16)."""
+    from core.sensing.scheduler import add_schedule
+
+    payload = _require_user(request)
+
+    if not body.watchlist_id and not body.companies:
+        raise HTTPException(
+            status_code=400,
+            detail="Either watchlist_id or companies is required.",
+        )
+
+    schedule = await add_schedule(
+        {
+            "user_id": payload.userId,
+            "kind": "key_companies",
+            "frequency": body.frequency,
+            "email": body.email,
+            "watchlist_id": body.watchlist_id,
+            "companies": body.companies,
+            "highlight_domain": body.highlight_domain,
+            "period_days": body.period_days,
+        }
+    )
+    return JSONResponse(content=schedule)
+
+
 # --- Timeline ---
 
 
@@ -741,6 +786,8 @@ async def update_org_context(
 class DeepDiveRequest(BaseModel):
     technology_name: str
     domain: str = Field(default="Generative AI")
+    seed_question: str = ""
+    seed_urls: List[str] = Field(default_factory=list)
 
 
 @router.post("/deep-dive")
@@ -780,6 +827,8 @@ async def start_deep_dive(
                 domain=body.domain,
                 user_id=user_id,
                 progress_callback=_progress_cb,
+                seed_question=body.seed_question,
+                seed_urls=body.seed_urls or None,
             )
 
             report_data = result.model_dump()
@@ -1095,6 +1144,7 @@ async def start_company_analysis(
                 report_tracking_id=body.report_tracking_id,
                 domain=body.domain,
                 progress_callback=_progress_cb,
+                tracking_id=tracking_id,
             )
 
             await save_company_analysis(
@@ -1274,6 +1324,14 @@ class KeyCompaniesRequest(BaseModel):
         default=7,
         description="Length of the briefing window in days (1-30).",
     )
+    watchlist_id: Optional[str] = Field(
+        default="",
+        description=(
+            "Optional watchlist id this run was kicked off from. Stored "
+            "on the report so Phase 4 persistence features can tie runs "
+            "back to the originating watchlist."
+        ),
+    )
 
 
 @router.post("/key-companies")
@@ -1327,6 +1385,8 @@ async def start_key_companies(
                 highlight_domain=highlight_domain,
                 period_days=period_days,
                 progress_callback=_progress_cb,
+                tracking_id=tracking_id,
+                watchlist_id=(getattr(body, "watchlist_id", "") or ""),
             )
 
             await save_key_companies(
@@ -1677,3 +1737,520 @@ async def query_sensing_reports(
         domain=domain,
     )
     return JSONResponse(content=answer.model_dump())
+
+
+# ───────────────────────────────────────────────────────────────
+# Phase 1 — Quality & Trust: telemetry, aliases, exclusions,
+# BYO URLs, watchlists
+# ───────────────────────────────────────────────────────────────
+
+
+def _require_user(request: Request):
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    return payload
+
+
+@router.get("/telemetry/{tracking_id}")
+async def get_run_telemetry(tracking_id: str, request: Request):
+    """Cost/latency telemetry for one tracking_id (#28)."""
+    from core.llm.telemetry import load_telemetry
+
+    payload = _require_user(request)
+    data = await load_telemetry(payload.userId, tracking_id)
+    if data is None:
+        return JSONResponse(content={"status": "not_found"}, status_code=404)
+    return JSONResponse(content=data)
+
+
+class AliasesBody(BaseModel):
+    aliases: dict = Field(
+        default_factory=dict,
+        description="{canonical: [alias1, alias2, ...]}",
+    )
+
+
+@router.get("/config/aliases")
+async def get_aliases(request: Request):
+    """Return the current per-user alias map (#19)."""
+    from core.sensing.aliases import load_aliases
+
+    payload = _require_user(request)
+    data = await load_aliases(payload.userId)
+    return JSONResponse(content={"aliases": data})
+
+
+@router.put("/config/aliases")
+async def put_aliases(body: AliasesBody, request: Request):
+    """Overwrite the per-user alias map (#19)."""
+    from core.sensing.aliases import save_aliases
+
+    payload = _require_user(request)
+    await save_aliases(payload.userId, body.aliases or {})
+    return JSONResponse(content={"status": "ok"})
+
+
+class ExclusionsBody(BaseModel):
+    exclusions: dict = Field(
+        default_factory=dict,
+        description="{global: [kw,...], per_company: {company: [kw,...]}}",
+    )
+
+
+@router.get("/config/exclusions")
+async def get_exclusions(request: Request):
+    """Return the current per-user exclusions (#20)."""
+    from core.sensing.exclusions import load_exclusions
+
+    payload = _require_user(request)
+    data = await load_exclusions(payload.userId)
+    return JSONResponse(content={"exclusions": data})
+
+
+@router.put("/config/exclusions")
+async def put_exclusions(body: ExclusionsBody, request: Request):
+    """Overwrite the per-user exclusions (#20)."""
+    from core.sensing.exclusions import save_exclusions
+
+    payload = _require_user(request)
+    await save_exclusions(payload.userId, body.exclusions or {})
+    return JSONResponse(content={"status": "ok"})
+
+
+class ByoUrlsBody(BaseModel):
+    byo_urls: dict = Field(
+        default_factory=dict,
+        description="{company: [url, ...]}",
+    )
+
+
+@router.get("/config/byo-urls")
+async def get_byo_urls(request: Request):
+    """Return the current per-user BYO URL map (#18)."""
+    from core.sensing.byo_urls import load_byo_urls
+
+    payload = _require_user(request)
+    data = await load_byo_urls(payload.userId)
+    return JSONResponse(content={"byo_urls": data})
+
+
+@router.put("/config/byo-urls")
+async def put_byo_urls(body: ByoUrlsBody, request: Request):
+    """Overwrite the per-user BYO URL map (#18)."""
+    from core.sensing.byo_urls import save_byo_urls
+
+    payload = _require_user(request)
+    await save_byo_urls(payload.userId, body.byo_urls or {})
+    return JSONResponse(content={"status": "ok"})
+
+
+# ─── Watchlists (#15) ──────────────────────────────────────────
+
+
+class WatchlistCreateBody(BaseModel):
+    name: str = Field(..., min_length=1)
+    companies: List[str] = Field(default_factory=list)
+    highlight_domain: str = ""
+    period_days: int = 7
+
+
+class WatchlistUpdateBody(BaseModel):
+    name: Optional[str] = None
+    companies: Optional[List[str]] = None
+    highlight_domain: Optional[str] = None
+    period_days: Optional[int] = None
+
+
+@router.get("/watchlists")
+async def list_watchlists_route(request: Request):
+    from core.sensing.watchlists import list_watchlists
+
+    payload = _require_user(request)
+    data = await list_watchlists(payload.userId)
+    return JSONResponse(content={"watchlists": data})
+
+
+@router.post("/watchlists")
+async def create_watchlist_route(
+    body: WatchlistCreateBody, request: Request
+):
+    from core.sensing.watchlists import create_watchlist
+
+    payload = _require_user(request)
+    wl = await create_watchlist(payload.userId, body.model_dump())
+    return JSONResponse(content=wl)
+
+
+@router.put("/watchlists/{watchlist_id}")
+async def update_watchlist_route(
+    watchlist_id: str, body: WatchlistUpdateBody, request: Request
+):
+    from core.sensing.watchlists import get_watchlist, update_watchlist
+
+    payload = _require_user(request)
+    # Merge partial update onto the current record so unset fields aren't
+    # wiped by the sanitizer defaults.
+    existing = await get_watchlist(payload.userId, watchlist_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    patch = body.model_dump(exclude_unset=True)
+    merged = {**existing, **patch}
+    updated = await update_watchlist(payload.userId, watchlist_id, merged)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    return JSONResponse(content=updated)
+
+
+@router.delete("/watchlists/{watchlist_id}")
+async def delete_watchlist_route(watchlist_id: str, request: Request):
+    from core.sensing.watchlists import delete_watchlist
+
+    payload = _require_user(request)
+    ok = await delete_watchlist(payload.userId, watchlist_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    return JSONResponse(content={"status": "ok"})
+
+
+# ──────────────────────────────────────────────────────────────
+# Phase 3 — output richness endpoints (#14 timeline, #32 similar)
+# ──────────────────────────────────────────────────────────────
+
+
+@router.get("/company-timeline")
+async def company_timeline_route(request: Request, companies: str = ""):
+    """Return per-company timelines aggregated across saved runs (#14).
+
+    ``companies`` is a comma-separated filter; empty = all companies.
+    """
+    from core.sensing.company_timeline import build_company_timeline
+
+    payload = _require_user(request)
+    filter_list = [c.strip() for c in companies.split(",") if c.strip()]
+    timelines = await build_company_timeline(
+        payload.userId, companies=filter_list or None
+    )
+    return JSONResponse(
+        content={"timelines": [t.model_dump() for t in timelines]}
+    )
+
+
+class SimilarCompaniesBody(BaseModel):
+    company: str
+    domain: str = ""
+    existing: List[str] = []
+    max_suggestions: int = 5
+
+
+@router.post("/similar-companies")
+async def similar_companies_route(
+    body: SimilarCompaniesBody, request: Request
+):
+    """On-demand peer-company expansion (#32)."""
+    from core.constants import (
+        GPU_SENSING_COMPANY_ANALYSIS_LLM as COMPANY_LLM,
+    )
+    from core.llm.client import invoke_llm
+    from core.llm.prompts.analysis_prompts import (
+        SimilarCompanies,
+        similar_companies_prompt,
+    )
+
+    _require_user(request)
+    if not body.company.strip():
+        raise HTTPException(status_code=400, detail="company is required")
+
+    prompt = similar_companies_prompt(
+        seed_company=body.company.strip(),
+        domain=body.domain.strip() or "Technology",
+        existing_companies=body.existing,
+        max_suggestions=max(1, min(body.max_suggestions, 10)),
+    )
+    try:
+        result = await invoke_llm(
+            gpu_model=COMPANY_LLM.model,
+            response_schema=SimilarCompanies,
+            contents=prompt,
+            port=COMPANY_LLM.port,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502, detail=f"similar-companies LLM call failed: {e}"
+        )
+
+    if not isinstance(result, SimilarCompanies):
+        return JSONResponse(
+            content={"companies": [], "rationale": ""}
+        )
+    return JSONResponse(content=result.model_dump())
+
+
+# ──────────────────────────────────────────────────────────────
+# Integrations config (Notion / Jira / Linear)  — #23 / #24
+# ──────────────────────────────────────────────────────────────
+
+
+class IntegrationConfigBody(BaseModel):
+    provider: Literal["notion", "jira", "linear"]
+    config: dict = Field(default_factory=dict)
+
+
+@router.get("/integrations")
+async def list_integrations_route(request: Request):
+    """Return per-user integration configs with secrets redacted."""
+    from core.sensing.integrations import load_integrations, redact
+
+    payload = _require_user(request)
+    data = await load_integrations(payload.userId)
+    redacted = {k: redact(v) for k, v in data.items()}
+    return JSONResponse(content={"integrations": redacted})
+
+
+@router.put("/integrations")
+async def set_integration_route(
+    body: IntegrationConfigBody, request: Request
+):
+    """Upsert a single integration's config."""
+    from core.sensing.integrations import set_integration, redact
+
+    payload = _require_user(request)
+    try:
+        saved = await set_integration(payload.userId, body.provider, body.config)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(content={"provider": body.provider, "config": redact(saved)})
+
+
+@router.delete("/integrations/{provider}")
+async def delete_integration_route(provider: str, request: Request):
+    from core.sensing.integrations import delete_integration
+
+    payload = _require_user(request)
+    try:
+        ok = await delete_integration(payload.userId, provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Not configured")
+    return JSONResponse(content={"status": "ok"})
+
+
+@router.post("/integrations/notion/verify")
+async def verify_notion_route(request: Request):
+    """Probe /users/me with the stored Notion token to confirm validity."""
+    from core.sensing.integrations import get_integration
+    from core.sensing.notion_export import verify_token
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "notion")
+    token = (cfg or {}).get("token") or ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Notion token not set")
+    try:
+        bot = await verify_token(token)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Notion auth failed: {e}")
+    return JSONResponse(content={"status": "ok", "bot": bot})
+
+
+# ──────────────────────────────────────────────────────────────
+# Notion export endpoints (#23)
+# ──────────────────────────────────────────────────────────────
+
+
+class NotionExportBody(BaseModel):
+    tracking_id: str
+    parent_page_id: str = ""
+
+
+async def _load_saved_report(
+    user_id: str, kind: Literal["key_companies", "company_analysis"], tracking_id: str
+) -> dict:
+    filename = f"{kind}_{tracking_id}.json"
+    path = os.path.join(_get_sensing_dir(user_id), filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"{kind} not found")
+    async with aiofiles.open(path, "r", encoding="utf-8") as f:
+        data = json.loads(await f.read())
+    # Stored envelope is usually {report: ..., meta: ...}; unwrap if so.
+    return data.get("report", data) if isinstance(data, dict) else data
+
+
+@router.post("/export/notion/key-companies")
+async def export_kc_to_notion(body: NotionExportBody, request: Request):
+    from core.sensing.integrations import get_integration
+    from core.sensing.notion_export import export_key_companies_to_notion
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "notion")
+    token = (cfg or {}).get("token")
+    parent = body.parent_page_id or (cfg or {}).get("default_parent_page_id")
+    if not token or not parent:
+        raise HTTPException(
+            status_code=400,
+            detail="Notion token + parent_page_id required",
+        )
+    report = await _load_saved_report(payload.userId, "key_companies", body.tracking_id)
+    try:
+        page = await export_key_companies_to_notion(
+            token=token, parent_page_id=parent, report=report
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Notion export failed: {e}")
+    return JSONResponse(content={"status": "ok", "page": page})
+
+
+@router.post("/export/notion/company-analysis")
+async def export_ca_to_notion(body: NotionExportBody, request: Request):
+    from core.sensing.integrations import get_integration
+    from core.sensing.notion_export import export_company_analysis_to_notion
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "notion")
+    token = (cfg or {}).get("token")
+    parent = body.parent_page_id or (cfg or {}).get("default_parent_page_id")
+    if not token or not parent:
+        raise HTTPException(
+            status_code=400,
+            detail="Notion token + parent_page_id required",
+        )
+    report = await _load_saved_report(
+        payload.userId, "company_analysis", body.tracking_id
+    )
+    try:
+        page = await export_company_analysis_to_notion(
+            token=token, parent_page_id=parent, report=report
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Notion export failed: {e}")
+    return JSONResponse(content={"status": "ok", "page": page})
+
+
+# ──────────────────────────────────────────────────────────────
+# Jira / Linear issue export endpoints (#24)
+# ──────────────────────────────────────────────────────────────
+
+
+class IssueExportItem(BaseModel):
+    company: str = ""
+    headline: str
+    category: str = ""
+    date: str = ""
+    summary: str = ""
+    source_url: str = ""
+    domain: str = ""
+
+
+class JiraExportBody(BaseModel):
+    items: List[IssueExportItem]
+    issue_type: str = "Task"
+
+
+class LinearExportBody(BaseModel):
+    items: List[IssueExportItem]
+    priority: int = 0
+
+
+@router.post("/integrations/jira/verify")
+async def verify_jira_route(request: Request):
+    from core.sensing.integrations import get_integration
+    from core.sensing.jira_export import verify_jira
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "jira")
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Jira not configured")
+    try:
+        user = await verify_jira(cfg)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Jira auth failed: {e}")
+    return JSONResponse(content={"status": "ok", "user": user})
+
+
+@router.post("/integrations/linear/verify")
+async def verify_linear_route(request: Request):
+    from core.sensing.integrations import get_integration
+    from core.sensing.linear_export import verify_linear
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "linear")
+    if not cfg:
+        raise HTTPException(status_code=400, detail="Linear not configured")
+    try:
+        viewer = await verify_linear(cfg)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Linear auth failed: {e}")
+    return JSONResponse(content={"status": "ok", "viewer": viewer})
+
+
+@router.post("/export/jira")
+async def export_to_jira(body: JiraExportBody, request: Request):
+    """Create Jira issues for one or more sensing updates."""
+    from core.sensing.integrations import get_integration
+    from core.sensing.jira_export import create_jira_issue, format_update_description
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "jira")
+    if not cfg or not cfg.get("api_token"):
+        raise HTTPException(status_code=400, detail="Jira not configured")
+
+    created = []
+    errors = []
+    for item in body.items:
+        desc = format_update_description(
+            item.model_dump(), company=item.company
+        )
+        try:
+            issue = await create_jira_issue(
+                cfg,
+                summary=f"[Sensing] {item.headline}",
+                description=desc,
+                issue_type=body.issue_type,
+                labels=["Auto-Sensing", item.category or "Uncategorized"],
+            )
+            created.append({"key": issue.get("key"), "id": issue.get("id")})
+        except Exception as e:
+            errors.append(f"{item.headline}: {e}")
+
+    return JSONResponse(
+        content={"created": created, "errors": errors},
+        status_code=200 if not errors else 207,
+    )
+
+
+@router.post("/export/linear")
+async def export_to_linear(body: LinearExportBody, request: Request):
+    """Create Linear issues for one or more sensing updates."""
+    from core.sensing.integrations import get_integration
+    from core.sensing.linear_export import create_linear_issue, format_update_description
+
+    payload = _require_user(request)
+    cfg = await get_integration(payload.userId, "linear")
+    if not cfg or not cfg.get("api_key"):
+        raise HTTPException(status_code=400, detail="Linear not configured")
+
+    created = []
+    errors = []
+    for item in body.items:
+        desc = format_update_description(
+            item.model_dump(), company=item.company
+        )
+        try:
+            issue = await create_linear_issue(
+                cfg,
+                title=f"[Sensing] {item.headline}",
+                description=desc,
+                priority=body.priority,
+            )
+            created.append({
+                "identifier": issue.get("identifier"),
+                "url": issue.get("url"),
+            })
+        except Exception as e:
+            errors.append(f"{item.headline}: {e}")
+
+    return JSONResponse(
+        content={"created": created, "errors": errors},
+        status_code=200 if not errors else 207,
+    )

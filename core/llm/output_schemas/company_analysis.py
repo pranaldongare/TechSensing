@@ -13,7 +13,16 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+from core.llm.output_schemas.analysis_extensions import (
+    ContradictionFlag,
+    InvestmentEvent,
+    OpportunityThreatFraming,
+    OverlapCell,
+    ThemeCluster,
+    UnsupportedClaim,
+)
 from core.llm.output_schemas.base import LLMOutputBase
+from core.llm.output_schemas.source_evidence import ClaimEvidence
 
 
 class CompanyTechFinding(BaseModel):
@@ -71,6 +80,21 @@ class CompanyTechFinding(BaseModel):
     source_urls: List[str] = Field(
         default_factory=list,
         description="URLs of articles that informed this finding.",
+    )
+    evidence: List[ClaimEvidence] = Field(
+        default_factory=list,
+        description=(
+            "Per-claim source citations. Optional — present only when "
+            "the feature flag for source panel (#25) is enabled."
+        ),
+    )
+    contradictions: List[ContradictionFlag] = Field(
+        default_factory=list,
+        description="Contradiction flags detected across sources (#26).",
+    )
+    unsupported_claims: List[UnsupportedClaim] = Field(
+        default_factory=list,
+        description="Hallucination-probe output for this finding (#27).",
     )
 
 
@@ -148,4 +172,27 @@ class CompanyAnalysisReport(LLMOutputBase):
     )
     comparative_matrix: List[ComparativeRow] = Field(
         description="One row per analyzed technology."
+    )
+    overlap_matrix: List[OverlapCell] = Field(
+        default_factory=list,
+        description=(
+            "Competitive-overlap heatmap cells (#10). One entry per "
+            "(technology × technology) pair with companies active in both."
+        ),
+    )
+    strategic_themes: List[ThemeCluster] = Field(
+        default_factory=list,
+        description="Cross-company strategic themes extracted by the LLM (#11).",
+    )
+    investment_signals: List[InvestmentEvent] = Field(
+        default_factory=list,
+        description="Aggregated investment / M&A / hiring signals (#30).",
+    )
+    opportunity_threat: OpportunityThreatFraming = Field(
+        default_factory=OpportunityThreatFraming,
+        description=(
+            "Opportunity / threat framing relative to the user's "
+            "organization context (#33). Empty when org context is not "
+            "configured."
+        ),
     )

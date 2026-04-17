@@ -11,12 +11,13 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 import aiofiles
 
-from core.constants import GPU_SENSING_COMPANY_ANALYSIS_LLM
+from core.constants import GPU_SENSING_COMPANY_ANALYSIS_LLM, SENSING_FEATURES
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.company_analysis import (
     CompanyAnalysisReport,
@@ -24,14 +25,16 @@ from core.llm.output_schemas.company_analysis import (
     CompanyTechFinding,
     ComparativeRow,
 )
+from core.llm.output_schemas.source_evidence import downgrade_single_source
 from core.llm.prompts.company_prompts import (
     company_comparative_prompt,
     company_profile_prompt,
 )
-from core.sensing.ingest import (
-    RawArticle,
-    extract_full_text,
-    search_duckduckgo,
+from core.sensing.ingest import RawArticle, extract_full_text
+from core.sensing.run_context import (
+    RunContext,
+    build_run_context,
+    gather_via_providers,
 )
 
 logger = logging.getLogger("sensing.company_analysis")
@@ -121,23 +124,43 @@ def _dedup_articles(articles: List[RawArticle]) -> List[RawArticle]:
 
 
 async def _gather_articles_for_company(
+    ctx: RunContext,
     company: str,
     domain: str,
     technologies: List[str],
 ) -> List[RawArticle]:
-    """Run queries for one company, dedup, and extract top articles."""
-    queries = _build_queries(company, domain, technologies)
-    results: List[RawArticle] = []
+    """Run providers + BYO URLs + exclusions for one company, then extract."""
+    # Expand base queries across alias forms.
+    aliases = ctx.expand(company)
+    queries: List[str] = []
+    for alias in aliases:
+        queries.extend(_build_queries(alias, domain, technologies))
 
+    results: List[RawArticle] = []
     try:
-        batch = await search_duckduckgo(
+        batch = await gather_via_providers(
+            ctx,
+            company,
             queries=queries,
             domain=domain,
             lookback_days=90,
+            max_results_per_provider=15,
         )
         results.extend(batch)
     except Exception as e:
-        logger.warning(f"[{company}] DDG search failed: {e}")
+        logger.warning(f"[{company}] provider aggregation failed: {e}")
+
+    # BYO URLs — user-curated sources.
+    try:
+        byo = await ctx.byo_for(company)
+        if byo:
+            logger.info(f"[{company}] appending {len(byo)} BYO articles")
+            results.extend(byo)
+    except Exception as e:
+        logger.warning(f"[{company}] BYO fetch failed: {e}")
+
+    # Apply exclusions before dedup so we don't extract dropped items.
+    results = ctx.filter_exclusions(results, company)
 
     unique = _dedup_articles(results)[:15]
     logger.info(
@@ -201,7 +224,43 @@ def _empty_profile(company: str, technologies: List[str]) -> CompanyProfile:
     )
 
 
+async def _invoke_with_telemetry(
+    ctx: RunContext,
+    *,
+    label: str,
+    response_schema,
+    contents: str,
+):
+    """Route LLM calls through the telemetry collector when available."""
+    if ctx.telemetry is not None:
+        return await ctx.telemetry.invoke_llm(
+            label=label,
+            gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+            response_schema=response_schema,
+            contents=contents,
+            port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
+        )
+    return await invoke_llm(
+        gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        response_schema=response_schema,
+        contents=contents,
+        port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
+    )
+
+
+def _apply_single_source_downgrade(profile: CompanyProfile) -> None:
+    """Cap confidence at 0.4 when a finding has ≤1 supporting source (#13)."""
+    if not SENSING_FEATURES.get("single_source_downgrade", True):
+        return
+    for f in profile.technology_findings:
+        if len(f.source_urls or []) <= 1 and f.confidence > 0.4:
+            f.confidence = 0.4
+        if f.evidence:
+            f.evidence = downgrade_single_source(f.evidence)
+
+
 async def _analyze_company(
+    ctx: RunContext,
     company: str,
     domain: str,
     technologies: List[str],
@@ -210,7 +269,7 @@ async def _analyze_company(
     """Run search → extract → LLM synthesis for one company."""
     try:
         articles = await _gather_articles_for_company(
-            company, domain, technologies
+            ctx, company, domain, technologies
         )
         useful = [a for a in articles if (a.content or a.snippet)]
         if not useful:
@@ -229,16 +288,17 @@ async def _analyze_company(
         logger.info(
             f"[{company}] invoking LLM with {len(useful)} articles"
         )
-        result = await invoke_llm(
-            gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        result = await _invoke_with_telemetry(
+            ctx,
+            label=f"profile:{company}",
             response_schema=CompanyProfile,
             contents=prompt,
-            port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
         )
         profile = CompanyProfile.model_validate(result)
         # Ensure company name and source count are authoritative
         profile.company = company
         profile.sources_used = len(useful)
+        _apply_single_source_downgrade(profile)
         return profile
     except Exception as e:
         logger.error(f"[{company}] analysis failed: {e}")
@@ -274,6 +334,7 @@ def _fallback_comparative_matrix(
 
 
 async def _build_comparative_view(
+    ctx: RunContext,
     report_tracking_id: str,
     domain: str,
     companies: List[str],
@@ -293,11 +354,11 @@ async def _build_comparative_view(
     )
 
     try:
-        result = await invoke_llm(
-            gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        result = await _invoke_with_telemetry(
+            ctx,
+            label="company_analysis:comparative",
             response_schema=CompanyAnalysisReport,
             contents=prompt,
-            port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
         )
         report = CompanyAnalysisReport.model_validate(result)
         # Enforce invariants
@@ -333,6 +394,7 @@ async def run_company_analysis(
     report_tracking_id: str = "",
     domain: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
+    tracking_id: str = "",
 ) -> CompanyAnalysisReport:
     """
     Run a company analysis.
@@ -396,9 +458,18 @@ async def run_company_analysis(
     # Use resolved_domain throughout the rest of the flow
     domain = resolved_domain
 
+    tracking_id = (tracking_id or uuid.uuid4().hex).strip()
+
     logger.info(
         f"Company analysis: {len(companies)} companies x "
-        f"{len(technologies)} technologies in domain '{domain}'"
+        f"{len(technologies)} technologies in domain '{domain}', "
+        f"tracking_id={tracking_id}"
+    )
+
+    ctx = await build_run_context(
+        user_id=user_id,
+        tracking_id=tracking_id,
+        kind="company_analysis",
     )
 
     # --- Stage 2 + 3: Per-company search + synthesis (parallel) ---
@@ -411,6 +482,7 @@ async def run_company_analysis(
         nonlocal completed
         async with sem:
             profile = await _analyze_company(
+                ctx=ctx,
                 company=company,
                 domain=domain,
                 technologies=technologies,
@@ -426,12 +498,47 @@ async def run_company_analysis(
     # --- Stage 4: Comparative synthesis ---
     await _emit(90, "Synthesizing cross-company comparison...")
     report = await _build_comparative_view(
+        ctx=ctx,
         report_tracking_id=report_tracking_id,
         domain=domain,
         companies=companies,
         technologies=technologies,
         profiles=list(profiles),
     )
+
+    # --- Stage 5: Phase-3 analytical layers (overlap, themes, investment) ---
+    if SENSING_FEATURES.get("overlap_matrix", True):
+        try:
+            from core.sensing.overlap_matrix import compute_overlap_matrix
+            report.overlap_matrix = compute_overlap_matrix(report)
+        except Exception as e:
+            logger.warning(f"[company_analysis] overlap matrix failed: {e}")
+
+    if SENSING_FEATURES.get("investment_aggregator", True):
+        try:
+            from core.sensing.investment_aggregator import (
+                compute_investment_signals,
+            )
+            report.investment_signals = compute_investment_signals(report)
+        except Exception as e:
+            logger.warning(f"[company_analysis] investment aggregate failed: {e}")
+
+    if SENSING_FEATURES.get("strategic_themes", False):
+        try:
+            await _emit(95, "Extracting strategic themes...")
+            from core.sensing.themes import extract_strategic_themes
+            report.strategic_themes = await extract_strategic_themes(
+                report, ctx=ctx
+            )
+        except Exception as e:
+            logger.warning(f"[company_analysis] themes failed: {e}")
+
+    # Persist telemetry (#28).
+    if ctx.telemetry is not None:
+        try:
+            await ctx.telemetry.save()
+        except Exception as e:
+            logger.debug(f"telemetry save failed: {e}")
 
     elapsed = time.time() - start
     await _emit(100, "Company analysis complete")

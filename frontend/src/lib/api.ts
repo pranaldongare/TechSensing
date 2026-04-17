@@ -393,6 +393,25 @@ export interface ComparativeRow {
   rationale: string;
 }
 
+export interface ContradictionFlag {
+  topic: string;
+  claim_a: string;
+  claim_b: string;
+  sources_a?: string[];
+  sources_b?: string[];
+  resolution?: 'unclear' | 'A' | 'B';
+  note?: string;
+  company?: string;
+  technology?: string;
+}
+
+export interface UnsupportedClaim {
+  claim: string;
+  reason: string;
+  suggested_action?: 'drop' | 'flag' | 'rewrite';
+  company?: string;
+}
+
 export interface CompanyAnalysisReport {
   report_tracking_id: string;
   domain: string;
@@ -401,6 +420,19 @@ export interface CompanyAnalysisReport {
   executive_summary: string;
   company_profiles: CompanyProfile[];
   comparative_matrix: ComparativeRow[];
+  // Phase 3 optional fields
+  overlap_matrix?: OverlapCell[];
+  strategic_themes?: ThemeCluster[];
+  investment_signals?: InvestmentEvent[];
+  opportunity_threat?: {
+    org_context_used: string;
+    opportunities: string[];
+    threats: string[];
+    recommended_actions: string[];
+  };
+  // Phase 6 optional fields
+  contradictions?: ContradictionFlag[];
+  unsupported_claims?: UnsupportedClaim[];
 }
 
 export interface CompanyAnalysisMeta {
@@ -428,6 +460,42 @@ export interface CompanyAnalysisFullLoad {
 
 // ---- Key Companies ----
 
+export type SentimentLabel = 'positive' | 'neutral' | 'negative';
+
+export interface ClaimEvidence {
+  claim: string;
+  source_urls: string[];
+  confidence: number;
+  is_single_source: boolean;
+}
+
+export interface DomainRollupEntry {
+  domain: string;
+  update_count: number;
+  company_count: number;
+}
+
+export interface MomentumSnapshot {
+  score: number;
+  update_count: number;
+  weighted_score: number;
+  top_drivers: string[];
+}
+
+export type DiffStatus = 'NEW' | 'ONGOING' | 'RESOLVED';
+
+export interface DiffTag {
+  status: DiffStatus;
+  previous_headline?: string;
+}
+
+export interface DiffSummary {
+  previous_tracking_id: string;
+  resolved_topics: { company: string; headline: string }[];
+  new_count: number;
+  ongoing_count: number;
+}
+
 export interface KeyCompanyUpdate {
   category: string;
   headline: string;
@@ -435,6 +503,16 @@ export interface KeyCompanyUpdate {
   date: string;
   domain: string;
   source_url: string;
+  sentiment?: SentimentLabel;
+  evidence?: ClaimEvidence[];
+  diff?: DiffTag;
+}
+
+export interface HiringSnapshot {
+  total_postings: number;
+  seniority_breakdown: string[];
+  domains: string[];
+  trend_vs_previous: 'up' | 'flat' | 'down' | 'unknown';
 }
 
 export interface KeyCompanyBriefing {
@@ -444,6 +522,8 @@ export interface KeyCompanyBriefing {
   updates: KeyCompanyUpdate[];
   key_themes: string[];
   sources_used: number;
+  momentum?: MomentumSnapshot;
+  hiring_signals?: HiringSnapshot;
 }
 
 export interface KeyCompaniesReport {
@@ -454,6 +534,109 @@ export interface KeyCompaniesReport {
   period_end: string;
   cross_company_summary: string;
   briefings: KeyCompanyBriefing[];
+  domain_rollup?: DomainRollupEntry[];
+  watchlist_id?: string;
+  diff_summary?: DiffSummary | null;
+}
+
+export interface TelemetryCall {
+  label: string;
+  model: string;
+  port: number;
+  elapsed_s: number;
+  input_tokens_est: number;
+  output_tokens_est: number;
+  ok: boolean;
+  error?: string;
+  at: string;
+}
+
+export interface TelemetrySummary {
+  tracking_id: string;
+  kind: string;
+  started_at: string;
+  total_calls: number;
+  successful_calls: number;
+  total_elapsed_s: number;
+  total_input_tokens_est: number;
+  total_output_tokens_est: number;
+  calls: TelemetryCall[];
+}
+
+export interface ExclusionsMap {
+  global?: string[];
+  per_company?: Record<string, string[]>;
+}
+
+export interface Watchlist {
+  id: string;
+  name: string;
+  companies: string[];
+  highlight_domain: string;
+  period_days: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ──────────────────────────────────────────────────────────────
+// Phase 3 — analytical output types
+// ──────────────────────────────────────────────────────────────
+
+export interface OverlapCell {
+  technology_a: string;
+  technology_b: string;
+  overlap_count: number;
+  overlap_companies: string[];
+}
+
+export interface ThemeCluster {
+  theme: string;
+  rationale: string;
+  companies: string[];
+  technologies: string[];
+}
+
+export type InvestmentEventType =
+  | 'Funding'
+  | 'Acquisition'
+  | 'IPO'
+  | 'Divestiture'
+  | 'Partnership'
+  | 'Hiring'
+  | 'Other';
+
+export interface InvestmentEvent {
+  company: string;
+  event_type: InvestmentEventType;
+  amount_usd: number;
+  amount_text: string;
+  date: string;
+  description: string;
+  source_url: string;
+}
+
+export interface CompanyTimelineEvent {
+  company: string;
+  date: string;
+  month_bucket: string;
+  category: string;
+  headline: string;
+  summary: string;
+  source: 'key_companies' | 'company_analysis';
+  source_url: string;
+  tracking_id: string;
+}
+
+export interface CompanyTimeline {
+  company: string;
+  events: CompanyTimelineEvent[];
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface SimilarCompaniesResult {
+  companies: string[];
+  rationale: string;
 }
 
 export interface KeyCompaniesMeta {
@@ -782,14 +965,23 @@ export const api = {
     return data;
   },
 
-  async sensingDeepDive(technologyName: string, domain: string): Promise<{ status: string; tracking_id: string }> {
+  async sensingDeepDive(
+    technologyName: string,
+    domain: string,
+    opts?: { seed_question?: string; seed_urls?: string[] },
+  ): Promise<{ status: string; tracking_id: string }> {
     const token = getAuthToken();
     const response = await fetch(
       `${API_URL}/sensing/deep-dive`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ technology_name: technologyName, domain }),
+        body: JSON.stringify({
+          technology_name: technologyName,
+          domain,
+          seed_question: opts?.seed_question || '',
+          seed_urls: opts?.seed_urls || [],
+        }),
       },
     );
     const data = await response.json();
@@ -1080,6 +1272,388 @@ export const api = {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to query reports');
+    return data;
+  },
+
+  // ── Phase 1: telemetry / aliases / exclusions / BYO URLs / watchlists ──
+
+  async sensingTelemetry(trackingId: string): Promise<TelemetrySummary | null> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/telemetry/${trackingId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (response.status === 404) return null;
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load telemetry');
+    return data as TelemetrySummary;
+  },
+
+  async sensingGetAliases(): Promise<Record<string, string[]>> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/config/aliases`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load aliases');
+    return (data.aliases || {}) as Record<string, string[]>;
+  },
+
+  async sensingSaveAliases(aliases: Record<string, string[]>): Promise<void> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/config/aliases`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ aliases }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to save aliases');
+    }
+  },
+
+  async sensingGetExclusions(): Promise<ExclusionsMap> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/config/exclusions`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load exclusions');
+    return (data.exclusions || {}) as ExclusionsMap;
+  },
+
+  async sensingSaveExclusions(exclusions: ExclusionsMap): Promise<void> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/config/exclusions`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ exclusions }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to save exclusions');
+    }
+  },
+
+  async sensingGetByoUrls(): Promise<Record<string, string[]>> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/config/byo-urls`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load BYO URLs');
+    return (data.byo_urls || {}) as Record<string, string[]>;
+  },
+
+  async sensingSaveByoUrls(byoUrls: Record<string, string[]>): Promise<void> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/config/byo-urls`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ byo_urls: byoUrls }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to save BYO URLs');
+    }
+  },
+
+  async sensingListWatchlists(): Promise<Watchlist[]> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/watchlists`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load watchlists');
+    return (data.watchlists || []) as Watchlist[];
+  },
+
+  async sensingCreateWatchlist(body: {
+    name: string;
+    companies: string[];
+    highlight_domain?: string;
+    period_days?: number;
+  }): Promise<Watchlist> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/watchlists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to create watchlist');
+    return data as Watchlist;
+  },
+
+  async sensingUpdateWatchlist(
+    id: string,
+    patch: Partial<Omit<Watchlist, 'id' | 'created_at' | 'updated_at'>>,
+  ): Promise<Watchlist> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/watchlists/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(patch),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to update watchlist');
+    return data as Watchlist;
+  },
+
+  async sensingDeleteWatchlist(id: string): Promise<void> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/watchlists/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to delete watchlist');
+    }
+  },
+
+  // ──────────────────────────────────────────────────────────
+  // Phase 3 — timeline + similar-companies
+  // ──────────────────────────────────────────────────────────
+
+  async sensingCompanyTimeline(
+    companies: string[] = [],
+  ): Promise<CompanyTimeline[]> {
+    const token = getAuthToken();
+    const q = companies.length
+      ? `?companies=${encodeURIComponent(companies.join(','))}`
+      : '';
+    const response = await fetch(
+      `${API_URL}/sensing/company-timeline${q}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(data.detail || 'Failed to load company timeline');
+    return (data.timelines || []) as CompanyTimeline[];
+  },
+
+  async sensingSimilarCompanies(body: {
+    company: string;
+    domain?: string;
+    existing?: string[];
+    max_suggestions?: number;
+  }): Promise<SimilarCompaniesResult> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/similar-companies`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(data.detail || 'Failed to suggest similar companies');
+    return data as SimilarCompaniesResult;
+  },
+
+  // ──────────────────────────────────────────────────────────
+  // Phase 4.2 — Scheduled Key Companies digests (#16)
+  // ──────────────────────────────────────────────────────────
+
+  async sensingScheduleKeyCompanies(body: {
+    frequency: 'daily' | 'weekly' | 'biweekly' | 'monthly';
+    email?: string;
+    watchlist_id?: string;
+    companies?: string[];
+    highlight_domain?: string;
+    period_days?: number;
+  }): Promise<SensingSchedule> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/key-companies/schedule`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(
+        data.detail || 'Failed to schedule Key Companies briefing',
+      );
+    return data as SensingSchedule;
+  },
+
+  // ──────────────────────────────────────────────────────────
+  // Integrations + Notion export (#23)
+  // ──────────────────────────────────────────────────────────
+
+  async sensingListIntegrations(): Promise<{
+    integrations: Record<string, Record<string, unknown>>;
+  }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/sensing/integrations`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to list integrations');
+    return data;
+  },
+
+  async sensingSetIntegration(body: {
+    provider: 'notion' | 'jira' | 'linear';
+    config: Record<string, unknown>;
+  }): Promise<void> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/sensing/integrations`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to set integration');
+    }
+  },
+
+  async sensingDeleteIntegration(
+    provider: 'notion' | 'jira' | 'linear',
+  ): Promise<void> {
+    const token = getAuthToken();
+    const res = await fetch(
+      `${API_URL}/sensing/integrations/${provider}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!res.ok && res.status !== 404) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Failed to delete integration');
+    }
+  },
+
+  async sensingVerifyNotion(): Promise<{ status: string; bot: unknown }> {
+    const token = getAuthToken();
+    const res = await fetch(
+      `${API_URL}/sensing/integrations/notion/verify`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Notion verification failed');
+    return data;
+  },
+
+  async sensingExportKeyCompaniesToNotion(body: {
+    tracking_id: string;
+    parent_page_id?: string;
+  }): Promise<{ status: string; page: { id: string; url: string } }> {
+    const token = getAuthToken();
+    const res = await fetch(
+      `${API_URL}/sensing/export/notion/key-companies`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Notion export failed');
+    return data;
+  },
+
+  async sensingExportCompanyAnalysisToNotion(body: {
+    tracking_id: string;
+    parent_page_id?: string;
+  }): Promise<{ status: string; page: { id: string; url: string } }> {
+    const token = getAuthToken();
+    const res = await fetch(
+      `${API_URL}/sensing/export/notion/company-analysis`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Notion export failed');
+    return data;
+  },
+
+  // ──────────────────────────────────────────────────────────
+  // Jira / Linear export (#24)
+  // ──────────────────────────────────────────────────────────
+
+  async sensingExportToJira(body: {
+    items: Array<{
+      company?: string;
+      headline: string;
+      category?: string;
+      date?: string;
+      summary?: string;
+      source_url?: string;
+      domain?: string;
+    }>;
+    issue_type?: string;
+  }): Promise<{ created: Array<{ key: string; id: string }>; errors: string[] }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/sensing/export/jira`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok && res.status !== 207)
+      throw new Error(data.detail || 'Jira export failed');
+    return data;
+  },
+
+  async sensingExportToLinear(body: {
+    items: Array<{
+      company?: string;
+      headline: string;
+      category?: string;
+      date?: string;
+      summary?: string;
+      source_url?: string;
+      domain?: string;
+    }>;
+    priority?: number;
+  }): Promise<{
+    created: Array<{ identifier: string; url: string }>;
+    errors: string[];
+  }> {
+    const token = getAuthToken();
+    const res = await fetch(`${API_URL}/sensing/export/linear`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok && res.status !== 207)
+      throw new Error(data.detail || 'Linear export failed');
     return data;
   },
 };

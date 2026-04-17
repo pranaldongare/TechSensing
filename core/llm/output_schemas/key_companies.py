@@ -7,11 +7,18 @@ multi-month lookback), Key Companies is a recurring, domain-agnostic,
 last-week briefing: "What did these companies do this week?"
 """
 
-from typing import List
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from core.llm.output_schemas.analysis_extensions import (
+    DiffTag,
+    DomainRollupEntry,
+    HiringSnapshot,
+    MomentumSnapshot,
+)
 from core.llm.output_schemas.base import LLMOutputBase
+from core.llm.output_schemas.source_evidence import ClaimEvidence
 
 
 # Allowed update categories.  Kept as a tuple for reuse in prompts and
@@ -69,6 +76,28 @@ class CompanyUpdate(BaseModel):
         default="",
         description="URL of the article supporting this update.",
     )
+    sentiment: Literal["positive", "neutral", "negative"] = Field(
+        default="neutral",
+        description=(
+            "Emotional tone of the update relative to the company "
+            "(#9). Set by the sentiment scorer, not the LLM."
+        ),
+    )
+    evidence: List[ClaimEvidence] = Field(
+        default_factory=list,
+        description=(
+            "Per-claim source citations for substantive claims in the "
+            "summary. Optional (#25)."
+        ),
+    )
+    diff: DiffTag = Field(
+        default_factory=DiffTag,
+        description=(
+            "Relationship to the previous briefing for the same "
+            "watchlist (#12). 'NEW' on first run or when no previous "
+            "briefing exists."
+        ),
+    )
 
 
 class CompanyBriefing(LLMOutputBase):
@@ -106,6 +135,14 @@ class CompanyBriefing(LLMOutputBase):
     sources_used: int = Field(
         default=0,
         description="Number of distinct articles used to build this briefing.",
+    )
+    momentum: MomentumSnapshot = Field(
+        default_factory=MomentumSnapshot,
+        description="Momentum score (#8). Computed post-LLM.",
+    )
+    hiring_signals: HiringSnapshot = Field(
+        default_factory=HiringSnapshot,
+        description="Hiring-signal snapshot (#31). Computed post-LLM.",
     )
 
 
@@ -145,4 +182,27 @@ class KeyCompaniesReport(LLMOutputBase):
     briefings: List[CompanyBriefing] = Field(
         default_factory=list,
         description="One briefing per analyzed company.",
+    )
+    domain_rollup: List[DomainRollupEntry] = Field(
+        default_factory=list,
+        description=(
+            "Cross-domain rollup counts across all briefings (#29). "
+            "Populated by the cross-domain aggregator."
+        ),
+    )
+    watchlist_id: str = Field(
+        default="",
+        description=(
+            "Optional watchlist this run was derived from (#15). Empty "
+            "when the run was ad-hoc."
+        ),
+    )
+    diff_summary: Optional[dict] = Field(
+        default=None,
+        description=(
+            "Summary of the diff vs the previous run for the same "
+            "company set (#12). Keys: previous_tracking_id, "
+            "resolved_topics[], new_count, ongoing_count. Null when "
+            "this is the first run or no prior run exists."
+        ),
     )

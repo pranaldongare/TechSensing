@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Moon, Sun, Radar, Building2, Briefcase } from 'lucide-react';
+import { Moon, Sun, Radar, Building2, Briefcase, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTheme } from '@/lib/theme-context';
 import { PROJECT_NAME } from '../../config';
@@ -39,6 +39,10 @@ const AppNavbar: React.FC = () => {
           <NavLink to="/key-companies" className={linkClass}>
             <Briefcase className="w-4 h-4" />
             Key Companies
+          </NavLink>
+          <NavLink to="/settings" className={linkClass}>
+            <Settings className="w-4 h-4" />
+            Settings
           </NavLink>
         </nav>
         <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="Toggle theme">

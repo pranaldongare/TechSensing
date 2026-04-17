@@ -72,6 +72,9 @@ async def run_deep_dive(
     domain: str,
     user_id: str = "",
     progress_callback: Optional[Callable] = None,
+    *,
+    seed_question: str = "",
+    seed_urls: Optional[List[str]] = None,
 ) -> DeepDiveReport:
     """
     Run a focused deep dive on a single technology.
@@ -80,6 +83,11 @@ async def run_deep_dive(
     1. Targeted search (DDG) for the technology
     2. Extract full text from top results
     3. LLM deep analysis
+
+    When *seed_question* is set, the search queries are biased toward
+    that question. When *seed_urls* is provided, those URLs are fetched
+    first (before DDG searches) so they always appear in the evidence
+    set (#17 follow-up deep dive).
     """
     start = time.time()
 
@@ -91,12 +99,24 @@ async def run_deep_dive(
 
     # Stage 1: Targeted search
     await _emit(10, f"Searching for {technology_name}...")
+
+    # If seed_urls, pre-populate articles from those URLs.
+    articles: List[RawArticle] = []
+    if seed_urls:
+        for url in seed_urls[:5]:
+            articles.append(RawArticle(
+                title=url.split("/")[-1][:120] or url,
+                url=url,
+                source="seed",
+                snippet=seed_question or "",
+            ))
+
+    focus = seed_question.strip() if seed_question else ""
     search_queries = [
-        f"{technology_name} {domain}",
-        f"{technology_name} tutorial guide",
+        f"{technology_name} {focus or domain}",
+        f"{technology_name} {'detailed analysis' if focus else 'tutorial guide'}",
         f"{technology_name} comparison alternatives",
     ]
-    articles: List[RawArticle] = []
     for query in search_queries:
         try:
             results = await search_duckduckgo(

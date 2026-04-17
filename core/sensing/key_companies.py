@@ -15,12 +15,13 @@ import logging
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Set
 
 import aiofiles
 
-from core.constants import GPU_SENSING_COMPANY_ANALYSIS_LLM
+from core.constants import GPU_SENSING_COMPANY_ANALYSIS_LLM, SENSING_FEATURES
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.key_companies import (
     CompanyBriefing,
@@ -28,15 +29,20 @@ from core.llm.output_schemas.key_companies import (
     KeyCompaniesReport,
     UPDATE_CATEGORIES,
 )
+from core.llm.output_schemas.source_evidence import downgrade_single_source
 from core.llm.prompts.key_company_prompts import (
     company_weekly_brief_prompt,
     key_companies_cross_prompt,
 )
-from core.sensing.ingest import (
-    RawArticle,
-    extract_full_text,
-    search_duckduckgo,
+from core.sensing.cross_domain import compute_domain_rollup
+from core.sensing.ingest import RawArticle, extract_full_text
+from core.sensing.momentum import compute_momentum
+from core.sensing.run_context import (
+    RunContext,
+    build_run_context,
+    gather_via_providers,
 )
+from core.sensing.sentiment import score_update
 
 logger = logging.getLogger("sensing.key_companies")
 
@@ -82,23 +88,46 @@ def _dedup_articles(articles: List[RawArticle]) -> List[RawArticle]:
 
 
 async def _gather_articles_for_company(
+    ctx: RunContext,
     company: str,
     highlight_domain: str,
     period_days: int,
 ) -> List[RawArticle]:
-    """Run DDG queries for one company, dedup, and extract top articles."""
-    queries = _build_queries(company, highlight_domain)
-    results: List[RawArticle] = []
+    """Run providers + BYO URLs + exclusions for one company, then extract."""
+    # Expand the base queries across canonical + alias forms so we surface
+    # e.g. "Facebook" hits under "Meta".
+    aliases = ctx.expand(company)
+    queries: List[str] = []
+    for alias in aliases:
+        queries.extend(_build_queries(alias, highlight_domain))
 
+    results: List[RawArticle] = []
     try:
-        batch = await search_duckduckgo(
+        batch = await gather_via_providers(
+            ctx,
+            company,
             queries=queries,
             domain=highlight_domain or "Technology",
             lookback_days=period_days,
+            max_results_per_provider=15,
         )
         results.extend(batch)
     except Exception as e:
-        logger.warning(f"[{company}] DDG search failed: {e}")
+        logger.warning(f"[{company}] provider aggregation failed: {e}")
+
+    # Append BYO URLs — user-curated inputs always survive dedup as they
+    # were hand-picked.
+    try:
+        byo = await ctx.byo_for(company)
+        if byo:
+            logger.info(f"[{company}] appending {len(byo)} BYO articles")
+            results.extend(byo)
+    except Exception as e:
+        logger.warning(f"[{company}] BYO fetch failed: {e}")
+
+    # Apply user exclusions before dedup so we don't pay to extract dropped
+    # items.
+    results = ctx.filter_exclusions(results, company)
 
     unique = _dedup_articles(results)[:MAX_UNIQUE_PER_COMPANY]
     logger.info(f"[{company}] {len(unique)} unique articles after dedup")
@@ -212,6 +241,22 @@ def _sanitize_briefing(
             u.date = dt.strftime("%Y-%m-%d")
         if u.domain and u.domain.strip():
             domains.add(u.domain.strip())
+
+        # Rule-based sentiment scorer (#9). Cheap — always on when flag set.
+        if SENSING_FEATURES.get("sentiment", True):
+            try:
+                u.sentiment = score_update(
+                    headline=u.headline,
+                    summary=u.summary,
+                    category=u.category,
+                )
+            except Exception:
+                u.sentiment = "neutral"
+
+        # Evidence + single-source confidence downgrade (#13, #25).
+        if SENSING_FEATURES.get("single_source_downgrade", True) and u.evidence:
+            u.evidence = downgrade_single_source(u.evidence)
+
         cleaned.append(u)
 
     briefing.updates = cleaned
@@ -237,7 +282,32 @@ def _empty_briefing(company: str) -> CompanyBriefing:
     )
 
 
+async def _invoke_with_telemetry(
+    ctx: RunContext,
+    *,
+    label: str,
+    response_schema,
+    contents: str,
+):
+    """Route LLM calls through the telemetry collector when available."""
+    if ctx.telemetry is not None:
+        return await ctx.telemetry.invoke_llm(
+            label=label,
+            gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+            response_schema=response_schema,
+            contents=contents,
+            port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
+        )
+    return await invoke_llm(
+        gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        response_schema=response_schema,
+        contents=contents,
+        port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
+    )
+
+
 async def _brief_company(
+    ctx: RunContext,
     company: str,
     period_start: str,
     period_end: str,
@@ -249,7 +319,7 @@ async def _brief_company(
     """Run search → extract → LLM synthesis for one company."""
     try:
         articles = await _gather_articles_for_company(
-            company, highlight_domain, period_days
+            ctx, company, highlight_domain, period_days
         )
         useful = [a for a in articles if (a.content or a.snippet)]
         if not useful:
@@ -266,22 +336,32 @@ async def _brief_company(
         )
 
         logger.info(f"[{company}] invoking LLM with {len(useful)} articles")
-        result = await invoke_llm(
-            gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        result = await _invoke_with_telemetry(
+            ctx,
+            label=f"briefing:{company}",
             response_schema=CompanyBriefing,
             contents=prompt,
-            port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
         )
         briefing = CompanyBriefing.model_validate(result)
         briefing.company = company
         briefing.sources_used = len(useful)
-        return _sanitize_briefing(briefing, window_start, window_end)
+        briefing = _sanitize_briefing(briefing, window_start, window_end)
+
+        # Momentum roll-up per briefing (#8).
+        if SENSING_FEATURES.get("momentum", True):
+            try:
+                briefing.momentum = compute_momentum(briefing)
+            except Exception as e:
+                logger.debug(f"[{company}] momentum calc failed: {e}")
+
+        return briefing
     except Exception as e:
         logger.error(f"[{company}] briefing failed: {e}")
         return _empty_briefing(company)
 
 
 async def _build_cross_view(
+    ctx: RunContext,
     companies: List[str],
     briefings: List[CompanyBriefing],
     period_start: str,
@@ -302,11 +382,11 @@ async def _build_cross_view(
     )
 
     try:
-        result = await invoke_llm(
-            gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        result = await _invoke_with_telemetry(
+            ctx,
+            label="key_companies:cross_view",
             response_schema=KeyCompaniesReport,
             contents=prompt,
-            port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
         )
         report = KeyCompaniesReport.model_validate(result)
         # Enforce invariants — we trust the per-company briefings more than
@@ -341,15 +421,19 @@ async def run_key_companies(
     highlight_domain: str = "",
     period_days: int = DEFAULT_PERIOD_DAYS,
     progress_callback: Optional[Callable] = None,
+    tracking_id: str = "",
+    watchlist_id: str = "",
 ) -> KeyCompaniesReport:
     """
     Run a Key Companies weekly briefing.
 
     Stages:
     1. Validate inputs and compute the window (now - period_days → now).
-    2. Per-company search + extract (parallel, bounded).
-    3. Per-company LLM synthesis (parallel, bounded).
-    4. Cross-company LLM synthesis.
+    2. Build the per-run context (aliases, exclusions, BYO URLs, providers).
+    3. Per-company search + extract (parallel, bounded).
+    4. Per-company LLM synthesis (parallel, bounded).
+    5. Cross-company LLM synthesis.
+    6. Cross-domain rollup + telemetry persistence.
     """
     start = time.time()
 
@@ -368,12 +452,21 @@ async def run_key_companies(
     period_start = window_start.strftime("%Y-%m-%d")
     hd = (highlight_domain or "").strip()
 
+    tracking_id = (tracking_id or uuid.uuid4().hex).strip()
+
     logger.info(
         f"Key Companies: {len(companies)} companies, window "
-        f"{period_start} → {period_end}, highlight='{hd or 'cross-domain'}'"
+        f"{period_start} → {period_end}, highlight='{hd or 'cross-domain'}', "
+        f"tracking_id={tracking_id}"
     )
 
     await _emit(5, f"Starting weekly briefing for {len(companies)} companies...")
+
+    ctx = await build_run_context(
+        user_id=user_id,
+        tracking_id=tracking_id,
+        kind="key_companies",
+    )
 
     sem = asyncio.Semaphore(PER_COMPANY_CONCURRENCY)
     step = 80 / max(len(companies), 1)
@@ -383,6 +476,7 @@ async def run_key_companies(
         nonlocal completed
         async with sem:
             briefing = await _brief_company(
+                ctx=ctx,
                 company=company,
                 period_start=period_start,
                 period_end=period_end,
@@ -400,6 +494,7 @@ async def run_key_companies(
 
     await _emit(90, "Synthesizing cross-company digest...")
     report = await _build_cross_view(
+        ctx=ctx,
         companies=companies,
         briefings=list(briefings),
         period_start=period_start,
@@ -407,6 +502,39 @@ async def run_key_companies(
         period_days=period_days,
         highlight_domain=hd,
     )
+
+    # Cross-domain rollup (#29). Pure; no network.
+    if SENSING_FEATURES.get("cross_domain_rollup", True):
+        try:
+            report.domain_rollup = compute_domain_rollup(report.briefings)
+        except Exception as e:
+            logger.debug(f"domain rollup failed: {e}")
+
+    if watchlist_id:
+        report.watchlist_id = watchlist_id
+
+    # Diff vs previous run for same company set (#12). Best-effort;
+    # failures are logged but never block the report.
+    if SENSING_FEATURES.get("diff", True):
+        try:
+            from core.sensing.diff import annotate_key_companies_diff
+
+            diff_summary = await annotate_key_companies_diff(
+                user_id,
+                report,
+                current_tracking_id=tracking_id,
+            )
+            if diff_summary:
+                report.diff_summary = diff_summary
+        except Exception as e:
+            logger.debug(f"kc_diff failed: {e}")
+
+    # Persist telemetry (#28) — safe even when collector is None.
+    if ctx.telemetry is not None:
+        try:
+            await ctx.telemetry.save()
+        except Exception as e:
+            logger.debug(f"telemetry save failed: {e}")
 
     elapsed = time.time() - start
     await _emit(100, "Key Companies briefing complete")

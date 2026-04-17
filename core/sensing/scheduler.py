@@ -69,6 +69,15 @@ async def _scheduler_loop() -> None:
 
 
 async def _run_scheduled(schedule: dict) -> None:
+    """Execute a scheduled run. Dispatches on ``kind`` (#16)."""
+    kind = (schedule.get("kind") or "sensing").lower()
+    if kind == "key_companies":
+        await _run_scheduled_key_companies(schedule)
+        return
+    await _run_scheduled_sensing(schedule)
+
+
+async def _run_scheduled_sensing(schedule: dict) -> None:
     """Execute a scheduled sensing pipeline run."""
     try:
         from core.sensing.pipeline import run_sensing_pipeline
@@ -174,6 +183,107 @@ async def _run_scheduled(schedule: dict) -> None:
         logger.error(f"Scheduled run failed for {schedule.get('id')}: {e}")
 
 
+async def _run_scheduled_key_companies(schedule: dict) -> None:
+    """Execute a scheduled Key Companies briefing (#16)."""
+    try:
+        from core.sensing.key_companies import (
+            run_key_companies,
+            save_key_companies,
+        )
+        from core.sensing.watchlists import get_watchlist
+
+        user_id = schedule.get("user_id")
+        if not user_id:
+            return
+
+        watchlist_id = schedule.get("watchlist_id") or ""
+        companies = schedule.get("companies") or []
+        highlight_domain = schedule.get("highlight_domain") or ""
+        period_days = int(schedule.get("period_days") or 7)
+
+        # Prefer current watchlist state if a watchlist_id was supplied.
+        if watchlist_id:
+            wl = await get_watchlist(user_id, watchlist_id)
+            if wl:
+                companies = wl.get("companies") or companies
+                highlight_domain = (
+                    wl.get("highlight_domain") or highlight_domain
+                )
+                period_days = int(wl.get("period_days") or period_days)
+
+        if not companies:
+            logger.warning(
+                f"KC schedule {schedule.get('id')}: no companies to brief"
+            )
+            return
+
+        tracking_id = str(uuid.uuid4())
+        report = await run_key_companies(
+            user_id=user_id,
+            companies=companies,
+            highlight_domain=highlight_domain,
+            period_days=period_days,
+            tracking_id=tracking_id,
+            watchlist_id=watchlist_id,
+        )
+        await save_key_companies(user_id, tracking_id, report)
+
+        logger.info(
+            f"Scheduled KC briefing saved: user={user_id} "
+            f"tracking_id={tracking_id} watchlist={watchlist_id}"
+        )
+
+        # Email digest
+        try:
+            from core.sensing.email_digest import (
+                is_smtp_configured,
+                send_key_companies_digest,
+            )
+
+            if is_smtp_configured() and schedule.get("email"):
+                await send_key_companies_digest(
+                    to_email=schedule["email"],
+                    period_start=getattr(report, "period_start", "") or "",
+                    period_end=getattr(report, "period_end", "") or "",
+                    companies=list(getattr(report, "companies_analyzed", []) or []),
+                    cross_company_summary=getattr(
+                        report, "cross_company_summary", ""
+                    )
+                    or "",
+                    briefings=[
+                        b.model_dump() if hasattr(b, "model_dump") else b
+                        for b in (getattr(report, "briefings", []) or [])
+                    ],
+                )
+        except Exception as e:
+            logger.warning(f"KC digest email failed: {e}")
+
+        # Socket notification
+        try:
+            from app.socket_handler import sio
+
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "kind": "key_companies",
+                    "stage": "complete",
+                    "progress": 100,
+                    "message": (
+                        f"Scheduled Key Companies briefing ready "
+                        f"({len(companies)} companies)"
+                    ),
+                },
+            )
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error(
+            f"Scheduled KC run failed for {schedule.get('id')}: {e}"
+        )
+
+
 def _compute_next_run(frequency: str, from_dt: datetime) -> datetime:
     """Compute next run time from a base datetime."""
     if frequency == "weekly":
@@ -189,9 +299,11 @@ def _compute_next_run(frequency: str, from_dt: datetime) -> datetime:
 
 async def add_schedule(data: dict) -> dict:
     """Add a new schedule. Returns the created schedule."""
+    kind = (data.get("kind") or "sensing").lower()
     schedule = {
         "id": str(uuid.uuid4()),
         "user_id": data["user_id"],
+        "kind": kind,
         "domain": data.get("domain", "Generative AI"),
         "frequency": data.get("frequency", "weekly"),
         "custom_requirements": data.get("custom_requirements", ""),
@@ -199,6 +311,12 @@ async def add_schedule(data: dict) -> dict:
         "dont_include": data.get("dont_include"),
         "lookback_days": data.get("lookback_days", 7),
         "enabled": True,
+        "email": data.get("email", ""),
+        # Key Companies specific — ignored for kind="sensing".
+        "watchlist_id": data.get("watchlist_id", ""),
+        "companies": data.get("companies") or [],
+        "highlight_domain": data.get("highlight_domain", ""),
+        "period_days": int(data.get("period_days") or 7),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "next_run": _compute_next_run(
             data.get("frequency", "weekly"),
@@ -208,7 +326,10 @@ async def add_schedule(data: dict) -> dict:
     }
     _schedules.append(schedule)
     await _save_schedules()
-    logger.info(f"Schedule added: {schedule['id']} ({schedule['domain']}, {schedule['frequency']})")
+    logger.info(
+        f"Schedule added: {schedule['id']} "
+        f"(kind={kind}, freq={schedule['frequency']})"
+    )
     return schedule
 
 
@@ -227,8 +348,21 @@ async def update_schedule(schedule_id: str, updates: dict) -> Optional[dict]:
     """Update a schedule's fields. Returns the updated schedule or None."""
     for schedule in _schedules:
         if schedule["id"] == schedule_id:
-            for key in ("enabled", "frequency", "domain", "custom_requirements",
-                        "must_include", "dont_include", "lookback_days"):
+            for key in (
+                "enabled",
+                "frequency",
+                "domain",
+                "custom_requirements",
+                "must_include",
+                "dont_include",
+                "lookback_days",
+                "email",
+                "watchlist_id",
+                "companies",
+                "highlight_domain",
+                "period_days",
+                "kind",
+            ):
                 if key in updates:
                     schedule[key] = updates[key]
             if "frequency" in updates:

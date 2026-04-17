@@ -12,7 +12,8 @@ import {
 } from '@/components/ui/accordion';
 import {
   Briefcase, Loader2, Plus, X, History, Play, RotateCcw,
-  Sparkles, Calendar, ExternalLink,
+  Sparkles, Calendar, ExternalLink, Download, FileText, FileSpreadsheet,
+  Presentation,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
@@ -23,6 +24,33 @@ import type {
 } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
+import SentimentBadge from '@/components/SentimentBadge';
+import SourceEvidencePanel from '@/components/SourceEvidencePanel';
+import CostTelemetryBadge from '@/components/CostTelemetryBadge';
+import MomentumGauge from '@/components/MomentumGauge';
+import CrossDomainRollup from '@/components/CrossDomainRollup';
+import CompanyTimelineView from '@/components/CompanyTimelineView';
+import CompanyWatchlistManager from '@/components/CompanyWatchlistManager';
+import KeyCompaniesDiffView, { DiffChip } from '@/components/KeyCompaniesDiffView';
+import SimilarCompaniesPanel from '@/components/SimilarCompaniesPanel';
+import type { Watchlist } from '@/lib/api';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { downloadKeyCompaniesPdf } from '@/lib/key-companies-pdf';
+import { downloadKeyCompaniesPptx } from '@/lib/key-companies-pptx';
+import {
+  downloadKeyCompaniesCsv,
+  downloadKeyCompaniesXls,
+} from '@/lib/sensing-report-csv';
+import { downloadKeyCompaniesMarkdown } from '@/lib/sensing-report-md';
+import { FileCode, Globe, Search } from 'lucide-react';
+import FollowUpDialog from '@/components/FollowUpDialog';
+import HiringSignalsPanel from '@/components/HiringSignalsPanel';
 
 const POLL_INTERVAL_MS = 4_000;
 const MAX_POLL_COUNT = 300; // ~20 minutes
@@ -269,6 +297,22 @@ const KeyCompaniesView: React.FC = () => {
                     ))}
                   </div>
                 )}
+                {companies.length > 0 && (
+                  <div className="pt-1">
+                    <SimilarCompaniesPanel
+                      seed={companies[0]}
+                      domain={highlightDomain}
+                      existing={companies}
+                      disabled={companies.length >= MAX_COMPANIES}
+                      onAdd={(picks) => {
+                        const next = Array.from(
+                          new Set([...companies, ...picks]),
+                        ).slice(0, MAX_COMPANIES);
+                        setCompanies(next);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -308,6 +352,32 @@ const KeyCompaniesView: React.FC = () => {
                   />
                   <span className="text-sm text-muted-foreground">days (default 7)</span>
                 </div>
+              </div>
+
+              <div className="space-y-2 border-t border-border pt-3">
+                <label className="text-sm font-medium">
+                  Watchlists
+                  <span className="text-xs text-muted-foreground font-normal ml-2">
+                    (load a saved company group or save the current one)
+                  </span>
+                </label>
+                <CompanyWatchlistManager
+                  compact
+                  prefill={{
+                    companies,
+                    highlight_domain: highlightDomain,
+                    period_days: periodDays,
+                  }}
+                  onLoad={(wl: Watchlist) => {
+                    setCompanies(wl.companies.slice(0, MAX_COMPANIES));
+                    setHighlightDomain(wl.highlight_domain || '');
+                    setPeriodDays(wl.period_days || 7);
+                    toast({
+                      title: `Loaded "${wl.name}"`,
+                      description: `${wl.companies.length} company/companies`,
+                    });
+                  }}
+                />
               </div>
 
               <div className="pt-2">
@@ -407,11 +477,89 @@ const KeyCompaniesView: React.FC = () => {
                   Highlight: {report.highlight_domain}
                 </Badge>
               )}
+              <CostTelemetryBadge trackingId={trackingId} />
             </div>
-            <Button variant="outline" size="sm" onClick={handleReset}>
-              <RotateCcw className="w-4 h-4 mr-1.5" />
-              New Briefing
-            </Button>
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Download className="w-4 h-4 mr-1.5" />
+                    Export
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem
+                    onClick={() => downloadKeyCompaniesPdf(report)}
+                  >
+                    <FileText className="w-4 h-4 mr-2" />
+                    PDF (formatted briefing)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => downloadKeyCompaniesPptx(report)}
+                  >
+                    <Presentation className="w-4 h-4 mr-2" />
+                    PowerPoint (PPTX)
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => downloadKeyCompaniesCsv(report)}
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    CSV (flat updates)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => downloadKeyCompaniesXls(report)}
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2" />
+                    Excel (3-sheet XLS)
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => downloadKeyCompaniesMarkdown(report)}
+                  >
+                    <FileCode className="w-4 h-4 mr-2" />
+                    Markdown (.md)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={async () => {
+                      if (!trackingId) {
+                        toast({
+                          title: 'Not available',
+                          description:
+                            'Run/load a briefing first so it is saved server-side.',
+                          variant: 'destructive',
+                        });
+                        return;
+                      }
+                      try {
+                        const res =
+                          await api.sensingExportKeyCompaniesToNotion({
+                            tracking_id: trackingId,
+                          });
+                        toast({
+                          title: 'Exported to Notion',
+                          description: res.page?.url || 'Page created.',
+                        });
+                      } catch (err) {
+                        toast({
+                          title: 'Notion export failed',
+                          description:
+                            err instanceof Error ? err.message : 'Unknown error',
+                          variant: 'destructive',
+                        });
+                      }
+                    }}
+                  >
+                    <Globe className="w-4 h-4 mr-2" />
+                    Notion page
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button variant="outline" size="sm" onClick={handleReset}>
+                <RotateCcw className="w-4 h-4 mr-1.5" />
+                New Briefing
+              </Button>
+            </div>
           </div>
 
           {/* Cross-company summary */}
@@ -433,12 +581,26 @@ const KeyCompaniesView: React.FC = () => {
             </CardContent>
           </Card>
 
+          {/* Diff vs previous briefing (#12) */}
+          <KeyCompaniesDiffView diffSummary={report.diff_summary} />
+
+          {/* Cross-domain rollup (#29) */}
+          <CrossDomainRollup rollup={report.domain_rollup} />
+
           {/* Per-company briefings */}
           <div className="space-y-3">
             {report.briefings.map((b) => (
               <BriefingCard key={b.company} briefing={b} />
             ))}
           </div>
+
+          {/* Per-company historical timeline (#14) */}
+          {report.briefings.length > 0 && (
+            <CompanyTimelineView
+              companies={report.briefings.map((b) => b.company)}
+              heading="Historical activity timeline"
+            />
+          )}
         </div>
       )}
     </div>
@@ -470,15 +632,19 @@ const BriefingCard: React.FC<{ briefing: KeyCompanyBriefing }> = ({ briefing }) 
               </div>
             )}
           </div>
-          <Badge variant="secondary" className="text-xs shrink-0">
-            {briefing.updates.length} updates · {briefing.sources_used} sources
-          </Badge>
+          <div className="flex items-center gap-2 shrink-0">
+            <MomentumGauge momentum={briefing.momentum} compact />
+            <Badge variant="secondary" className="text-xs">
+              {briefing.updates.length} updates · {briefing.sources_used} sources
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         {briefing.overall_summary && (
           <SafeMarkdownRenderer content={briefing.overall_summary} />
         )}
+        <HiringSignalsPanel hiring={briefing.hiring_signals} />
         {briefing.key_themes && briefing.key_themes.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {briefing.key_themes.map((t, i) => (
@@ -501,7 +667,7 @@ const BriefingCard: React.FC<{ briefing: KeyCompanyBriefing }> = ({ briefing }) 
               <AccordionContent>
                 <div className="space-y-2">
                   {briefing.updates.map((u, idx) => (
-                    <UpdateRow key={idx} update={u} />
+                    <UpdateRow key={idx} update={u} company={briefing.company} />
                   ))}
                 </div>
               </AccordionContent>
@@ -513,7 +679,45 @@ const BriefingCard: React.FC<{ briefing: KeyCompanyBriefing }> = ({ briefing }) 
   );
 };
 
-const UpdateRow: React.FC<{ update: KeyCompanyUpdate }> = ({ update }) => {
+const UpdateRow: React.FC<{ update: KeyCompanyUpdate; company?: string }> = ({
+  update,
+  company,
+}) => {
+  const handleCreateIssue = async (target: 'jira' | 'linear') => {
+    const item = {
+      company: company || '',
+      headline: update.headline,
+      category: update.category || '',
+      date: update.date || '',
+      summary: update.summary || '',
+      source_url: update.source_url || '',
+      domain: update.domain || '',
+    };
+    try {
+      if (target === 'jira') {
+        const res = await api.sensingExportToJira({ items: [item] });
+        if (res.errors?.length) throw new Error(res.errors[0]);
+        toast({
+          title: 'Jira issue created',
+          description: res.created[0]?.key || 'Done',
+        });
+      } else {
+        const res = await api.sensingExportToLinear({ items: [item] });
+        if (res.errors?.length) throw new Error(res.errors[0]);
+        toast({
+          title: 'Linear issue created',
+          description: res.created[0]?.identifier || 'Done',
+        });
+      }
+    } catch (err) {
+      toast({
+        title: `${target === 'jira' ? 'Jira' : 'Linear'} failed`,
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: 'destructive',
+      });
+    }
+  };
+
   return (
     <div className="border rounded-md p-3 space-y-1.5">
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -531,6 +735,29 @@ const UpdateRow: React.FC<{ update: KeyCompanyUpdate }> = ({ update }) => {
             {update.domain}
           </Badge>
         )}
+        <SentimentBadge sentiment={update.sentiment} compact />
+        <DiffChip diff={update.diff} />
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="ml-auto inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+              title="Create issue"
+            >
+              <Plus className="w-3 h-3" />
+              Issue
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleCreateIssue('jira')}>
+              Jira
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleCreateIssue('linear')}>
+              Linear
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="font-medium text-sm leading-snug">
         {update.source_url ? (
@@ -552,6 +779,18 @@ const UpdateRow: React.FC<{ update: KeyCompanyUpdate }> = ({ update }) => {
           <SafeMarkdownRenderer content={update.summary} />
         </div>
       )}
+      <div className="flex items-center gap-3 pt-1">
+        <SourceEvidencePanel
+          evidence={update.evidence}
+          sourceUrls={update.source_url ? [update.source_url] : []}
+        />
+        <FollowUpDialog
+          technologyName={update.headline}
+          domain={update.domain || update.category || 'Technology'}
+          seedQuestion={update.headline}
+          seedUrls={update.source_url ? [update.source_url] : []}
+        />
+      </div>
     </div>
   );
 };
