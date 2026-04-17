@@ -585,74 +585,13 @@ def _merge_patent_keywords(
     return keywords or must_include
 
 
-# Date pattern regexes for extracting dates from article text
-_DATE_PATTERN_ISO = re.compile(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b")
-_DATE_PATTERN_MONTH_YEAR = re.compile(
-    r"\b(January|February|March|April|May|June|July|August|"
-    r"September|October|November|December)\s+(\d{1,2},?\s+)?(20\d{2})\b",
-    re.IGNORECASE,
+# ── Date helpers: delegate to shared module ──
+from core.sensing.date_filter import (
+    extract_date_from_text as _extract_date_from_text,
+    filter_articles_by_date,
+    filter_findings_by_date,
+    parse_iso_date as _parse_iso_date,
 )
-_DATE_PATTERN_YEAR = re.compile(r"\b(20\d{2})\b")
-
-_MONTH_MAP = {
-    "january": 1, "february": 2, "march": 3, "april": 4,
-    "may": 5, "june": 6, "july": 7, "august": 8,
-    "september": 9, "october": 10, "november": 11, "december": 12,
-}
-
-
-def _extract_date_from_text(text: str) -> Optional[datetime]:
-    """Extract a date from free text. Returns UTC datetime or None.
-
-    Tries progressively less specific patterns:
-    1. YYYY-MM-DD (ISO)
-    2. Month DD, YYYY or Month YYYY
-    3. Just YYYY (returns Jan 1 of that year)
-    """
-    if not text:
-        return None
-
-    # Try ISO pattern first
-    m = _DATE_PATTERN_ISO.search(text)
-    if m:
-        try:
-            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            return datetime(y, mo, d, tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            pass
-
-    # Try "Month [DD,] YYYY"
-    m = _DATE_PATTERN_MONTH_YEAR.search(text)
-    if m:
-        try:
-            month_num = _MONTH_MAP[m.group(1).lower()]
-            year = int(m.group(3))
-            return datetime(year, month_num, 15, tzinfo=timezone.utc)
-        except (ValueError, KeyError):
-            pass
-
-    # Fall back to year only
-    m = _DATE_PATTERN_YEAR.search(text)
-    if m:
-        try:
-            return datetime(int(m.group(1)), 6, 15, tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            pass
-
-    return None
-
-
-def _parse_iso_date(date_str: str) -> Optional[datetime]:
-    """Parse ISO date string into UTC datetime."""
-    if not date_str:
-        return None
-    try:
-        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except (ValueError, TypeError):
-        return None
 
 
 def _filter_by_date(
@@ -660,55 +599,12 @@ def _filter_by_date(
     lookback_days: int,
     buffer_multiplier: float = 1.5,
 ) -> List[RawArticle]:
-    """Remove articles older than the allowed window.
-
-    For articles without published_date, tries to extract a date from
-    title/snippet/content. If a date is found anywhere in the text that
-    indicates the article describes an old event, it is filtered out.
-
-    Only articles with NO extractable date are kept (benefit of doubt).
-    """
-    if lookback_days <= 0:
-        return articles
-
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        days=int(lookback_days * buffer_multiplier)
+    """Remove articles older than the allowed window (delegates to shared helper)."""
+    return filter_articles_by_date(
+        articles, lookback_days,
+        buffer_multiplier=buffer_multiplier,
+        label="pipeline",
     )
-    kept = []
-    filtered = 0
-    filtered_by_content = 0
-
-    for a in articles:
-        # First try the article's published_date
-        pub_dt = _parse_iso_date(a.published_date) if a.published_date else None
-
-        # If no valid published_date, try extracting from text
-        extracted_from_content = False
-        if pub_dt is None:
-            text = f"{a.title} {a.snippet} {a.content}"
-            pub_dt = _extract_date_from_text(text)
-            extracted_from_content = pub_dt is not None
-
-        if pub_dt is None:
-            # No date anywhere — keep with benefit of doubt
-            kept.append(a)
-            continue
-
-        if pub_dt < cutoff:
-            filtered += 1
-            if extracted_from_content:
-                filtered_by_content += 1
-            continue
-
-        kept.append(a)
-
-    if filtered:
-        logger.info(
-            f"Date filter: removed {filtered} articles older than "
-            f"{int(lookback_days * buffer_multiplier)} days "
-            f"({filtered_by_content} via content-based date extraction)"
-        )
-    return kept
 
 
 def _filter_classified_by_date(
@@ -716,51 +612,14 @@ def _filter_classified_by_date(
     lookback_days: int,
     buffer_multiplier: float = 1.5,
 ) -> list:
-    """Hard post-classification date filter.
-
-    The LLM often extracts accurate publication dates from article content
-    and stores them in ClassifiedArticle.published_date. This filter uses
-    those dates to remove articles that slipped through the pre-filter
-    (e.g., DuckDuckGo results with no RawArticle date).
-    """
-    if lookback_days <= 0 or not classified:
-        return classified
-
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        days=int(lookback_days * buffer_multiplier)
+    """Hard post-classification date filter (delegates to shared helper)."""
+    return filter_findings_by_date(
+        classified, lookback_days,
+        buffer_multiplier=buffer_multiplier,
+        date_getter=lambda c: getattr(c, "published_date", "") or "",
+        text_getter=lambda c: f"{getattr(c, 'title', '')} {getattr(c, 'summary', '')}",
+        label="pipeline-post-classify",
     )
-    kept = []
-    filtered = 0
-
-    for c in classified:
-        pub_dt = _parse_iso_date(c.published_date) if c.published_date else None
-
-        # If LLM didn't provide a valid date, try extracting from title + summary
-        if pub_dt is None:
-            text = f"{c.title} {c.summary}"
-            pub_dt = _extract_date_from_text(text)
-
-        if pub_dt is None:
-            # Still no date — keep with benefit of doubt
-            kept.append(c)
-            continue
-
-        if pub_dt < cutoff:
-            filtered += 1
-            logger.debug(
-                f"Post-classify date filter: removing '{c.title[:60]}' "
-                f"(date={c.published_date}, cutoff={cutoff.date()})"
-            )
-            continue
-
-        kept.append(c)
-
-    if filtered:
-        logger.info(
-            f"Post-classify date filter: removed {filtered} classified articles "
-            f"older than {int(lookback_days * buffer_multiplier)} days"
-        )
-    return kept
 
 
 def _matches_exclusion(article: RawArticle, dont_lower: list[str]) -> bool:

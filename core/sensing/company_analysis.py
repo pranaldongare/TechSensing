@@ -12,7 +12,7 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional
 
 import aiofiles
@@ -30,6 +30,7 @@ from core.llm.prompts.company_prompts import (
     company_comparative_prompt,
     company_profile_prompt,
 )
+from core.sensing.date_filter import filter_articles_by_date, filter_findings_by_date
 from core.sensing.ingest import RawArticle, extract_full_text
 from core.sensing.run_context import (
     RunContext,
@@ -162,6 +163,12 @@ async def _gather_articles_for_company(
     # Apply exclusions before dedup so we don't extract dropped items.
     results = ctx.filter_exclusions(results, company)
 
+    # Pre-LLM date filter: drop articles whose extracted date is older than
+    # the lookback window (90 days × 1.5 buffer = 135 days).
+    results = filter_articles_by_date(
+        results, 90, buffer_multiplier=1.5, label=company,
+    )
+
     unique = _dedup_articles(results)[:15]
     logger.info(
         f"[{company}] {len(unique)} unique articles after dedup"
@@ -259,6 +266,41 @@ def _apply_single_source_downgrade(profile: CompanyProfile) -> None:
             f.evidence = downgrade_single_source(f.evidence)
 
 
+def _sanitize_profile_dates(
+    profile: CompanyProfile,
+    lookback_days: int = 90,
+) -> None:
+    """Post-LLM: remove stale ``recent_developments`` entries from findings.
+
+    Scans each development string for an embedded date.  If the date is
+    older than ``lookback_days`` it is dropped — it represents stale news
+    that the LLM regurgitated despite the recency instructions.
+    """
+    from core.sensing.date_filter import extract_date_from_text
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    total_removed = 0
+
+    for f in profile.technology_findings:
+        if not f.recent_developments:
+            continue
+        cleaned = []
+        for dev in f.recent_developments:
+            dt = extract_date_from_text(dev)
+            if dt is not None and dt < cutoff:
+                total_removed += 1
+                continue
+            cleaned.append(dev)
+        f.recent_developments = cleaned
+
+    if total_removed:
+        logger.info(
+            f"[{profile.company}] Post-LLM date sanitizer: removed "
+            f"{total_removed} stale recent_developments entries "
+            f"(older than {lookback_days} days)"
+        )
+
+
 async def _analyze_company(
     ctx: RunContext,
     company: str,
@@ -299,6 +341,7 @@ async def _analyze_company(
         profile.company = company
         profile.sources_used = len(useful)
         _apply_single_source_downgrade(profile)
+        _sanitize_profile_dates(profile, lookback_days=90)
         return profile
     except Exception as e:
         logger.error(f"[{company}] analysis failed: {e}")
@@ -446,7 +489,10 @@ async def run_company_analysis(
         # Standalone mode: caller supplies everything
         await _emit(5, "Preparing standalone analysis...")
         resolved_domain = (domain or "Technology").strip() or "Technology"
-        date_range = ""
+        # Generate a date_range so the LLM always knows the recency window.
+        _now = datetime.now(timezone.utc)
+        _start = _now - timedelta(days=90)
+        date_range = f"{_start.strftime('%b %d, %Y')} – {_now.strftime('%b %d, %Y')}"
         technologies = [
             t.strip() for t in (technology_names or []) if t and t.strip()
         ][:MAX_TECHNOLOGIES]

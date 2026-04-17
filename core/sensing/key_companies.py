@@ -35,6 +35,7 @@ from core.llm.prompts.key_company_prompts import (
     key_companies_cross_prompt,
 )
 from core.sensing.cross_domain import compute_domain_rollup
+from core.sensing.date_filter import filter_articles_by_date
 from core.sensing.ingest import RawArticle, extract_full_text
 from core.sensing.momentum import compute_momentum
 from core.sensing.run_context import (
@@ -128,6 +129,14 @@ async def _gather_articles_for_company(
     # Apply user exclusions before dedup so we don't pay to extract dropped
     # items.
     results = ctx.filter_exclusions(results, company)
+
+    # Pre-LLM date filter: drop articles whose extracted date falls outside
+    # the period window.  Use buffer_multiplier=1.5 so a 7-day period keeps
+    # articles up to ~10 days old (accounts for timezone drift and DDG's
+    # coarse timelimit buckets).
+    results = filter_articles_by_date(
+        results, period_days, buffer_multiplier=1.5, label=company,
+    )
 
     unique = _dedup_articles(results)[:MAX_UNIQUE_PER_COMPANY]
     logger.info(f"[{company}] {len(unique)} unique articles after dedup")

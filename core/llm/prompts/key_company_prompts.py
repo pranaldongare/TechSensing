@@ -7,6 +7,7 @@ Two prompts:
 """
 
 import json
+from datetime import datetime
 
 from core.llm.output_schemas.key_companies import (
     CompanyBriefing,
@@ -61,13 +62,19 @@ def company_weekly_brief_prompt(
                 f"(not {company}), ignore it.\n"
                 "- If no notable activity was found, return an empty "
                 "updates list and state that plainly in overall_summary.\n\n"
-                "RECENCY RULES:\n"
+                "RECENCY RULES (CRITICAL — enforce strictly):\n"
+                f"- Today's date: {datetime.now().strftime('%B %d, %Y')}.\n"
                 f"- Only include events dated within the window "
                 f"({period_start} to {period_end}).\n"
                 "- If an article is older but announces something new this "
                 "week, include the new event (not the old context).\n"
                 "- If you cannot confidently date an event to within the "
-                "window, DROP it.\n\n"
+                "window, DROP it.\n"
+                "- Do NOT include product launches, funding rounds, or "
+                "announcements from before the window period — even if the "
+                "article mentions them as background.\n"
+                "- Each update's 'date' field MUST be a YYYY-MM-DD date "
+                f"between {period_start} and {period_end}.\n\n"
                 + tense_rules_block()
                 + "CATEGORIZATION:\n"
                 f"- Each update's category MUST be exactly one of: "

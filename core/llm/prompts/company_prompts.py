@@ -7,6 +7,7 @@ Two prompts:
 """
 
 import json
+from datetime import datetime
 
 from core.llm.output_schemas.company_analysis import (
     CompanyAnalysisReport,
@@ -26,18 +27,24 @@ def company_profile_prompt(
     schema_json = json.dumps(CompanyProfile.model_json_schema(), indent=2)
     tech_list = ", ".join(technologies)
 
-    recency_block = ""
-    if date_range:
-        recency_block = (
-            "RECENCY RULES:\n"
-            f"- The primary date window is: {date_range}.\n"
-            "- Articles older than 6 months from today should be used only as "
-            "context, not as evidence of current activity.\n"
-            "- If an article describes an old product launch as if it were new, "
-            "ignore it or note it as legacy context.\n"
-            "- Prioritize developments from the last 3 months in "
-            "recent_developments.\n\n"
-        )
+    today_str = datetime.now().strftime("%B %d, %Y")
+    effective_range = date_range or f"Last 90 days (today is {today_str})"
+    recency_block = (
+        "RECENCY RULES (CRITICAL — enforce strictly):\n"
+        f"- Today's date: {today_str}.\n"
+        f"- The primary date window is: {effective_range}.\n"
+        "- recent_developments MUST contain ONLY events from the last 90 days.\n"
+        "- Do NOT include product launches, partnerships, funding rounds, or "
+        "research from before the 90-day window — even if the article "
+        "mentions them.\n"
+        "- If an article recaps an old event (e.g. a 2024 launch), do NOT "
+        "list it as a recent development. You may reference it in the "
+        "summary as background context only.\n"
+        "- If the only evidence for a technology is older than 90 days, set "
+        "stance='legacy context only' and confidence ≤ 0.2.\n"
+        "- Each recent_developments entry should describe something that "
+        f"happened within the last 90 days relative to {today_str}.\n\n"
+    )
 
     return [
         {
