@@ -616,6 +616,7 @@ def _filter_classified_by_date(
     return filter_findings_by_date(
         classified, lookback_days,
         buffer_multiplier=buffer_multiplier,
+        drop_undated=True,
         date_getter=lambda c: getattr(c, "published_date", "") or "",
         text_getter=lambda c: f"{getattr(c, 'title', '')} {getattr(c, 'summary', '')}",
         label="pipeline-post-classify",

@@ -498,10 +498,14 @@ def _most_recent_mention(
 
 
 def _is_stale(tech_name: str, classified_articles: list, cutoff_days: int = 180) -> bool:
-    """Check if a technology's most recent mention is older than cutoff_days."""
+    """Check if a technology's most recent mention is older than cutoff_days.
+
+    Technologies with no datable mentions are considered stale — if none of
+    the supporting articles carry a date we cannot verify recency.
+    """
     latest = _most_recent_mention(tech_name, classified_articles)
     if not latest:
-        return False  # No date info — don't filter
+        return True  # No date evidence — treat as stale
     try:
         # Handle common date formats: "2024-10-15", "2024-10-15T12:00:00Z", etc.
         date_str = latest[:10]  # Take YYYY-MM-DD portion
@@ -509,7 +513,7 @@ def _is_stale(tech_name: str, classified_articles: list, cutoff_days: int = 180)
         cutoff = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
         return pub_date < cutoff
     except (ValueError, IndexError):
-        return False  # Unparseable date — don't filter
+        return True  # Unparseable date — treat as stale
 
 
 def _postprocess_radar(radar_items, radar_details, classified_articles,

@@ -160,6 +160,7 @@ async def _gather_articles_for_company(
     before = len(enriched)
     enriched = filter_articles_by_date(
         enriched, period_days, buffer_multiplier=1.5,
+        drop_undated=True,
         label=f"{company}/post-extract",
     )
     if len(enriched) < before:

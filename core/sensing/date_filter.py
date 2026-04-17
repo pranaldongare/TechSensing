@@ -93,6 +93,7 @@ def filter_articles_by_date(
     lookback_days: int,
     *,
     buffer_multiplier: float = 1.5,
+    drop_undated: bool = False,
     label: str = "",
 ) -> list:
     """Remove articles older than the allowed window.
@@ -100,7 +101,10 @@ def filter_articles_by_date(
     Works on any object with ``published_date``, ``title``, ``snippet`` and
     ``content`` attributes (e.g. ``RawArticle``).
 
-    Articles with NO extractable date are kept (benefit of doubt).
+    When ``drop_undated`` is *False* (default), articles with no extractable
+    date are kept.  Set ``drop_undated=True`` for post-extraction calls where
+    every reasonable attempt to determine the date has already been made (DDG
+    news dates + trafilatura metadata).
     """
     if lookback_days <= 0:
         return articles
@@ -111,6 +115,7 @@ def filter_articles_by_date(
     kept: list = []
     filtered = 0
     filtered_by_content = 0
+    dropped_undated = 0
 
     for a in articles:
         pub_dt = parse_iso_date(getattr(a, "published_date", "") or "")
@@ -122,6 +127,9 @@ def filter_articles_by_date(
             extracted_from_content = pub_dt is not None
 
         if pub_dt is None:
+            if drop_undated:
+                dropped_undated += 1
+                continue
             kept.append(a)
             continue
 
@@ -133,13 +141,18 @@ def filter_articles_by_date(
 
         kept.append(a)
 
-    if filtered:
+    if filtered or dropped_undated:
         prefix = f"[{label}] " if label else ""
-        logger.info(
-            f"{prefix}Date filter: removed {filtered} articles older than "
-            f"{int(lookback_days * buffer_multiplier)} days "
-            f"({filtered_by_content} via content-based date extraction)"
-        )
+        parts = []
+        if filtered:
+            parts.append(
+                f"removed {filtered} articles older than "
+                f"{int(lookback_days * buffer_multiplier)} days"
+                f" ({filtered_by_content} via content-based date extraction)"
+            )
+        if dropped_undated:
+            parts.append(f"dropped {dropped_undated} undated articles")
+        logger.info(f"{prefix}Date filter: {'; '.join(parts)}")
     return kept
 
 
@@ -150,6 +163,7 @@ def filter_findings_by_date(
     lookback_days: int,
     *,
     buffer_multiplier: float = 1.5,
+    drop_undated: bool = False,
     text_getter: Optional[Callable[[Any], str]] = None,
     date_getter: Optional[Callable[[Any], str]] = None,
     label: str = "",
@@ -159,7 +173,7 @@ def filter_findings_by_date(
     Iterates *findings* (any list of objects).  For each item:
     1. Try ``date_getter(item)`` → parse as ISO date.
     2. If no date, try ``text_getter(item)`` → extract date from text.
-    3. If no date at all, keep with benefit of doubt.
+    3. If still no date: drop when ``drop_undated=True``, keep otherwise.
 
     Items whose extracted date is older than ``lookback_days * buffer``
     are removed.
@@ -172,6 +186,7 @@ def filter_findings_by_date(
     )
     kept: list = []
     filtered = 0
+    dropped_undated = 0
 
     for item in findings:
         # Primary: explicit date field
@@ -184,6 +199,9 @@ def filter_findings_by_date(
             pub_dt = extract_date_from_text(text)
 
         if pub_dt is None:
+            if drop_undated:
+                dropped_undated += 1
+                continue
             kept.append(item)
             continue
 
@@ -193,10 +211,15 @@ def filter_findings_by_date(
 
         kept.append(item)
 
-    if filtered:
+    if filtered or dropped_undated:
         prefix = f"[{label}] " if label else ""
-        logger.info(
-            f"{prefix}Post-LLM date filter: removed {filtered} items older "
-            f"than {int(lookback_days * buffer_multiplier)} days"
-        )
+        parts = []
+        if filtered:
+            parts.append(
+                f"removed {filtered} items older than "
+                f"{int(lookback_days * buffer_multiplier)} days"
+            )
+        if dropped_undated:
+            parts.append(f"dropped {dropped_undated} undated items")
+        logger.info(f"{prefix}Post-LLM date filter: {'; '.join(parts)}")
     return kept
