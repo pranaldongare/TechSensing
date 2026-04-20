@@ -402,3 +402,7 @@ PROPRIETARY_LAB_QUERIES = [
     "Cohere new model release",
     "Mistral new model release",
 ]
+
+# Artificial Analysis API (Tier 2c) — covers both open and proprietary models
+# Free tier: 1000 req/day. Set ARTIFICIAL_ANALYSIS_API_KEY env var to enable.
+ARTIFICIAL_ANALYSIS_API_URL = "https://artificialanalysis.ai/api/v2"

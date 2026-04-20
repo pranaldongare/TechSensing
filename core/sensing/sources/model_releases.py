@@ -8,6 +8,7 @@ Tier 3 (Fallback): DDG search — only used when Tiers 1+2 yield very few result
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -16,6 +17,7 @@ import feedparser
 import httpx
 
 from core.sensing.config import (
+    ARTIFICIAL_ANALYSIS_API_URL,
     HF_KNOWN_ORGS,
     HF_MIN_DOWNLOADS,
     HF_MIN_LIKES,
@@ -526,6 +528,157 @@ async def search_proprietary_releases_ddg(
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Tier 2c: Artificial Analysis API (structured, covers open + proprietary)
+# ═══════════════════════════════════════════════════════════════════
+
+async def fetch_artificial_analysis_releases(
+    lookback_days: int = 30,
+    max_results: int = 25,
+) -> "List":
+    """Tier 2c: Fetch model data from Artificial Analysis API.
+
+    Returns ModelRelease objects for models tracked by artificialanalysis.ai.
+    Covers both open-weight and proprietary models with benchmark data.
+    Requires ARTIFICIAL_ANALYSIS_API_KEY env var; gracefully skips if unset.
+    """
+    from core.llm.output_schemas.sensing_outputs import ModelRelease
+
+    api_key = os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY", "")
+    if not api_key:
+        logger.debug("Artificial Analysis API key not set, skipping Tier 2c")
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    releases: list = []
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Fetch LLM models
+            resp = await client.get(
+                f"{ARTIFICIAL_ANALYSIS_API_URL}/data/llms/models",
+                headers={"x-api-key": api_key},
+            )
+            resp.raise_for_status()
+            models = resp.json()
+
+            if not isinstance(models, list):
+                logger.warning("Artificial Analysis API returned unexpected format")
+                return []
+
+            for model in models:
+                # Check release date within lookback window
+                release_date_str = model.get("release_date") or ""
+                if not release_date_str:
+                    continue
+                try:
+                    release_dt = datetime.fromisoformat(
+                        release_date_str.replace("Z", "+00:00")
+                    )
+                    if release_dt < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+
+                name = model.get("name", "")
+                if not name:
+                    continue
+
+                creator = model.get("model_creator", {})
+                org = creator.get("name", "") if isinstance(creator, dict) else ""
+
+                # Build notable features from available metrics
+                features_parts = []
+                evals = model.get("evaluations", {})
+                if isinstance(evals, dict):
+                    for key in ("intelligence_index", "mmlu_pro", "gpqa"):
+                        val = evals.get(key)
+                        if val:
+                            features_parts.append(f"{key}: {val}")
+
+                speed = model.get("median_output_tokens_per_second")
+                if speed:
+                    features_parts.append(f"{speed} tok/s")
+
+                releases.append(ModelRelease(
+                    model_name=name,
+                    organization=org,
+                    release_date=release_dt.strftime("%Y-%m-%d"),
+                    release_status="Released",
+                    parameters="",
+                    license="",
+                    is_open_source="",  # AA tracks both
+                    model_type="",
+                    modality="Text",
+                    notable_features="; ".join(features_parts)[:200],
+                    source_url=f"https://artificialanalysis.ai/models/{model.get('slug', '')}",
+                ))
+
+            # Also fetch media models (text-to-image, video, etc.)
+            for endpoint, modality in [
+                ("/data/media/text-to-image", "Image"),
+                ("/data/media/text-to-video", "Video"),
+                ("/data/media/text-to-speech", "Speech"),
+            ]:
+                try:
+                    media_resp = await client.get(
+                        f"{ARTIFICIAL_ANALYSIS_API_URL}{endpoint}",
+                        headers={"x-api-key": api_key},
+                    )
+                    if media_resp.status_code != 200:
+                        continue
+                    media_models = media_resp.json()
+                    if not isinstance(media_models, list):
+                        continue
+
+                    for mm in media_models:
+                        rd = mm.get("release_date") or ""
+                        if not rd:
+                            continue
+                        try:
+                            rdt = datetime.fromisoformat(rd.replace("Z", "+00:00"))
+                            if rdt < cutoff:
+                                continue
+                        except (ValueError, TypeError):
+                            continue
+
+                        mm_name = mm.get("name", "")
+                        if not mm_name:
+                            continue
+                        mm_creator = mm.get("model_creator", {})
+                        mm_org = mm_creator.get("name", "") if isinstance(mm_creator, dict) else ""
+
+                        releases.append(ModelRelease(
+                            model_name=mm_name,
+                            organization=mm_org,
+                            release_date=rdt.strftime("%Y-%m-%d"),
+                            release_status="Released",
+                            parameters="",
+                            license="",
+                            is_open_source="",
+                            model_type="",
+                            modality=modality,
+                            notable_features="",
+                            source_url=f"https://artificialanalysis.ai/models/{mm.get('slug', '')}",
+                        ))
+                except Exception:
+                    continue
+
+        logger.info(
+            f"Artificial Analysis: {len(releases)} models in last {lookback_days} days"
+        )
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            logger.warning("Artificial Analysis API key invalid (401)")
+        else:
+            logger.warning(f"Artificial Analysis API error: {e}")
+    except Exception as e:
+        logger.warning(f"Artificial Analysis fetch failed: {e}")
+
+    return releases[:max_results]
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Tier 3: DDG Fallback (existing approach, demoted)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -577,7 +730,7 @@ async def search_model_releases_ddg(
 # ═══════════════════════════════════════════════════════════════════
 
 async def get_model_releases(lookback_days: int = 30) -> "List":
-    """Unified model release sourcing: HF API + major lab blogs + DDG fallback.
+    """Unified model release sourcing: HF + blogs + Artificial Analysis + DDG.
 
     Returns List[ModelRelease] — import is deferred to avoid circular imports.
     """
@@ -670,6 +823,12 @@ async def get_model_releases(lookback_days: int = 30) -> "List":
 
     if prop_count:
         logger.info(f"Tier 2b (Proprietary DDG): {prop_count} releases")
+
+    # Tier 2c: Artificial Analysis API (structured, both open + proprietary)
+    aa_releases = await fetch_artificial_analysis_releases(lookback_days)
+    if aa_releases:
+        all_releases.extend(aa_releases)
+        logger.info(f"Tier 2c (Artificial Analysis): {len(aa_releases)} releases")
 
     # Tier 3: Generic DDG fallback (only if all above yield very few)
     if len(all_releases) < 3:
