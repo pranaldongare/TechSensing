@@ -366,3 +366,206 @@ async def extract_model_releases(
     except Exception as e:
         logger.warning(f"Model release extraction failed: {e}")
         return []
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tier 1: Direct HuggingFace → ModelRelease conversion (no LLM)
+# ═══════════════════════════════════════════════════════════════════
+
+def build_releases_from_hf(hf_models: List[dict]) -> List[ModelRelease]:
+    """Convert HuggingFace API model dicts directly to ModelRelease objects.
+
+    No LLM needed — structured API data maps directly to schema fields.
+    """
+    from core.sensing.sources.model_releases import (
+        _HF_PIPELINE_TO_MODALITY,
+        _extract_license_from_tags,
+        _extract_model_type_from_tags,
+        _extract_params_from_tags,
+    )
+
+    releases: List[ModelRelease] = []
+
+    for model in hf_models:
+        model_id = model.get("modelId") or model.get("id", "")
+        if not model_id:
+            continue
+
+        # Parse author/org from model_id (format: "org/model-name")
+        org = model_id.split("/")[0] if "/" in model_id else "Unknown"
+
+        tags = model.get("tags", [])
+        pipeline_tag = model.get("pipeline_tag", "")
+        downloads = model.get("downloads", 0) or 0
+        likes = model.get("likes", 0) or 0
+
+        # Extract release date from createdAt
+        created = model.get("createdAt", "")
+        release_date = ""
+        if created:
+            try:
+                dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                release_date = dt.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                pass
+
+        # Map fields
+        modality = _HF_PIPELINE_TO_MODALITY.get(pipeline_tag, "Other")
+        parameters = _extract_params_from_tags(tags, model_id)
+        license_text = _extract_license_from_tags(tags)
+        model_type = _extract_model_type_from_tags(tags)
+
+        # Build notable features summary
+        features_parts = []
+        if pipeline_tag:
+            features_parts.append(pipeline_tag.replace("-", " "))
+        if downloads >= 1000:
+            features_parts.append(f"{downloads:,} downloads")
+        if likes >= 10:
+            features_parts.append(f"{likes} likes")
+        # Add a few interesting tags (skip generic ones)
+        _skip_tags = {"transformers", "pytorch", "safetensors", "en", "text-generation"}
+        interesting_tags = [
+            t for t in tags[:8]
+            if t.lower() not in _skip_tags
+            and not t.startswith("license")
+            and not _extract_params_from_tags([t])
+        ]
+        if interesting_tags:
+            features_parts.append(", ".join(interesting_tags[:3]))
+
+        releases.append(
+            ModelRelease(
+                model_name=model_id,
+                organization=org,
+                release_date=release_date,
+                release_status="Released",
+                parameters=parameters,
+                license=license_text,
+                is_open_source="Open",
+                model_type=model_type,
+                modality=modality,
+                notable_features=". ".join(features_parts) if features_parts else "",
+                source_url=f"https://huggingface.co/{model_id}",
+            )
+        )
+
+    logger.info(f"Built {len(releases)} ModelRelease entries from HuggingFace data")
+    return releases
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Tier 2: Blog articles → ModelRelease via LLM (stricter extraction)
+# ═══════════════════════════════════════════════════════════════════
+
+async def extract_releases_from_blogs(
+    articles: List[RawArticle],
+    lookback_days: int = 30,
+) -> List[ModelRelease]:
+    """Extract model releases from major AI lab blog articles via LLM.
+
+    Similar to extract_model_releases() but with a stricter prompt since
+    these are curated blog posts from known labs.
+    """
+    if not articles:
+        return []
+
+    articles_json = json.dumps(
+        [
+            {
+                "title": a.title,
+                "source": a.source,
+                "url": a.url,
+                "snippet": a.snippet,
+                "published_date": a.published_date,
+            }
+            for a in articles
+            if a.title
+        ][:15],
+        indent=2,
+        ensure_ascii=False,
+    )
+
+    schema_json = json.dumps(
+        ModelReleasesOutput.model_json_schema(), indent=2
+    )
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    prompt = [
+        {
+            "role": "system",
+            "parts": (
+                "You are an AI model release tracker. You are given blog posts "
+                "from official AI lab blogs (OpenAI, Anthropic, Google, etc.). "
+                "Extract ONLY entries where a NEW MODEL is being released or "
+                "announced. Do NOT extract entries about product features, "
+                "safety research, partnerships, or general company news.\n\n"
+                f"TODAY IS {today_str}.\n\n"
+                "For each genuine model release/announcement, extract:\n"
+                "- model_name: Official model name\n"
+                "- organization: The lab releasing it\n"
+                "- release_date: From the blog post date (YYYY-MM-DD)\n"
+                "- release_status: 'Released' if available now, "
+                "'Announced' if coming soon\n"
+                "- parameters: If mentioned\n"
+                "- license: If mentioned\n"
+                "- is_open_source: 'Open', 'Closed', 'Mixed', or 'Unknown'\n"
+                "- model_type: Architecture if mentioned\n"
+                "- modality: Primary modality\n"
+                "- notable_features: 1-2 sentence summary\n"
+                "- source_url: The blog post URL\n\n"
+                "CRITICAL: Only extract if a SPECIFIC MODEL NAME is mentioned "
+                "and it is being RELEASED or ANNOUNCED. Skip posts about "
+                "research, safety, policy, features, or general updates.\n\n"
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n\n"
+                "Return ONLY valid JSON matching the schema. "
+                "If no model releases found, return {\"model_releases\": []}.\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"BLOG POSTS:\n\n{articles_json}\n\n"
+                "Extract model releases. Return ONLY valid JSON."
+            ),
+        },
+    ]
+
+    try:
+        result = await invoke_llm(
+            gpu_model=GPU_SENSING_REPORT_LLM.model,
+            response_schema=ModelReleasesOutput,
+            contents=prompt,
+            port=GPU_SENSING_REPORT_LLM.port,
+        )
+        validated = ModelReleasesOutput.model_validate(result)
+
+        # Apply same normalization as the main extractor
+        now_dt = datetime.now(timezone.utc)
+        releases: List[ModelRelease] = []
+
+        for m in validated.model_releases:
+            if not m.model_name.strip():
+                continue
+
+            release_dt = _parse_release_date(m.release_date)
+            if release_dt:
+                m.release_date = release_dt.strftime("%Y-%m-%d")
+
+            m.is_open_source = _normalize_open_source(m.is_open_source, m.license)
+            m.modality = _normalize_modality(m.modality)
+            m.release_status = _normalize_release_status(
+                m.release_status, release_dt, now_dt
+            )
+            releases.append(m)
+
+        logger.info(
+            f"Blog extraction: {len(releases)} releases "
+            f"from {len(articles)} blog posts"
+        )
+        return releases
+
+    except Exception as e:
+        logger.warning(f"Blog model release extraction failed: {e}")
+        return []

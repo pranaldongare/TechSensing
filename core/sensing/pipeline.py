@@ -517,16 +517,11 @@ async def run_sensing_pipeline(
         logger.info(f"Searching for model releases... [{_elapsed()}]")
         await _emit("model_releases", 99, "Finding recent model releases...")
         try:
-            from core.sensing.sources.model_releases import search_model_releases
-            from core.sensing.model_release_extractor import extract_model_releases
+            from core.sensing.sources.model_releases import get_model_releases
 
-            mr_articles = await search_model_releases(lookback_days=lookback_days)
-            if mr_articles:
-                releases = await extract_model_releases(mr_articles, lookback_days=lookback_days)
-                report.model_releases = releases
-                logger.info(f"Model releases: {len(releases)} found [{_elapsed()}]")
-            else:
-                report.model_releases = []
+            releases = await get_model_releases(lookback_days=lookback_days)
+            report.model_releases = releases
+            logger.info(f"Model releases: {len(releases)} found [{_elapsed()}]")
         except Exception as e:
             logger.warning(f"Model releases extraction failed (non-fatal): {e}")
             report.model_releases = []
@@ -1306,16 +1301,11 @@ async def run_sensing_pipeline_from_document(
         logger.info(f"Searching for model releases... [{_elapsed()}]")
         await _emit("model_releases", 99, "Finding recent model releases...")
         try:
-            from core.sensing.sources.model_releases import search_model_releases
-            from core.sensing.model_release_extractor import extract_model_releases
+            from core.sensing.sources.model_releases import get_model_releases
 
-            mr_articles = await search_model_releases(lookback_days=lookback_days)
-            if mr_articles:
-                releases = await extract_model_releases(mr_articles, lookback_days=lookback_days)
-                report.model_releases = releases
-                logger.info(f"Model releases: {len(releases)} found [{_elapsed()}]")
-            else:
-                report.model_releases = []
+            releases = await get_model_releases(lookback_days=lookback_days)
+            report.model_releases = releases
+            logger.info(f"Model releases: {len(releases)} found [{_elapsed()}]")
         except Exception as e:
             logger.warning(f"Model releases extraction failed (non-fatal): {e}")
             report.model_releases = []

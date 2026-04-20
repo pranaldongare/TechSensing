@@ -2254,3 +2254,52 @@ async def export_to_linear(body: LinearExportBody, request: Request):
         content={"created": created, "errors": errors},
         status_code=200 if not errors else 207,
     )
+
+
+# --- Model Releases (standalone) ---
+
+
+class ModelReleasesRequest(BaseModel):
+    lookback_days: int = Field(
+        default=30,
+        description="How many days to look back for model releases (1-90).",
+        ge=1,
+        le=90,
+    )
+
+
+@router.post("/model-releases")
+async def get_latest_model_releases(
+    request: Request,
+    body: ModelReleasesRequest = Body(...),
+):
+    """Fetch latest model releases without running the full pipeline.
+
+    Uses the 3-tier sourcing strategy:
+      Tier 1: HuggingFace Hub API (open-weight models)
+      Tier 2: Major AI lab blog RSS (proprietary models)
+      Tier 3: DDG fallback (only if Tiers 1+2 yield <3 results)
+    """
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    try:
+        from core.sensing.sources.model_releases import get_model_releases
+
+        releases = await get_model_releases(lookback_days=body.lookback_days)
+
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "lookback_days": body.lookback_days,
+                "count": len(releases),
+                "model_releases": [r.model_dump() for r in releases],
+            }
+        )
+    except Exception as e:
+        logger.warning(f"Model releases standalone fetch failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Model releases fetch failed: {str(e)}",
+        )

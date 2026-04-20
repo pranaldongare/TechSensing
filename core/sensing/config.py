@@ -358,3 +358,36 @@ def get_preset_for_domain(domain: str) -> DomainPreset:
         if keyword in domain_lower:
             return preset
     return _GENERIC_PRESET
+
+
+# ── Model Releases: Structured Source Configuration ──
+
+# HuggingFace Hub API — significance thresholds to filter out noise
+HF_MIN_DOWNLOADS = 1000
+HF_MIN_LIKES = 50
+HF_KNOWN_ORGS = [
+    "meta-llama", "google", "microsoft", "mistralai", "Qwen",
+    "deepseek-ai", "stabilityai", "alibaba-nlp", "THUDM",
+    "01-ai", "tiiuae", "nvidia", "apple", "CohereForAI",
+    "HuggingFaceH4", "bigscience", "EleutherAI", "allenai",
+    "mosaicml", "databricks", "xai-org", "anthropics",
+    "black-forest-labs", "ByteDance", "internlm", "Open-Orca",
+    "NousResearch", "teknium", "lmsys", "BAAI",
+]
+
+# Major AI lab blogs — for proprietary/API-only model announcements
+MAJOR_LAB_BLOG_FEEDS = {
+    "OpenAI": "https://openai.com/blog/rss.xml",
+    "Anthropic": "https://www.anthropic.com/rss.xml",
+    "Google AI": "https://blog.google/technology/ai/rss/",
+    "DeepMind": "https://deepmind.google/blog/rss.xml",
+    "Cohere": "https://cohere.com/blog/rss.xml",
+    "Mistral": "https://mistral.ai/feed.xml",
+}
+
+# Keywords in blog titles that indicate a model announcement
+MODEL_ANNOUNCEMENT_KEYWORDS = [
+    "introducing", "announcing", "launch", "release", "new model",
+    "now available", "open source", "open weight", "meet ",
+    "presenting", "unveiling",
+]
