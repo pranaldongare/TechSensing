@@ -54,6 +54,7 @@ import SensingCollaboration from '@/components/SensingCollaboration';
 import CompanyAnalysisView from '@/components/CompanyAnalysisView';
 import LIRCandidateFeed from '@/components/LIRCandidateFeed';
 import LIRBacktestViewer from '@/components/LIRBacktestViewer';
+import ModelReleasesView from '@/components/ModelReleasesView';
 import { toast } from '@/components/ui/use-toast';
 import type { DeepDiveReport, DeepDiveHistoryItem, SharedReport } from '@/lib/api';
 import { downloadSensingReportPdf } from '@/lib/sensing-report-pdf';
@@ -667,6 +668,7 @@ const TechSensing: React.FC = () => {
               <TabsTrigger value="compare" disabled={history.length < 2}>Compare</TabsTrigger>
               <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
               <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
+              <TabsTrigger value="model-releases">Model Releases</TabsTrigger>
               <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
             </TabsList>
           </div>
@@ -739,6 +741,9 @@ const TechSensing: React.FC = () => {
               domain={reportData?.report?.domain}
               radarItems={reportData?.report?.radar_items || []}
             />
+          </TabsContent>
+          <TabsContent value="model-releases" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
+            <ModelReleasesView initialReleases={reportData?.report?.model_releases} />
           </TabsContent>
           <TabsContent value="leading-indicators" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
             <LIRCandidateFeed />
@@ -1333,6 +1338,9 @@ const TechSensing: React.FC = () => {
               radarItems={reportData?.report?.radar_items || []}
             />
           )}
+        </TabsContent>
+        <TabsContent value="model-releases" className="flex-1 min-h-0 mt-2 overflow-auto">
+          <ModelReleasesView initialReleases={reportData?.report?.model_releases} />
         </TabsContent>
         <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
           <LIRCandidateFeed />

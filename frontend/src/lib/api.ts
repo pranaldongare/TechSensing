@@ -1236,6 +1236,26 @@ export const api = {
     return data;
   },
 
+  async sensingModelReleases(lookbackDays: number = 30): Promise<{
+    status: string;
+    lookback_days: number;
+    count: number;
+    model_releases: ModelRelease[];
+  }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/model-releases`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ lookback_days: lookbackDays }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to fetch model releases');
+    return data;
+  },
+
   async sensingKeyCompaniesStart(body: {
     company_names: string[];
     highlight_domain?: string;

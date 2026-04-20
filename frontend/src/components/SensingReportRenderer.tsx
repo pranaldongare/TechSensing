@@ -6,8 +6,9 @@ import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play, Zap,
-  ThumbsUp, ThumbsDown,
+  ThumbsUp, ThumbsDown, RefreshCw, Loader2,
 } from 'lucide-react';
+import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, WeakSignal, TopicPreferences, ModelRelease,
@@ -373,10 +374,13 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
         {/* Latest Model Releases (GenAI domains only) */}
         {report.model_releases && report.model_releases.length > 0 && (
           <div className="space-y-3">
-            <h3 className="text-lg font-semibold flex items-center gap-2">
-              <Cpu className="w-5 h-5 text-purple-600" />
-              Latest Model Releases ({report.model_releases.length})
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Cpu className="w-5 h-5 text-purple-600" />
+                Latest Model Releases ({report.model_releases.length})
+              </h3>
+              <RefreshModelReleasesButton onRefresh={(releases) => { report.model_releases = releases; }} />
+            </div>
             <p className="text-sm text-muted-foreground -mt-1">
               Recent AI model announcements and releases.
             </p>
@@ -824,5 +828,33 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
     </ScrollArea>
   );
 };
+
+function RefreshModelReleasesButton({ onRefresh }: { onRefresh: (releases: ModelRelease[]) => void }) {
+  const [loading, setLoading] = useState(false);
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      const result = await api.sensingModelReleases(30);
+      onRefresh(result.model_releases);
+    } catch {
+      // silent fail — user can retry
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleRefresh}
+      disabled={loading}
+      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+      title="Refresh model releases from HuggingFace + blogs"
+    >
+      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+      {loading ? 'Refreshing...' : 'Refresh'}
+    </button>
+  );
+}
 
 export default SensingReportRenderer;
