@@ -19,7 +19,11 @@ from core.sensing.config import (
     get_feeds_for_domain,
     get_search_queries_for_domain,
 )
-from core.sensing.date_filter import title_mentions_old_year
+from core.sensing.date_filter import (
+    extract_date_from_text,
+    parse_iso_date,
+    title_mentions_old_year,
+)
 
 logger = logging.getLogger("sensing.ingest")
 
@@ -236,7 +240,6 @@ async def extract_full_text(article: RawArticle) -> RawArticle:
                     # Cross-validate: prefer the OLDER of the two dates
                     # because aggregators assign fresh dates to old content.
                     try:
-                        from core.sensing.date_filter import parse_iso_date
                         source_dt = parse_iso_date(article.published_date)
                         page_dt = parse_iso_date(page_date)
                         if source_dt and page_dt:
@@ -248,6 +251,24 @@ async def extract_full_text(article: RawArticle) -> RawArticle:
                                     f"— using page date"
                                 )
                                 article.published_date = page_date
+                    except Exception:
+                        pass
+                elif article.published_date and not page_date and text:
+                    # trafilatura found no metadata date.  Cross-validate
+                    # the source date against dates mentioned in the
+                    # extracted text itself (first 500 chars).
+                    try:
+                        source_dt = parse_iso_date(article.published_date)
+                        text_dt = extract_date_from_text(text[:500])
+                        if source_dt and text_dt:
+                            diff = abs((source_dt - text_dt).days)
+                            if diff > 180 and text_dt < source_dt:
+                                logger.debug(
+                                    f"[extract] Content date disagrees for "
+                                    f"{article.title[:60]}: source={article.published_date}, "
+                                    f"text={text_dt.date()} — using text date"
+                                )
+                                article.published_date = text_dt.strftime("%Y-%m-%d")
                     except Exception:
                         pass
 

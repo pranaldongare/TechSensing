@@ -318,6 +318,27 @@ async def run_sensing_pipeline(
             f"(classified: {before_recon} -> {len(classified)})"
         )
 
+    # Post-extraction hard date filter: trafilatura may have corrected
+    # published_date to the real (old) page date.  Re-apply the lookback
+    # cutoff now that dates are accurate.  Drop undated articles too —
+    # every reasonable extraction attempt has already been made.
+    before_hard = len(enriched)
+    enriched = filter_articles_by_date(
+        enriched, lookback_days,
+        buffer_multiplier=1.5,
+        drop_undated=True,
+        label="pipeline-post-extract-hard",
+    )
+    if len(enriched) < before_hard:
+        enriched_urls = {a.url for a in enriched}
+        before_cls = len(classified)
+        classified = [c for c in classified if c.url in enriched_urls]
+        logger.info(
+            f"[Stage 4/7] Hard date filter: "
+            f"{before_hard} -> {len(enriched)} enriched, "
+            f"{before_cls} -> {len(classified)} classified"
+        )
+
     # Build URL→content excerpt map so report LLM gets real article text
     url_content_map = {
         a.url: (a.content or "")[:800]
@@ -1119,6 +1140,24 @@ async def run_sensing_pipeline_from_document(
         logger.info(
             f"[Stage 7/9] Date reconciliation: removed {reconciled_removed} stale articles "
             f"(classified: {before_recon} -> {len(classified)})"
+        )
+
+    # Post-extraction hard date filter (same as normal pipeline)
+    before_hard = len(enriched)
+    enriched = filter_articles_by_date(
+        enriched, lookback_days,
+        buffer_multiplier=1.5,
+        drop_undated=True,
+        label="doc-pipeline-post-extract-hard",
+    )
+    if len(enriched) < before_hard:
+        enriched_urls = {a.url for a in enriched}
+        before_cls = len(classified)
+        classified = [c for c in classified if c.url in enriched_urls]
+        logger.info(
+            f"[Stage 7/9] Hard date filter: "
+            f"{before_hard} -> {len(enriched)} enriched, "
+            f"{before_cls} -> {len(classified)} classified"
         )
 
     # Build URL→content excerpt map for report grounding

@@ -2,6 +2,77 @@ from datetime import datetime, timezone
 
 from core.llm.prompts.shared import tense_rules_block
 
+
+def _stale_years_str() -> str:
+    """Return comma-separated list of years that are considered stale.
+
+    Everything from 2020 through the previous calendar year is stale for
+    a weekly tech sensing report.  This keeps the prompt evergreen
+    instead of relying on hardcoded year lists.
+    """
+    current_year = datetime.now(timezone.utc).year
+    return ", ".join(str(y) for y in range(2020, current_year))
+
+
+def _recency_block_classify(date_range: str) -> str:
+    """Build the RECENCY RULES block for the classifier prompt."""
+    now = datetime.now(timezone.utc)
+    today_str = now.strftime("%B %d, %Y")
+    stale = _stale_years_str()
+    return (
+        f"RECENCY RULES (CRITICAL — READ CAREFULLY):\n"
+        f"- The target date range is: {date_range}.\n"
+        f"- Today's date is: {today_str}.\n"
+        "- Articles published MORE THAN 6 months before today should "
+        "receive relevance_score < 0.2.\n"
+        "- STALE RE-SYNDICATION DETECTION: News aggregators (Google News, "
+        "DuckDuckGo) frequently re-surface old articles with new dates. "
+        "You MUST detect this.  If an article describes a product launch, "
+        "announcement, model release, or event from a PREVIOUS YEAR "
+        f"({stale}), it is OLD NEWS regardless of the 'Date' field "
+        "shown above — score it 0.0.\n"
+        "- EXAMPLES of stale content to reject (score 0.0):\n"
+        "  * Product launches from any year before the current year\n"
+        "  * 'Sora is here' (OpenAI Sora launched Dec 2024 — old)\n"
+        "  * 'Gemma 3 release' (Google Gemma 3 launched Mar 2025 — old)\n"
+        "  * 'Wan 2.1' (Alibaba Wan 2.1 released Feb 2025 — old)\n"
+        "  * Any article whose core subject is a product/event from >6 months ago\n"
+        "  * Comparison articles about older models (e.g. 'Llama 3 vs GPT-4')\n"
+        "- If the article's Date field says 'Unknown' or looks recent but the "
+        "CONTENT clearly describes an old event, trust the CONTENT over the "
+        "date field.\n"
+        "- Prioritize articles about developments from the last 1-3 months.\n"
+        "- For published_date: output the ACTUAL publication date from the "
+        "content, NOT the aggregator date. If the article is about a 2024 "
+        "event, output '2024-...' even if the source says 2026.\n\n"
+    )
+
+
+def _recency_block_report() -> str:
+    """Build the RECENCY ENFORCEMENT block for report-phase prompts."""
+    now = datetime.now(timezone.utc)
+    today_str = now.strftime("%B %d, %Y")
+    stale = _stale_years_str()
+    return (
+        "RECENCY ENFORCEMENT (CRITICAL):\n"
+        f"- Today is {today_str}.\n"
+        "- Focus ONLY on developments from the DATE RANGE specified below.\n"
+        "- Do NOT feature technologies or events that occurred BEFORE the "
+        "date range as if they are current news. This is the #1 quality "
+        "issue to avoid.\n"
+        "- STALE CONTENT CHECK: If an article describes a product launch, "
+        "model release, processor unveiling, partnership announcement, or "
+        "research paper from a PREVIOUS YEAR "
+        f"({stale}), it is OLD regardless of its 'published_date'. "
+        "Do NOT create headline_moves or key_trends for old events.\n"
+        "- If an article mentions an older product/technology as context "
+        "or comparison, do NOT create a headline_move or key_trend for "
+        "it — only for NEW developments.\n"
+        "- Old product launches, discontinued products, legacy models, "
+        "and legacy technologies should not appear as headline moves, "
+        "trends, or radar items.\n\n"
+    )
+
 _DEFAULT_QUADRANT_DEFS = (
     "QUADRANT DEFINITIONS:\n"
     "- Techniques: Processes, methodologies, architectural patterns\n"
@@ -90,29 +161,7 @@ def sensing_classify_prompt(
                 f"it specifically discusses their work on '{domain}' technologies.\n"
                 "- When in doubt, prefer EXCLUDING over INCLUDING. It is better to have "
                 "a focused report with fewer items than a diluted report with off-topic noise.\n\n"
-                + (
-                    f"RECENCY RULES (CRITICAL — READ CAREFULLY):\n"
-                    f"- The target date range is: {date_range}.\n"
-                    f"- Today's date is: {datetime.now(timezone.utc).strftime('%B %d, %Y')}.\n"
-                    "- Articles published MORE THAN 6 months before today should "
-                    "receive relevance_score < 0.2.\n"
-                    "- STALE RE-SYNDICATION DETECTION: News aggregators (Google News, DuckDuckGo) "
-                    "frequently re-surface old articles with new dates. You MUST detect this. "
-                    "If an article describes a product launch, announcement, or event from a "
-                    "PREVIOUS YEAR (e.g. 2022, 2023, 2024, early 2025), it is OLD NEWS "
-                    "regardless of the 'Date' field shown above — score it 0.0.\n"
-                    "- EXAMPLES of stale content to reject (score 0.0):\n"
-                    "  * 'IBM unveils 433-qubit Osprey processor' (Nov 2022 launch)\n"
-                    "  * 'Google achieves quantum advantage with Willow chip' (old announcement)\n"
-                    "  * Any article whose core subject is a product/event from >6 months ago\n"
-                    "- If the article's Date field says 'Unknown' or looks recent but the CONTENT "
-                    "clearly describes an old event, trust the CONTENT over the date field.\n"
-                    "- Prioritize articles about developments from the last 1-3 months.\n"
-                    "- For published_date: output the ACTUAL publication date from the content, "
-                    "NOT the aggregator date. If the article is about a 2022 event, output '2022-...' "
-                    "even if the source says 2026.\n\n"
-                    if date_range else ""
-                )
+                + (_recency_block_classify(date_range) if date_range else "")
                 + _quadrant_definitions_block(custom_quadrant_names)
                 + "RING DEFINITIONS:\n"
                 "- Adopt: Proven technology, recommend for wide use\n"
@@ -209,19 +258,7 @@ def sensing_report_core_prompt(
                 "- Use article URLs to populate source_urls arrays (1-5 per entry).\n"
                 "- If an article includes a 'content_excerpt' field, use it for deeper context.\n"
                 "- Do NOT fabricate information not present in the articles.\n\n"
-                "RECENCY ENFORCEMENT (CRITICAL):\n"
-                f"- Today is {datetime.now(timezone.utc).strftime('%B %d, %Y')}.\n"
-                "- Focus ONLY on developments from the DATE RANGE specified below.\n"
-                "- Do NOT feature technologies or events that occurred BEFORE the date range "
-                "as if they are current news. This is the #1 quality issue to avoid.\n"
-                "- STALE CONTENT CHECK: If an article describes a product launch, processor "
-                "unveiling, partnership announcement, or research paper from a PREVIOUS YEAR "
-                "(2022, 2023, 2024, or early 2025), it is OLD regardless of its 'published_date'. "
-                "Do NOT create headline_moves or key_trends for old events.\n"
-                "- If an article mentions an older product/technology as context or comparison, "
-                "do NOT create a headline_move or key_trend for it — only for NEW developments.\n"
-                "- Old product launches, discontinued products, and legacy technologies "
-                "should not appear as headline moves or trends.\n\n"
+                + _recency_block_report()
                 + tense_rules_block()
                 + (
                     f"ADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n\n"
@@ -295,10 +332,15 @@ def sensing_report_radar_prompt(
                 f"- Today is {datetime.now(timezone.utc).strftime('%B %d, %Y')}.\n"
                 "- ONLY include technologies that are NEW or have been SIGNIFICANTLY UPDATED "
                 "within the last 6 months.\n"
-                "- STALE CONTENT: If an article describes a product launch or announcement from "
-                "a previous year (2022, 2023, 2024), that is OLD NEWS — do NOT create a radar "
-                "item for it. The article's date field may be misleading (aggregators re-syndicate "
-                "old content with new dates). Trust the CONTENT over the date.\n"
+                f"- STALE CONTENT: If an article describes a product launch, model release, "
+                f"or announcement from a previous year ({_stale_years_str()}), that is OLD "
+                "NEWS — do NOT create a radar item for it. The article's date field may be "
+                "misleading (aggregators re-syndicate old content with new dates). Trust "
+                "the CONTENT over the date.\n"
+                "- EXAMPLES of stale content that must NOT become radar items:\n"
+                "  * OpenAI Sora (launched Dec 2024), Gemma 3 (Mar 2025), Wan 2.1 (Feb 2025)\n"
+                "  * Any model or product whose initial release was >6 months ago\n"
+                "  * Comparison articles about older models (e.g. 'Llama 3 vs GPT-4')\n"
                 "- Do NOT create radar items for legacy or well-established technologies "
                 "that are merely MENTIONED in articles as historical context, comparison, "
                 "or background.\n"
@@ -406,16 +448,21 @@ def sensing_report_insights_prompt(
                 "RECENCY ENFORCEMENT (CRITICAL):\n"
                 f"- Today is {datetime.now(timezone.utc).strftime('%B %d, %Y')}.\n"
                 "- Focus ONLY on developments from the DATE RANGE. Do not feature old events as current.\n"
-                "- STALE CONTENT: Articles from news aggregators sometimes describe events from "
-                "2022-2024 with misleading recent dates. If the content describes an old "
-                "product launch, announcement, or event, do NOT include it in market signals, "
-                "sections, or recommendations.\n"
-                "- Old product launches, discontinued products, and legacy technologies "
-                "should not appear in market signals, sections, or recommendations.\n\n"
+                f"- STALE CONTENT: Articles from news aggregators sometimes describe events from "
+                f"{_stale_years_str()} with misleading recent dates. If the content describes "
+                "an old product launch, model release, announcement, or event, do NOT include "
+                "it in market signals, sections, or recommendations.\n"
+                "- Old product launches, discontinued products, legacy models, and legacy "
+                "technologies should not appear in market signals, sections, or recommendations.\n\n"
                 + tense_rules_block()
                 + "ATTRIBUTION ACCURACY RULES:\n"
                 "- Distinguish between research authors and implementation authors.\n"
                 "- For market_signals: The company_or_player must be the entity that TOOK THE ACTION.\n"
+                "- If a company's blog post MENTIONS or REFERENCES an external open-source project "
+                "or third-party technology, do NOT attribute that technology to the company. "
+                "The company is referencing it, not announcing it. Only attribute a technology "
+                "to a company if the article clearly states the company CREATED, DEVELOPED, "
+                "or RELEASED it.\n"
                 "- If the articles don't clearly state who built something, say so.\n\n"
                 + (
                     f"ADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n\n"
