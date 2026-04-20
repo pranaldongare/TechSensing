@@ -391,3 +391,14 @@ MODEL_ANNOUNCEMENT_KEYWORDS = [
     "now available", "open source", "open weight", "meet ",
     "presenting", "unveiling",
 ]
+
+# Targeted search queries for proprietary/API-only models (Tier 2b)
+# These labs don't publish weights on HuggingFace, so we need DDG to find them.
+PROPRIETARY_LAB_QUERIES = [
+    "OpenAI new model release",
+    "Anthropic Claude new model release",
+    "Google Gemini new model release",
+    "xAI Grok new model release",
+    "Cohere new model release",
+    "Mistral new model release",
+]

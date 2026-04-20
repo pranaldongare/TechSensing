@@ -21,6 +21,7 @@ from core.sensing.config import (
     HF_MIN_LIKES,
     MAJOR_LAB_BLOG_FEEDS,
     MODEL_ANNOUNCEMENT_KEYWORDS,
+    PROPRIETARY_LAB_QUERIES,
 )
 from core.sensing.date_filter import filter_articles_by_date
 from core.sensing.ingest import RawArticle, search_duckduckgo
@@ -277,7 +278,7 @@ async def fetch_huggingface_releases(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Tier 2: Major Lab Blog RSS
+# Tier 2: Proprietary model detection (blogs + targeted DDG)
 # ═══════════════════════════════════════════════════════════════════
 
 def _is_model_announcement(title: str) -> bool:
@@ -286,10 +287,170 @@ def _is_model_announcement(title: str) -> bool:
     return any(kw in title_lower for kw in MODEL_ANNOUNCEMENT_KEYWORDS)
 
 
+# Regex patterns for extracting model names from blog/article titles
+_TITLE_MODEL_PATTERNS = [
+    # "Introducing Claude 4.7", "Announcing GPT-Rosalind", "Meet Gemini 2.5 Flash"
+    re.compile(
+        r"(?:introducing|announcing|meet|presenting|unveiling)\s+"
+        r"([A-Z][A-Za-z]*(?:[-\s][\w.]+){1,3})",
+        re.IGNORECASE,
+    ),
+    # "Claude 4.7 is now available", "GPT-5.4-Cyber release",
+    # "Mistral-Large-2 launch"
+    re.compile(
+        r"((?:Claude|GPT|Gemini|Grok|Command|Mistral|Llama|Phi|Copilot|Qwen)"
+        r"(?:[-\s][\w.]+){1,3})",
+        re.IGNORECASE,
+    ),
+]
+
+# Stop words that signal end of model name
+_NAME_STOP_WORDS = {
+    "is", "are", "was", "for", "the", "a", "an", "and", "or", "with",
+    "now", "has", "have", "can", "will", "our", "your", "this", "that",
+    "release", "released", "releases", "launch", "launched", "launches",
+    "available", "here",
+    "brings", "powers", "enables", "hits", "reaches", "gets", "adds",
+    "api", "sdk", "users", "update", "updates", "review", "pricing",
+    "features", "vs", "compared", "benchmark", "benchmarks",
+    "announcement", "announced", "latest", "new", "ai", "code",
+    "multi-agent", "multimodal", "model", "beta", "alpha", "preview",
+}
+
+# Names that look like model names but aren't actual model releases
+_FALSE_POSITIVE_NAMES = {
+    "claude code", "gemini ai", "gemini api", "gpt store",
+    "copilot pro", "copilot workspace",
+}
+
+# Map source/lab name to organization for proprietary releases
+_LAB_ORG_MAP = {
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "google ai": "Google",
+    "google": "Google",
+    "deepmind": "Google DeepMind",
+    "cohere": "Cohere",
+    "mistral": "Mistral AI",
+    "xai": "xAI",
+    "meta": "Meta",
+}
+
+
+def _extract_model_from_title(title: str) -> Optional[str]:
+    """Try to extract a model name from a blog/article title.
+
+    Returns the model name string if found, None otherwise.
+    Only accepts names that are predominantly ASCII (model names always are).
+    """
+    for pattern in _TITLE_MODEL_PATTERNS:
+        m = pattern.search(title)
+        if m:
+            raw_name = m.group(1).strip()
+            # Trim: keep tokens until first stop word or non-ASCII token
+            parts = raw_name.split()
+            trimmed = []
+            for p in parts:
+                if p.lower() in _NAME_STOP_WORDS:
+                    break
+                # Stop at non-ASCII tokens (CJK, etc.)
+                if not p.isascii():
+                    break
+                trimmed.append(p)
+            name = " ".join(trimmed) if trimmed else ""
+            # Filter out generic words that aren't model names
+            if len(name) < 3 or name.lower() in {"new", "our", "the", "a"}:
+                continue
+            # Reject known false positives
+            if name.lower() in _FALSE_POSITIVE_NAMES:
+                continue
+            # Model releases must have a version indicator (digit or codename)
+            # e.g., "Claude 4.7", "GPT-5.4-Cyber", "Gemini 2.5 Flash"
+            # Reject bare brand names like "Gemini AI" or "Gemini"
+            has_version = bool(re.search(r"\d", name))
+            # Codename: multi-word OR hyphenated with uppercase after hyphen
+            tokens = name.replace("-", " ").split()
+            has_codename = len(tokens) >= 2 and any(
+                t[0].isupper() for t in tokens[1:]
+            )
+            if not has_version and not has_codename:
+                continue
+            return name
+    return None
+
+
+def _build_release_from_article(
+    title: str,
+    url: str,
+    source: str,
+    published_date: Optional[str],
+    snippet: str = "",
+) -> Optional[object]:
+    """Build a ModelRelease directly from article metadata without LLM.
+
+    Only works for clear model announcement titles. Returns None if
+    the model name cannot be confidently extracted.
+    """
+    from core.llm.output_schemas.sensing_outputs import ModelRelease
+
+    model_name = _extract_model_from_title(title)
+    if not model_name:
+        return None
+
+    # Infer organization from source, model name, or URL
+    org = _LAB_ORG_MAP.get(source.lower(), "")
+    if not org:
+        # Try to infer from model name prefix
+        name_lower = model_name.lower()
+        if name_lower.startswith("gpt") or name_lower.startswith("o1") or name_lower.startswith("o3"):
+            org = "OpenAI"
+        elif name_lower.startswith("claude"):
+            org = "Anthropic"
+        elif name_lower.startswith("gemini"):
+            org = "Google"
+        elif name_lower.startswith("grok"):
+            org = "xAI"
+        elif name_lower.startswith("command"):
+            org = "Cohere"
+        elif name_lower.startswith("mistral"):
+            org = "Mistral AI"
+        elif name_lower.startswith("llama") or name_lower.startswith("phi"):
+            org = "Meta"
+        elif name_lower.startswith("qwen"):
+            org = "Alibaba"
+        else:
+            org = source  # fallback to source field
+
+    # Determine release date
+    release_date = ""
+    if published_date:
+        try:
+            dt = datetime.fromisoformat(
+                published_date.replace("Z", "+00:00")
+            )
+            release_date = dt.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            release_date = published_date[:10] if len(published_date) >= 10 else ""
+
+    return ModelRelease(
+        model_name=model_name,
+        organization=org,
+        release_date=release_date,
+        release_status="Released",
+        parameters="",
+        license="Proprietary",
+        is_open_source="Closed",
+        model_type="",
+        modality="Text",
+        notable_features=snippet[:200] if snippet else "",
+        source_url=url,
+    )
+
+
 async def fetch_major_lab_blogs(
     lookback_days: int = 30,
 ) -> List[RawArticle]:
-    """Tier 2: Fetch model announcements from major AI lab blog RSS feeds.
+    """Tier 2a: Fetch model announcements from major AI lab blog RSS feeds.
 
     Only returns entries whose titles match model announcement keywords.
     """
@@ -324,6 +485,44 @@ async def fetch_major_lab_blogs(
 
     logger.info(f"Major lab blogs: {len(articles)} announcement articles")
     return articles
+
+
+async def search_proprietary_releases_ddg(
+    lookback_days: int = 30,
+    max_results: int = 10,
+) -> List[RawArticle]:
+    """Tier 2b: Targeted DDG search for proprietary model announcements.
+
+    Always runs (not just as fallback) to catch Claude, GPT, Gemini, etc.
+    Uses lab-specific queries for higher precision.
+    """
+    year = datetime.now(timezone.utc).year
+    queries = [f"{q} {year}" for q in PROPRIETARY_LAB_QUERIES]
+
+    try:
+        articles = await search_duckduckgo(
+            queries=queries,
+            domain="Generative AI",
+            lookback_days=lookback_days,
+        )
+        logger.info(
+            f"Proprietary lab DDG search: {len(articles)} raw articles"
+        )
+
+        # Keep undated articles — DDG rarely provides dates for recent
+        # results, but our year-specific queries already scope them.
+        # Only drop articles with dates clearly outside the window.
+        articles = filter_articles_by_date(
+            articles, lookback_days,
+            buffer_multiplier=1.5,
+            drop_undated=False,
+            label="proprietary-releases-ddg",
+        )
+
+        return articles[:max_results]
+    except Exception as e:
+        logger.warning(f"Proprietary lab DDG search failed: {e}")
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -390,25 +589,91 @@ async def get_model_releases(lookback_days: int = 30) -> "List":
 
     all_releases = []
 
-    # Tier 1: HuggingFace (structured, reliable)
+    # Tier 1: HuggingFace (structured, reliable — open-weight models)
     hf_models = await fetch_huggingface_releases(lookback_days)
     if hf_models:
         hf_releases = build_releases_from_hf(hf_models)
         all_releases.extend(hf_releases)
         logger.info(f"Tier 1 (HuggingFace): {len(hf_releases)} releases")
 
-    # Tier 2: Major lab blogs (for proprietary models)
+    # Tier 2a: Major lab blog RSS (for proprietary models)
     blog_articles = await fetch_major_lab_blogs(lookback_days)
+    blog_releases_count = 0
     if blog_articles:
-        blog_releases = await extract_releases_from_blogs(
-            blog_articles, lookback_days
-        )
-        all_releases.extend(blog_releases)
-        logger.info(f"Tier 2 (Blogs): {len(blog_releases)} releases")
+        # First try: title-based extraction (no LLM needed)
+        title_extracted = []
+        remaining_articles = []
+        for article in blog_articles:
+            release = _build_release_from_article(
+                title=article.title,
+                url=article.url,
+                source=article.source,
+                published_date=article.published_date,
+                snippet=article.snippet,
+            )
+            if release:
+                title_extracted.append(release)
+            else:
+                remaining_articles.append(article)
 
-    # Tier 3: DDG fallback (only if tiers 1+2 yield very few)
+        all_releases.extend(title_extracted)
+        blog_releases_count += len(title_extracted)
+
+        # Second try: LLM extraction for remaining articles
+        if remaining_articles:
+            try:
+                llm_releases = await extract_releases_from_blogs(
+                    remaining_articles, lookback_days
+                )
+                all_releases.extend(llm_releases)
+                blog_releases_count += len(llm_releases)
+            except Exception as e:
+                logger.debug(f"Blog LLM extraction failed (non-fatal): {e}")
+
+        logger.info(f"Tier 2a (Blogs): {blog_releases_count} releases")
+
+    # Tier 2b: Targeted DDG search for proprietary labs (always runs)
+    proprietary_articles = await search_proprietary_releases_ddg(lookback_days)
+    prop_count = 0
+    if proprietary_articles:
+        # First try: title-based extraction (no LLM needed)
+        title_extracted = []
+        remaining_articles = []
+        for article in proprietary_articles:
+            release = _build_release_from_article(
+                title=article.title,
+                url=article.url,
+                source=article.source,
+                published_date=article.published_date,
+                snippet=article.snippet,
+            )
+            if release:
+                title_extracted.append(release)
+            else:
+                remaining_articles.append(article)
+
+        all_releases.extend(title_extracted)
+        prop_count += len(title_extracted)
+
+        # Second try: LLM extraction for remaining
+        if remaining_articles:
+            try:
+                prop_llm = await extract_releases_from_blogs(
+                    remaining_articles, lookback_days
+                )
+                all_releases.extend(prop_llm)
+                prop_count += len(prop_llm)
+            except Exception as e:
+                logger.debug(
+                    f"Proprietary LLM extraction failed (non-fatal): {e}"
+                )
+
+    if prop_count:
+        logger.info(f"Tier 2b (Proprietary DDG): {prop_count} releases")
+
+    # Tier 3: Generic DDG fallback (only if all above yield very few)
     if len(all_releases) < 3:
-        logger.info("Tiers 1+2 yielded <3 results, activating DDG fallback...")
+        logger.info("All tiers yielded <3 results, activating generic DDG fallback...")
         ddg_articles = await search_model_releases_ddg(lookback_days, max_results=15)
         if ddg_articles:
             ddg_releases = await extract_model_releases(
