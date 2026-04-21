@@ -375,34 +375,6 @@ HF_KNOWN_ORGS = [
     "NousResearch", "teknium", "lmsys", "BAAI",
 ]
 
-# Major AI lab blogs — for proprietary/API-only model announcements
-MAJOR_LAB_BLOG_FEEDS = {
-    "OpenAI": "https://openai.com/blog/rss.xml",
-    "Anthropic": "https://www.anthropic.com/rss.xml",
-    "Google AI": "https://blog.google/technology/ai/rss/",
-    "DeepMind": "https://deepmind.google/blog/rss.xml",
-    "Cohere": "https://cohere.com/blog/rss.xml",
-    "Mistral": "https://mistral.ai/feed.xml",
-}
-
-# Keywords in blog titles that indicate a model announcement
-MODEL_ANNOUNCEMENT_KEYWORDS = [
-    "introducing", "announcing", "launch", "release", "new model",
-    "now available", "open source", "open weight", "meet ",
-    "presenting", "unveiling",
-]
-
-# Targeted search queries for proprietary/API-only models (Tier 2b)
-# These labs don't publish weights on HuggingFace, so we need DDG to find them.
-PROPRIETARY_LAB_QUERIES = [
-    "OpenAI new model release",
-    "Anthropic Claude new model release",
-    "Google Gemini new model release",
-    "xAI Grok new model release",
-    "Cohere new model release",
-    "Mistral new model release",
-]
-
-# Artificial Analysis API (Tier 2c) — covers both open and proprietary models
+# Artificial Analysis API (Tier 1) — covers both open and proprietary models
 # Free tier: 1000 req/day. Set ARTIFICIAL_ANALYSIS_API_KEY env var to enable.
 ARTIFICIAL_ANALYSIS_API_URL = "https://artificialanalysis.ai/api/v2"
