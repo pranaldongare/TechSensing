@@ -48,6 +48,7 @@ async def verify_report(
     domain: str,
     must_include: list[str] | None = None,
     dont_include: list[str] | None = None,
+    custom_requirements: str = "",
 ) -> TechSensingReport:
     """
     Verify report content against the user's domain and filter off-topic items.
@@ -87,6 +88,15 @@ async def verify_report(
 
     must_str = f"\nMust-include keywords: {', '.join(must_include)}" if must_include else ""
     dont_str = f"\nDon't-include keywords: {', '.join(dont_include)}" if dont_include else ""
+    custom_req_str = ""
+    if custom_requirements:
+        custom_req_str = (
+            f"\nUSER FOCUS REQUIREMENTS (MANDATORY):\n"
+            f"The user specified: {custom_requirements}\n"
+            "Items aligning with these requirements should be RETAINED even if "
+            "their broad domain relevance is moderate. Items that contradict "
+            "these requirements should be EXCLUDED.\n"
+        )
 
     prompt = [
         {
@@ -114,7 +124,7 @@ async def verify_report(
                 "- EXCLUDE radar items for technologies that are older than 6 months and have "
                 "NOT been significantly updated recently\n"
                 "- Legacy technologies mentioned only as historical context or comparison should be EXCLUDED\n"
-                + must_str + dont_str + "\n\n"
+                + must_str + dont_str + custom_req_str + "\n\n"
                 "ATTRIBUTION CHECK:\n"
                 "- For each radar item, review key_players against its description.\n"
                 "- Flag cases where a company is listed as a key_player but the description "

@@ -169,6 +169,7 @@ async def generate_report(
         domain=domain,
         date_range=date_range,
         custom_quadrant_names=custom_quadrant_names,
+        custom_requirements=custom_requirements,
     )
 
     phase2_start = time.time()
@@ -257,6 +258,7 @@ async def generate_report(
             radar_items_json=batch_json,
             classified_articles_json=articles_json,
             domain=domain,
+            custom_requirements=custom_requirements,
         )
 
         logger.info(

@@ -147,13 +147,19 @@ async def run_sensing_pipeline(
             else keyword_instructions
         )
 
+    # Extract focus keywords from free-form custom_requirements for search
+    focus_keywords = _extract_focus_keywords(custom_requirements)
+    search_must_include = list(must_include or []) + focus_keywords
+    if focus_keywords:
+        logger.info(f"Focus keywords from custom_requirements: {focus_keywords}")
+
     # --- Stage 1: Ingest (all 8 sources in parallel) ---
     logger.info(f"[Stage 1/7] INGEST — launching all sources in parallel... [{_elapsed()}]")
     await _emit("ingest", 10, "Fetching all sources in parallel...")
 
     effective_feeds = feed_urls or _merge_feeds(domain, domain_ref)
-    effective_queries = search_queries or _merge_queries(domain, domain_ref, must_include)
-    effective_patent_kw = _merge_patent_keywords(domain_ref, must_include)
+    effective_queries = search_queries or _merge_queries(domain, domain_ref, search_must_include)
+    effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include)
 
     (
         rss_articles,
@@ -166,13 +172,13 @@ async def run_sensing_pipeline(
         reddit_articles,
     ) = await asyncio.gather(
         fetch_rss_feeds(effective_feeds, lookback_days=lookback_days, domain=domain),
-        search_duckduckgo(effective_queries, domain, lookback_days=lookback_days, must_include=must_include),
+        search_duckduckgo(effective_queries, domain, lookback_days=lookback_days, must_include=search_must_include),
         fetch_github_trending(domain, lookback_days=lookback_days),
-        fetch_arxiv_papers(domain, lookback_days=lookback_days, must_include=must_include),
+        fetch_arxiv_papers(domain, lookback_days=lookback_days, must_include=search_must_include),
         fetch_hackernews(domain, lookback_days=lookback_days),
         search_google_patents(domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw),
-        fetch_semantic_scholar(domain, lookback_days=lookback_days, must_include=must_include),
-        search_reddit(domain, lookback_days=lookback_days, must_include=must_include),
+        fetch_semantic_scholar(domain, lookback_days=lookback_days, must_include=search_must_include),
+        search_reddit(domain, lookback_days=lookback_days, must_include=search_must_include),
     )
 
     all_raw = (
@@ -267,6 +273,10 @@ async def run_sensing_pipeline(
     logger.info(
         f"[Stage 3/7] CLASSIFY COMPLETE: {len(classified)} classified articles [{_elapsed()}]"
     )
+
+    # Boost relevance for articles matching custom_requirements focus keywords
+    if focus_keywords:
+        classified = _boost_focus_matches(classified, focus_keywords)
 
     # Post-classification date filter: catch articles with dates assigned by the LLM
     # from article content (e.g., DuckDuckGo results that had no RawArticle date)
@@ -380,6 +390,7 @@ async def run_sensing_pipeline(
         domain=domain,
         must_include=must_include,
         dont_include=dont_include,
+        custom_requirements=full_requirements,
     )
     await _emit("verify", 92, "Verification complete")
     logger.info(f"[Stage 6/7] VERIFY COMPLETE [{_elapsed()}]")
@@ -672,18 +683,80 @@ def _build_keyword_instructions(
     if must_include:
         kw_list = ", ".join(must_include)
         parts.append(
-            f"MUST INCLUDE: Prioritize articles and technologies related to "
-            f"these keywords: {kw_list}. Give higher relevance scores to "
-            f"articles mentioning these topics."
+            f"MUST INCLUDE (MANDATORY): Articles and technologies MUST be "
+            f"related to these keywords to receive high relevance scores: "
+            f"{kw_list}. Boost relevance_score by +0.1 to +0.2 for articles "
+            f"that mention these keywords in their title or core content. "
+            f"Articles that do NOT relate to any of these keywords should "
+            f"receive lower priority."
         )
     if dont_include:
         kw_list = ", ".join(dont_include)
         parts.append(
-            f"DON'T INCLUDE: Exclude or deprioritize articles and technologies "
-            f"related to these keywords: {kw_list}. Give low relevance scores "
-            f"to articles primarily about these topics."
+            f"DON'T INCLUDE (MANDATORY): EXCLUDE articles and technologies "
+            f"primarily about these keywords: {kw_list}. Articles whose "
+            f"main subject matches these terms should receive "
+            f"relevance_score < 0.2, regardless of domain relevance."
         )
     return "\n".join(parts)
+
+
+# ── Focus keyword extraction from free-form custom_requirements ──
+
+_REQUIREMENT_STOP_WORDS = {
+    "focus", "only", "include", "exclude", "prioritize", "ignore",
+    "relevant", "related", "about", "companies", "company", "ecosystem",
+    "articles", "content", "report", "technologies", "technology",
+    "news", "developments", "topics", "must", "should", "specifically",
+    "the", "and", "for", "with", "this", "that", "these", "from",
+    "not", "also", "more", "very", "don't", "do", "please", "make",
+    "sure", "want", "need", "like", "based", "specific", "particular",
+    "give", "preference", "especially", "mainly", "primarily",
+    "organizations", "startups", "firms", "players", "market",
+    "ai", "ml", "llm", "api", "models",
+}
+
+
+def _extract_focus_keywords(custom_requirements: str) -> list[str]:
+    """Extract proper nouns and place names from free-form custom requirements.
+
+    Uses a simple heuristic: finds capitalized words that are not common
+    English stop words. For "Focus only on India ecosystem and companies"
+    this returns ["India"].
+    """
+    if not custom_requirements:
+        return []
+    # Match individual capitalized words (not multi-word to avoid "Prioritize European")
+    words = re.findall(r'\b([A-Z][a-zA-Z]+)\b', custom_requirements)
+    # Filter stop words, then reconstruct multi-word proper nouns from adjacent matches
+    filtered = [w for w in words if w.lower() not in _REQUIREMENT_STOP_WORDS and len(w) > 2]
+    return list(dict.fromkeys(filtered))
+
+
+def _boost_focus_matches(
+    classified: list,
+    focus_keywords: list[str],
+    boost: float = 0.15,
+) -> list:
+    """Boost relevance_score for classified articles matching focus keywords.
+
+    Safe: an irrelevant article at 0.1 only becomes 0.25 (still below 0.3 cutoff).
+    """
+    if not focus_keywords:
+        return classified
+    focus_lower = [kw.lower() for kw in focus_keywords]
+    boosted_count = 0
+    for article in classified:
+        text = f"{article.title} {article.summary}".lower()
+        if any(kw in text for kw in focus_lower):
+            article.relevance_score = min(1.0, article.relevance_score + boost)
+            boosted_count += 1
+    if boosted_count:
+        logger.info(
+            f"Focus boost: {boosted_count}/{len(classified)} articles "
+            f"boosted by +{boost} (keywords: {focus_keywords})"
+        )
+    return classified
 
 
 def _compute_report_confidence(
@@ -947,6 +1020,15 @@ async def run_sensing_pipeline_from_document(
     if keyword_instructions:
         full_requirements += f"\n\n{keyword_instructions}"
 
+    # Extract focus keywords from custom_requirements for search + boost
+    focus_keywords = _extract_focus_keywords(custom_requirements or "")
+    if focus_keywords:
+        logger.info(f"Focus keywords from custom_requirements: {focus_keywords}")
+        # Merge into search must_include
+        search_must_include = list(effective_must_include or []) + focus_keywords
+    else:
+        search_must_include = effective_must_include
+
     # --- Stage 3: Split document into pseudo-articles ---
     logger.info(f"[Stage 3/9] SPLIT — creating pseudo-articles... [{_elapsed()}]")
     await _emit("split", 16, "Splitting document into sections...")
@@ -975,7 +1057,7 @@ async def run_sensing_pipeline_from_document(
     await _emit("ingest", 18, "Fetching all sources in parallel...")
 
     effective_feeds = _merge_feeds(search_domain, domain_ref)
-    effective_patent_kw = _merge_patent_keywords(domain_ref, effective_must_include or None)
+    effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include or None)
 
     (
         rss_articles,
@@ -988,13 +1070,13 @@ async def run_sensing_pipeline_from_document(
         reddit_articles,
     ) = await asyncio.gather(
         fetch_rss_feeds(feed_urls=effective_feeds, lookback_days=lookback_days, domain=search_domain),
-        search_duckduckgo(queries=effective_search_queries, domain=search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
+        search_duckduckgo(queries=effective_search_queries, domain=search_domain, lookback_days=lookback_days, must_include=search_must_include or None),
         fetch_github_trending(search_domain, lookback_days=lookback_days),
-        fetch_arxiv_papers(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
+        fetch_arxiv_papers(search_domain, lookback_days=lookback_days, must_include=search_must_include or None),
         fetch_hackernews(search_domain, lookback_days=lookback_days),
         search_google_patents(search_domain, lookback_days=max(lookback_days, 365), must_include=effective_patent_kw),
-        fetch_semantic_scholar(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
-        search_reddit(search_domain, lookback_days=lookback_days, must_include=effective_must_include or None),
+        fetch_semantic_scholar(search_domain, lookback_days=lookback_days, must_include=search_must_include or None),
+        search_reddit(search_domain, lookback_days=lookback_days, must_include=search_must_include or None),
     )
 
     all_web = (
@@ -1089,6 +1171,10 @@ async def run_sensing_pipeline_from_document(
     logger.info(
         f"[Stage 6/9] CLASSIFY COMPLETE: {len(classified)} [{_elapsed()}]"
     )
+
+    # Boost relevance for articles matching custom_requirements focus keywords
+    if focus_keywords:
+        classified = _boost_focus_matches(classified, focus_keywords)
 
     # Post-classification date filter: catch articles with dates assigned by the LLM
     # from article content (e.g., DuckDuckGo results that had no RawArticle date)
@@ -1191,6 +1277,7 @@ async def run_sensing_pipeline_from_document(
         domain=domain,
         must_include=effective_must_include or None,
         dont_include=dont_include,
+        custom_requirements=full_requirements,
     )
     logger.info(f"[Stage 9/9] VERIFY COMPLETE [{_elapsed()}]")
 

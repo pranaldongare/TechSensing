@@ -3,6 +3,24 @@ from datetime import datetime, timezone
 from core.llm.prompts.shared import tense_rules_block
 
 
+def _custom_requirements_block(custom_requirements: str) -> str:
+    """Build a high-priority custom requirements block for LLM prompts.
+
+    Positioned near the TOP of system prompts with authoritative language
+    so the LLM treats it as a hard constraint, not a suggestion.
+    """
+    if not custom_requirements:
+        return ""
+    return (
+        "USER FOCUS REQUIREMENTS (MANDATORY — READ FIRST):\n"
+        "The user has specified constraints that MUST guide your entire analysis:\n"
+        f"---\n{custom_requirements}\n---\n"
+        "Apply these requirements as a PRIMARY filter. Content matching these "
+        "requirements should receive SIGNIFICANTLY higher relevance. Content "
+        "that ignores these requirements should be deprioritized.\n\n"
+    )
+
+
 def _stale_years_str() -> str:
     """Return comma-separated list of years that are considered stale.
 
@@ -161,6 +179,7 @@ def sensing_classify_prompt(
                 f"it specifically discusses their work on '{domain}' technologies.\n"
                 "- When in doubt, prefer EXCLUDING over INCLUDING. It is better to have "
                 "a focused report with fewer items than a diluted report with off-topic noise.\n\n"
+                + _custom_requirements_block(custom_requirements)
                 + (_recency_block_classify(date_range) if date_range else "")
                 + _quadrant_definitions_block(custom_quadrant_names)
                 + "RING DEFINITIONS:\n"
@@ -182,11 +201,6 @@ def sensing_classify_prompt(
                 "- Filter out articles with relevance_score < 0.3.\n"
                 "- If an article is not relevant to the domain, omit it from the output.\n"
                 "- The articles array MUST contain actual classified data, not be empty.\n"
-                + (
-                    f"\nADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n"
-                    if custom_requirements
-                    else ""
-                )
             ),
         },
         {
@@ -240,6 +254,7 @@ def sensing_report_core_prompt(
                 "news, cryptocurrency, cloud platforms) unless they specifically involve "
                 f"'{domain}' technologies. When an article covers multiple domains, only "
                 f"discuss the aspects relevant to '{domain}'.\n\n"
+                + _custom_requirements_block(custom_requirements)
                 + industry_segments_text + "\n"
                 + people_block
                 + "SECTION GUIDELINES:\n"
@@ -260,11 +275,6 @@ def sensing_report_core_prompt(
                 "- Do NOT fabricate information not present in the articles.\n\n"
                 + _recency_block_report()
                 + tense_rules_block()
-                + (
-                    f"ADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n\n"
-                    if custom_requirements
-                    else ""
-                )
                 + (
                     f"{org_context}\n\n"
                     if org_context
@@ -293,6 +303,7 @@ def sensing_report_radar_prompt(
     domain: str = "Technology",
     date_range: str = "",
     custom_quadrant_names: list[str] | None = None,
+    custom_requirements: str = "",
 ) -> list[dict]:
     """
     Phase 2 prompt: technology radar items only.
@@ -313,7 +324,8 @@ def sensing_report_radar_prompt(
                 "Do NOT include technologies from other domains (e.g., general-purpose LLMs, "
                 "cloud platforms, cryptocurrency tools) unless they are specifically designed "
                 f"for or significantly adapted to '{domain}' use cases.\n\n"
-                "RADAR GUIDELINES:\n"
+                + _custom_requirements_block(custom_requirements)
+                + "RADAR GUIDELINES:\n"
                 "- 10-20 distinct technologies/techniques — STRICTLY consolidate duplicates.\n"
                 "- Each entry: name, quadrant ("
                 + _quadrant_names_inline(custom_quadrant_names)
@@ -425,6 +437,7 @@ def sensing_report_insights_prompt(
                 "Use the Phase 1 and Phase 2 context to ensure consistency.\n\n"
                 f"DOMAIN FOCUS: All content must be directly relevant to '{domain}'. "
                 "Exclude market signals and recommendations about other technology domains.\n\n"
+                + _custom_requirements_block(custom_requirements)
                 + industry_segments_text + "\n"
                 + people_block
                 + "SECTION GUIDELINES:\n"
@@ -464,11 +477,6 @@ def sensing_report_insights_prompt(
                 "to a company if the article clearly states the company CREATED, DEVELOPED, "
                 "or RELEASED it.\n"
                 "- If the articles don't clearly state who built something, say so.\n\n"
-                + (
-                    f"ADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n\n"
-                    if custom_requirements
-                    else ""
-                )
             ),
         },
         {
@@ -491,6 +499,7 @@ def sensing_details_prompt(
     radar_items_json: str,
     classified_articles_json: str,
     domain: str = "Technology",
+    custom_requirements: str = "",
 ) -> list[dict]:
     """
     Build a chat prompt to generate detailed write-ups for each radar item.
@@ -505,7 +514,8 @@ def sensing_details_prompt(
             "parts": (
                 "You are a senior technology strategist writing detailed technology "
                 f"radar entries for the {domain} domain.\n\n"
-                "You are given a list of RADAR ITEMS (name, quadrant, ring) and the "
+                + _custom_requirements_block(custom_requirements)
+                + "You are given a list of RADAR ITEMS (name, quadrant, ring) and the "
                 "CLASSIFIED ARTICLES that were used to create them.\n\n"
                 "For EVERY radar item, generate a detailed write-up covering:\n"
                 "  * what_it_is: Clear explanation of what this technology is and how it works (2-4 sentences).\n"
@@ -647,12 +657,8 @@ def sensing_document_topic_extraction_prompt(
                 "- Technology keywords should be specific enough for "
                 "arXiv/GitHub search (use precise names, not broad categories).\n"
                 "- Patent keywords should be formal technical phrases "
-                f"relevant to the {domain} domain.\n"
-                + (
-                    f"\nADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n"
-                    if custom_requirements
-                    else ""
-                )
+                f"relevant to the {domain} domain.\n\n"
+                + _custom_requirements_block(custom_requirements)
             ),
         },
         {
@@ -695,12 +701,6 @@ def sensing_domain_intelligence_prompt(
             "any that have regained specificity or relevance.\n\n"
         )
 
-    requirements_block = ""
-    if custom_requirements:
-        requirements_block = (
-            f"\nADDITIONAL USER REQUIREMENTS:\n{custom_requirements}\n"
-        )
-
     contents = [
         {
             "role": "system",
@@ -708,7 +708,8 @@ def sensing_domain_intelligence_prompt(
                 "You are a senior technology intelligence analyst. Your task is to "
                 f"generate comprehensive domain intelligence for the '{domain}' domain "
                 "to configure a technology sensing pipeline.\n\n"
-                "This intelligence will be used to:\n"
+                + _custom_requirements_block(custom_requirements)
+                + "This intelligence will be used to:\n"
                 "1. Select RSS feeds and construct search queries for article discovery\n"
                 "2. Configure arXiv and patent searches\n"
                 "3. Define topic categories and industry segments for article classification\n"
@@ -733,7 +734,6 @@ def sensing_domain_intelligence_prompt(
                 "- Industry segments should identify the types of actors/organizations "
                 "active in this domain, with example companies or groups.\n\n"
                 + existing_block
-                + requirements_block
             ),
         },
         {
