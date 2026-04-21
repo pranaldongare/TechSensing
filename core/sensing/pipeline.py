@@ -736,26 +736,33 @@ def _extract_focus_keywords(custom_requirements: str) -> list[str]:
 def _boost_focus_matches(
     classified: list,
     focus_keywords: list[str],
-    boost: float = 0.15,
+    boost: float = 0.20,
+    penalty: float = 0.15,
 ) -> list:
-    """Boost relevance_score for classified articles matching focus keywords.
+    """Boost articles matching focus keywords, penalize non-matching ones.
 
-    Safe: an irrelevant article at 0.1 only becomes 0.25 (still below 0.3 cutoff).
+    This widens the gap so focus-matching articles dominate the top ranks.
+    Boost: matching articles get +0.20 (e.g., 0.6 → 0.8)
+    Penalty: non-matching articles get -0.15 (e.g., 0.8 → 0.65)
     """
     if not focus_keywords:
         return classified
     focus_lower = [kw.lower() for kw in focus_keywords]
-    boosted_count = 0
+    boosted = 0
+    penalized = 0
     for article in classified:
         text = f"{article.title} {article.summary}".lower()
         if any(kw in text for kw in focus_lower):
             article.relevance_score = min(1.0, article.relevance_score + boost)
-            boosted_count += 1
-    if boosted_count:
-        logger.info(
-            f"Focus boost: {boosted_count}/{len(classified)} articles "
-            f"boosted by +{boost} (keywords: {focus_keywords})"
-        )
+            boosted += 1
+        else:
+            article.relevance_score = max(0.0, article.relevance_score - penalty)
+            penalized += 1
+    logger.info(
+        f"Focus rerank: {boosted} boosted (+{boost}), "
+        f"{penalized} penalized (-{penalty}) "
+        f"(keywords: {focus_keywords})"
+    )
     return classified
 
 

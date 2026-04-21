@@ -17,7 +17,14 @@ def _custom_requirements_block(custom_requirements: str) -> str:
         f"---\n{custom_requirements}\n---\n"
         "Apply these requirements as a PRIMARY filter. Content matching these "
         "requirements should receive SIGNIFICANTLY higher relevance. Content "
-        "that ignores these requirements should be deprioritized.\n\n"
+        "that does NOT match these requirements should be EXCLUDED or receive "
+        "very low relevance scores (< 0.3).\n"
+        "CRITICAL: Do NOT fabricate or invent connections between content and "
+        "the user's focus requirements. If a technology, model, or development "
+        "has NO genuine connection to the focus area, either EXCLUDE it or "
+        "present it accurately WITHOUT attributing it to the focus area. "
+        "NEVER claim a technology is related to the focus area unless the "
+        "source articles explicitly support that connection.\n\n"
     )
 
 
