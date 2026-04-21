@@ -5,11 +5,13 @@ Tier 1 (Primary):   Artificial Analysis API — curated, both open + proprietary
 Tier 2 (Complement): HuggingFace Hub API — fills gaps for niche open-weight models
 """
 
+import asyncio
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -23,6 +25,10 @@ from core.sensing.config import (
 logger = logging.getLogger("sensing.sources.model_releases")
 
 HF_API_URL = "https://huggingface.co/api/models"
+
+# ── In-memory cache for AA API (avoids burning daily quota) ──
+_AA_CACHE_TTL = 3600  # 1 hour
+_aa_cache: Dict[str, Tuple[float, list]] = {}  # endpoint -> (timestamp, data)
 
 # ── HuggingFace pipeline_tag → modality mapping ──
 _HF_PIPELINE_TO_MODALITY = {
@@ -149,6 +155,47 @@ def _is_significant_model(model: dict) -> bool:
 # Tier 1: Artificial Analysis API (primary — open + proprietary)
 # ═══════════════════════════════════════════════════════════════════
 
+async def _aa_fetch_cached(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    api_key: str,
+) -> Optional[list]:
+    """Fetch an AA endpoint with 1-hour cache and retry on 429."""
+    now = time.monotonic()
+    cached = _aa_cache.get(endpoint)
+    if cached and (now - cached[0]) < _AA_CACHE_TTL:
+        logger.debug(f"AA cache hit for {endpoint}")
+        return cached[1]
+
+    for attempt in range(3):
+        resp = await client.get(
+            f"{ARTIFICIAL_ANALYSIS_API_URL}{endpoint}",
+            headers={"x-api-key": api_key},
+        )
+        if resp.status_code == 429:
+            wait = 2 ** attempt
+            logger.info(f"AA 429 rate-limited, retrying in {wait}s...")
+            await asyncio.sleep(wait)
+            continue
+        resp.raise_for_status()
+        payload = resp.json()
+        if isinstance(payload, dict):
+            data = payload.get("data", [])
+        elif isinstance(payload, list):
+            data = payload
+        else:
+            return None
+        _aa_cache[endpoint] = (now, data)
+        return data
+
+    logger.warning(f"AA endpoint {endpoint} still 429 after retries")
+    # Return stale cache if available
+    if cached:
+        logger.info("Using stale AA cache as fallback")
+        return cached[1]
+    return None
+
+
 async def fetch_artificial_analysis_releases(
     lookback_days: int = 30,
     max_results: int = 30,
@@ -175,20 +222,10 @@ async def fetch_artificial_analysis_releases(
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             # Fetch LLM models
-            resp = await client.get(
-                f"{ARTIFICIAL_ANALYSIS_API_URL}/data/llms/models",
-                headers={"x-api-key": api_key},
+            models = await _aa_fetch_cached(
+                client, "/data/llms/models", api_key
             )
-            resp.raise_for_status()
-            payload = resp.json()
-
-            # API returns {"status": 200, "data": [...]} wrapper
-            if isinstance(payload, dict):
-                models = payload.get("data", [])
-            elif isinstance(payload, list):
-                models = payload
-            else:
-                logger.warning("Artificial Analysis API returned unexpected format")
+            if models is None:
                 return []
 
             for model in models:
@@ -255,18 +292,10 @@ async def fetch_artificial_analysis_releases(
                 ("/data/media/text-to-speech", "Speech"),
             ]:
                 try:
-                    media_resp = await client.get(
-                        f"{ARTIFICIAL_ANALYSIS_API_URL}{endpoint}",
-                        headers={"x-api-key": api_key},
+                    media_models = await _aa_fetch_cached(
+                        client, endpoint, api_key
                     )
-                    if media_resp.status_code != 200:
-                        continue
-                    media_payload = media_resp.json()
-                    if isinstance(media_payload, dict):
-                        media_models = media_payload.get("data", [])
-                    elif isinstance(media_payload, list):
-                        media_models = media_payload
-                    else:
+                    if not media_models:
                         continue
 
                     for mm in media_models:
