@@ -548,7 +548,10 @@ async def fetch_artificial_analysis_releases(
         logger.debug("Artificial Analysis API key not set, skipping Tier 2c")
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    # Use naive date for comparison — AA dates are plain "YYYY-MM-DD"
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        days=lookback_days
+    )
     releases: list = []
 
     try:
@@ -559,21 +562,26 @@ async def fetch_artificial_analysis_releases(
                 headers={"x-api-key": api_key},
             )
             resp.raise_for_status()
-            models = resp.json()
+            payload = resp.json()
 
-            if not isinstance(models, list):
+            # API returns {"status": 200, "data": [...]} wrapper
+            if isinstance(payload, dict):
+                models = payload.get("data", [])
+            elif isinstance(payload, list):
+                models = payload  # in case they change format later
+            else:
                 logger.warning("Artificial Analysis API returned unexpected format")
                 return []
 
             for model in models:
-                # Check release date within lookback window
                 release_date_str = model.get("release_date") or ""
                 if not release_date_str:
                     continue
                 try:
-                    release_dt = datetime.fromisoformat(
-                        release_date_str.replace("Z", "+00:00")
-                    )
+                    release_dt = datetime.fromisoformat(release_date_str)
+                    # Strip tz if present for consistent comparison
+                    if release_dt.tzinfo is not None:
+                        release_dt = release_dt.replace(tzinfo=None)
                     if release_dt < cutoff:
                         continue
                 except (ValueError, TypeError):
@@ -590,14 +598,24 @@ async def fetch_artificial_analysis_releases(
                 features_parts = []
                 evals = model.get("evaluations", {})
                 if isinstance(evals, dict):
-                    for key in ("intelligence_index", "mmlu_pro", "gpqa"):
+                    for key in (
+                        "artificial_analysis_intelligence_index",
+                        "mmlu_pro",
+                        "gpqa",
+                    ):
                         val = evals.get(key)
-                        if val:
+                        if val is not None:
                             features_parts.append(f"{key}: {val}")
 
                 speed = model.get("median_output_tokens_per_second")
                 if speed:
                     features_parts.append(f"{speed} tok/s")
+
+                pricing = model.get("pricing", {})
+                if isinstance(pricing, dict):
+                    blended = pricing.get("price_1m_blended_3_to_1")
+                    if blended is not None:
+                        features_parts.append(f"${blended}/1M tokens")
 
                 releases.append(ModelRelease(
                     model_name=name,
@@ -626,8 +644,12 @@ async def fetch_artificial_analysis_releases(
                     )
                     if media_resp.status_code != 200:
                         continue
-                    media_models = media_resp.json()
-                    if not isinstance(media_models, list):
+                    media_payload = media_resp.json()
+                    if isinstance(media_payload, dict):
+                        media_models = media_payload.get("data", [])
+                    elif isinstance(media_payload, list):
+                        media_models = media_payload
+                    else:
                         continue
 
                     for mm in media_models:
@@ -635,7 +657,9 @@ async def fetch_artificial_analysis_releases(
                         if not rd:
                             continue
                         try:
-                            rdt = datetime.fromisoformat(rd.replace("Z", "+00:00"))
+                            rdt = datetime.fromisoformat(rd)
+                            if rdt.tzinfo is not None:
+                                rdt = rdt.replace(tzinfo=None)
                             if rdt < cutoff:
                                 continue
                         except (ValueError, TypeError):
