@@ -6,11 +6,13 @@ Tier 2 (Complement): HuggingFace Hub API — fills gaps for niche open-weight mo
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import httpx
@@ -26,9 +28,67 @@ logger = logging.getLogger("sensing.sources.model_releases")
 
 HF_API_URL = "https://huggingface.co/api/models"
 
-# ── In-memory cache for AA API (avoids burning daily quota) ──
-_AA_CACHE_TTL = 3600  # 1 hour
-_aa_cache: Dict[str, Tuple[float, list]] = {}  # endpoint -> (timestamp, data)
+# ── File-based daily cache for AA API ──
+_AA_CACHE_DIR = Path("data/sensing_cache/aa")
+_AA_CACHE_TTL = 24 * 3600  # 24 hours
+_aa_mem_cache: Dict[str, Tuple[float, list]] = {}  # in-memory hot cache
+_aa_rate_limited = False  # set True when 429 hit, skip further API calls
+
+
+def _aa_cache_path(endpoint: str) -> Path:
+    """Return the file cache path for an AA endpoint."""
+    safe_name = endpoint.strip("/").replace("/", "_")
+    return _AA_CACHE_DIR / f"{safe_name}.json"
+
+
+def _aa_read_file_cache(endpoint: str) -> Optional[list]:
+    """Read AA data from file cache if fresh enough."""
+    fpath = _aa_cache_path(endpoint)
+    if not fpath.exists():
+        return None
+    try:
+        data = json.loads(fpath.read_text(encoding="utf-8"))
+        cached_at = data.get("cached_at", 0)
+        if time.time() - cached_at > _AA_CACHE_TTL:
+            return None  # expired
+        return data.get("models", [])
+    except Exception:
+        return None
+
+
+def _aa_write_file_cache(endpoint: str, models: list) -> None:
+    """Persist AA data to file cache."""
+    try:
+        _AA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        fpath = _aa_cache_path(endpoint)
+        fpath.write_text(
+            json.dumps(
+                {"cached_at": time.time(), "endpoint": endpoint, "models": models},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.debug(f"Failed to write AA cache for {endpoint}: {e}")
+
+
+def _aa_read_stale_cache(endpoint: str) -> Optional[list]:
+    """Read AA data from file cache even if expired (last resort fallback)."""
+    fpath = _aa_cache_path(endpoint)
+    if not fpath.exists():
+        return None
+    try:
+        data = json.loads(fpath.read_text(encoding="utf-8"))
+        models = data.get("models", [])
+        if models:
+            age_hours = (time.time() - data.get("cached_at", 0)) / 3600
+            logger.info(
+                f"Using stale AA cache for {endpoint} "
+                f"({age_hours:.1f}h old, {len(models)} models)"
+            )
+        return models or None
+    except Exception:
+        return None
 
 # ── HuggingFace pipeline_tag → modality mapping ──
 _HF_PIPELINE_TO_MODALITY = {
@@ -160,39 +220,76 @@ async def _aa_fetch_cached(
     endpoint: str,
     api_key: str,
 ) -> Optional[list]:
-    """Fetch an AA endpoint with 1-hour cache and retry on 429."""
+    """Fetch an AA endpoint with daily file cache and retry on 429.
+
+    Cache strategy (layered):
+    1. In-memory hot cache (avoids disk reads within same process)
+    2. File cache in data/sensing_cache/aa/ (survives restarts, 24h TTL)
+    3. API call with retry on 429
+    4. Stale file cache (any age) as last resort
+    """
     now = time.monotonic()
-    cached = _aa_cache.get(endpoint)
-    if cached and (now - cached[0]) < _AA_CACHE_TTL:
-        logger.debug(f"AA cache hit for {endpoint}")
-        return cached[1]
 
-    for attempt in range(3):
-        resp = await client.get(
-            f"{ARTIFICIAL_ANALYSIS_API_URL}{endpoint}",
-            headers={"x-api-key": api_key},
-        )
-        if resp.status_code == 429:
-            wait = 2 ** attempt
-            logger.info(f"AA 429 rate-limited, retrying in {wait}s...")
-            await asyncio.sleep(wait)
-            continue
-        resp.raise_for_status()
-        payload = resp.json()
-        if isinstance(payload, dict):
-            data = payload.get("data", [])
-        elif isinstance(payload, list):
-            data = payload
-        else:
-            return None
-        _aa_cache[endpoint] = (now, data)
-        return data
+    # Layer 1: in-memory hot cache
+    mem = _aa_mem_cache.get(endpoint)
+    if mem and (now - mem[0]) < 3600:  # 1h in-memory TTL
+        return mem[1]
 
-    logger.warning(f"AA endpoint {endpoint} still 429 after retries")
-    # Return stale cache if available
-    if cached:
-        logger.info("Using stale AA cache as fallback")
-        return cached[1]
+    # Layer 2: file cache (24h TTL)
+    file_data = _aa_read_file_cache(endpoint)
+    if file_data is not None:
+        _aa_mem_cache[endpoint] = (now, file_data)
+        return file_data
+
+    # Layer 3: API call with retry (skip if already rate-limited this run)
+    global _aa_rate_limited
+    if not _aa_rate_limited:
+        for attempt in range(3):
+            try:
+                resp = await client.get(
+                    f"{ARTIFICIAL_ANALYSIS_API_URL}{endpoint}",
+                    headers={"x-api-key": api_key},
+                )
+                if resp.status_code == 429:
+                    _aa_rate_limited = True  # skip other endpoints immediately
+                    if attempt < 2:
+                        wait = 2 ** attempt
+                        logger.info(f"AA 429 rate-limited, retrying in {wait}s...")
+                        await asyncio.sleep(wait)
+                        continue
+                    else:
+                        logger.warning("AA still rate-limited after retries")
+                        break
+                resp.raise_for_status()
+                payload = resp.json()
+                if isinstance(payload, dict):
+                    data = payload.get("data", [])
+                elif isinstance(payload, list):
+                    data = payload
+                else:
+                    break
+                # Success — update both caches, clear rate-limit flag
+                _aa_mem_cache[endpoint] = (now, data)
+                _aa_write_file_cache(endpoint, data)
+                _aa_rate_limited = False
+                return data
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:
+                logger.debug(f"AA fetch attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+
+    # Layer 4: stale file cache (any age) as last resort
+    stale = _aa_read_stale_cache(endpoint)
+    if stale:
+        _aa_mem_cache[endpoint] = (now, stale)
+        return stale
+
+    if _aa_rate_limited:
+        logger.debug(f"AA {endpoint}: skipped (rate-limited), no cache available")
+    else:
+        logger.warning(f"AA endpoint {endpoint}: no data available (API + cache)")
     return None
 
 
