@@ -401,6 +401,7 @@ async def fetch_artificial_analysis_releases(
                     modality="Text",
                     notable_features="; ".join(features_parts)[:200],
                     source_url=f"https://artificialanalysis.ai/models/{model.get('slug', '')}",
+                    data_source="Artificial Analysis",
                 ))
 
             logger.info(
@@ -454,6 +455,7 @@ async def fetch_artificial_analysis_releases(
                             modality=modality,
                             notable_features="",
                             source_url=f"https://artificialanalysis.ai/models/{mm.get('slug', '')}",
+                            data_source="Artificial Analysis",
                         ))
                 except Exception as e:
                     logger.warning(f"AA media endpoint {endpoint} failed: {e}")

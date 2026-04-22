@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -35,8 +35,17 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases }
     }
   }, [lookbackDays]);
 
+  const aaReleases = useMemo(
+    () => releases.filter((r) => r.data_source === 'Artificial Analysis'),
+    [releases]
+  );
+  const hfReleases = useMemo(
+    () => releases.filter((r) => r.data_source !== 'Artificial Analysis'),
+    [releases]
+  );
+
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-6 p-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -92,86 +101,141 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases }
           <CardContent className="py-12 text-center">
             <Cpu className="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
             <p className="text-sm text-muted-foreground">
-              Click "Fetch Releases" to get the latest model releases from HuggingFace and major AI lab blogs.
+              Click "Fetch Releases" to get the latest model releases from Artificial Analysis and HuggingFace.
             </p>
           </CardContent>
         </Card>
       )}
 
-      {/* Table */}
-      {releases.length > 0 && (
-        <div className="overflow-x-auto border rounded-lg">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b bg-muted/30 text-left">
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Model</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Organization</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Date</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Status</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Parameters</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Type</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Modality</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Source</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">License</th>
-                <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Notable Features</th>
-              </tr>
-            </thead>
-            <tbody>
-              {releases.map((mr, idx) => (
-                <tr key={idx} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
-                  <td className="py-2 px-3 font-medium">
-                    {mr.source_url ? (
-                      <a
-                        href={mr.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-purple-700 dark:text-purple-300 hover:underline flex items-center gap-1"
-                      >
-                        {mr.model_name}
-                        <ExternalLink className="w-3 h-3 shrink-0" />
-                      </a>
-                    ) : (
-                      mr.model_name
-                    )}
-                  </td>
-                  <td className="py-2 px-3 text-muted-foreground">{mr.organization}</td>
-                  <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
-                  <td className="py-2 px-3">
-                    <StatusBadge status={mr.release_status} />
-                  </td>
-                  <td className="py-2 px-3">
-                    {mr.parameters && (
-                      <Badge variant="outline" className="text-xs font-mono">{mr.parameters}</Badge>
-                    )}
-                  </td>
-                  <td className="py-2 px-3">
-                    {mr.model_type && (
-                      <Badge variant="secondary" className="text-xs">{mr.model_type}</Badge>
-                    )}
-                  </td>
-                  <td className="py-2 px-3">
-                    {mr.modality && (
-                      <Badge variant="secondary" className="text-xs">{mr.modality}</Badge>
-                    )}
-                  </td>
-                  <td className="py-2 px-3">
-                    <OpenSourceBadge value={mr.is_open_source} />
-                  </td>
-                  <td className="py-2 px-3">
-                    {mr.license && (
-                      <Badge variant="outline" className="text-xs">{mr.license}</Badge>
-                    )}
-                  </td>
-                  <td className="py-2 px-3 text-xs text-muted-foreground max-w-xs">{mr.notable_features}</td>
+      {/* Artificial Analysis Table */}
+      {aaReleases.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              Artificial Analysis
+            </h3>
+            <Badge variant="secondary" className="text-xs">{aaReleases.length}</Badge>
+          </div>
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b bg-muted/30 text-left">
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Model</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Organization</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Date</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Status</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Modality</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Benchmarks & Pricing</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {aaReleases.map((mr, idx) => (
+                  <tr key={idx} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                    <td className="py-2 px-3 font-medium">
+                      <ModelLink name={mr.model_name} url={mr.source_url} />
+                    </td>
+                    <td className="py-2 px-3 text-muted-foreground">{mr.organization}</td>
+                    <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
+                    <td className="py-2 px-3">
+                      <StatusBadge status={mr.release_status} />
+                    </td>
+                    <td className="py-2 px-3">
+                      {mr.modality && (
+                        <Badge variant="secondary" className="text-xs">{mr.modality}</Badge>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 text-xs text-muted-foreground max-w-md">
+                      {mr.notable_features}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* HuggingFace Table */}
+      {hfReleases.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              HuggingFace
+            </h3>
+            <Badge variant="secondary" className="text-xs">{hfReleases.length}</Badge>
+          </div>
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b bg-muted/30 text-left">
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Model</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Organization</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Date</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Parameters</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Type</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Modality</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Open Source</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">License</th>
+                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Notable Features</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hfReleases.map((mr, idx) => (
+                  <tr key={idx} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                    <td className="py-2 px-3 font-medium">
+                      <ModelLink name={mr.model_name} url={mr.source_url} />
+                    </td>
+                    <td className="py-2 px-3 text-muted-foreground">{mr.organization}</td>
+                    <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
+                    <td className="py-2 px-3">
+                      {mr.parameters && (
+                        <Badge variant="outline" className="text-xs font-mono">{mr.parameters}</Badge>
+                      )}
+                    </td>
+                    <td className="py-2 px-3">
+                      {mr.model_type && (
+                        <Badge variant="secondary" className="text-xs">{mr.model_type}</Badge>
+                      )}
+                    </td>
+                    <td className="py-2 px-3">
+                      {mr.modality && (
+                        <Badge variant="secondary" className="text-xs">{mr.modality}</Badge>
+                      )}
+                    </td>
+                    <td className="py-2 px-3">
+                      <OpenSourceBadge value={mr.is_open_source} />
+                    </td>
+                    <td className="py-2 px-3">
+                      {mr.license && (
+                        <Badge variant="outline" className="text-xs">{mr.license}</Badge>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 text-xs text-muted-foreground max-w-xs">{mr.notable_features}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
   );
 };
+
+function ModelLink({ name, url }: { name: string; url: string }) {
+  if (!url) return <>{name}</>;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-purple-700 dark:text-purple-300 hover:underline flex items-center gap-1"
+    >
+      {name}
+      <ExternalLink className="w-3 h-3 shrink-0" />
+    </a>
+  );
+}
 
 function StatusBadge({ status }: { status: string }) {
   const st = (status || 'Unknown').trim();

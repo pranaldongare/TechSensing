@@ -83,6 +83,7 @@ def build_releases_from_hf(hf_models: List[dict]) -> List[ModelRelease]:
                 modality=modality,
                 notable_features=". ".join(features_parts) if features_parts else "",
                 source_url=f"https://huggingface.co/{model_id}",
+                data_source="HuggingFace",
             )
         )
 

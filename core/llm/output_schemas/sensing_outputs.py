@@ -510,6 +510,10 @@ class ModelRelease(BaseModel):
         description="1-2 sentence summary of notable features.",
     )
     source_url: str = Field(default="", description="Link to announcement or paper.")
+    data_source: str = Field(
+        default="",
+        description="Data source identifier (e.g., 'Artificial Analysis', 'HuggingFace').",
+    )
 
 
 class ModelReleasesOutput(LLMOutputBase):

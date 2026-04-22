@@ -137,6 +137,7 @@ export interface ModelRelease {
   modality: string;
   notable_features: string;
   source_url: string;
+  data_source: string;
 }
 
 export interface SensingReport {
