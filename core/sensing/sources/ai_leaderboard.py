@@ -16,6 +16,8 @@ from core.sensing.sources.model_releases import _aa_fetch_cached
 
 logger = logging.getLogger("sensing.sources.ai_leaderboard")
 
+_TOP_N = 20  # Show top 20 models per category
+
 
 async def get_ai_leaderboard() -> Dict[str, List[Dict[str, Any]]]:
     """Fetch all AA data and return structured leaderboard categories.
@@ -117,7 +119,7 @@ def _build_llm_quality(models: list) -> List[Dict[str, Any]]:
     entries.sort(key=lambda x: x["intelligence_index"] or 0, reverse=True)
     for i, e in enumerate(entries):
         e["rank"] = i + 1
-    return entries
+    return entries[:_TOP_N][:_TOP_N]
 
 
 def _build_llm_speed(models: list) -> List[Dict[str, Any]]:
@@ -142,7 +144,7 @@ def _build_llm_speed(models: list) -> List[Dict[str, Any]]:
     entries.sort(key=lambda x: x["tokens_per_second"] or 0, reverse=True)
     for i, e in enumerate(entries):
         e["rank"] = i + 1
-    return entries
+    return entries[:_TOP_N][:_TOP_N]
 
 
 def _build_llm_price(models: list) -> List[Dict[str, Any]]:
@@ -167,7 +169,7 @@ def _build_llm_price(models: list) -> List[Dict[str, Any]]:
     entries.sort(key=lambda x: x["price"] or float("inf"))
     for i, e in enumerate(entries):
         e["rank"] = i + 1
-    return entries
+    return entries[:_TOP_N]
 
 
 def _build_media_leaderboard(models: list) -> List[Dict[str, Any]]:
@@ -193,4 +195,4 @@ def _build_media_leaderboard(models: list) -> List[Dict[str, Any]]:
     entries.sort(key=lambda x: x["elo"] or 0, reverse=True)
     for i, e in enumerate(entries):
         e["rank"] = i + 1
-    return entries
+    return entries[:_TOP_N]
