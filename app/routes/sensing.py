@@ -2328,3 +2328,33 @@ async def get_latest_model_releases(
             status_code=500,
             detail=f"Model releases fetch failed: {str(e)}",
         )
+
+
+# --- AI Leaderboard ---
+
+
+@router.post("/ai-leaderboard")
+async def get_ai_leaderboard_data(request: Request):
+    """Fetch AI model leaderboard data from Artificial Analysis API.
+
+    Returns all models sorted by ranking metrics across categories:
+    LLM Quality, LLM Speed, LLM Price, Image, Video, Speech.
+    """
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    try:
+        from core.sensing.sources.ai_leaderboard import get_ai_leaderboard
+
+        leaderboard = await get_ai_leaderboard()
+        return JSONResponse(content={
+            "status": "ok",
+            "categories": leaderboard,
+        })
+    except Exception as e:
+        logger.warning(f"AI leaderboard fetch failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"AI leaderboard fetch failed: {str(e)}",
+        )

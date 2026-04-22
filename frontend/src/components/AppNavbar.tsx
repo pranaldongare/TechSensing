@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Moon, Sun, Radar, Building2, Briefcase, Settings } from 'lucide-react';
+import { Moon, Sun, Radar, Building2, Briefcase, Cpu, BarChart3, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useTheme } from '@/lib/theme-context';
 import { PROJECT_NAME } from '../../config';
@@ -39,6 +39,14 @@ const AppNavbar: React.FC = () => {
           <NavLink to="/key-companies" className={linkClass}>
             <Briefcase className="w-4 h-4" />
             Key Companies
+          </NavLink>
+          <NavLink to="/model-releases" className={linkClass}>
+            <Cpu className="w-4 h-4" />
+            Model Releases
+          </NavLink>
+          <NavLink to="/ai-leaderboard" className={linkClass}>
+            <BarChart3 className="w-4 h-4" />
+            AI Leaderboard
           </NavLink>
           <NavLink to="/settings" className={linkClass}>
             <Settings className="w-4 h-4" />

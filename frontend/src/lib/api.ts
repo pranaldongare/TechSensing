@@ -140,6 +140,40 @@ export interface ModelRelease {
   data_source: string;
 }
 
+// --- AI Leaderboard ---
+
+export interface LeaderboardLLMEntry {
+  rank: number;
+  model_name: string;
+  organization: string;
+  intelligence_index: number | null;
+  mmlu_pro?: number | null;
+  gpqa?: number | null;
+  tokens_per_second?: number | null;
+  speed?: number | null;
+  price?: number | null;
+  slug: string;
+  release_date: string;
+}
+
+export interface LeaderboardMediaEntry {
+  rank: number;
+  model_name: string;
+  organization: string;
+  elo: number | null;
+  release_date: string;
+  slug: string;
+}
+
+export interface AILeaderboardData {
+  llm_quality: LeaderboardLLMEntry[];
+  llm_speed: LeaderboardLLMEntry[];
+  llm_price: LeaderboardLLMEntry[];
+  image_generation: LeaderboardMediaEntry[];
+  video_generation: LeaderboardMediaEntry[];
+  speech: LeaderboardMediaEntry[];
+}
+
 export interface SensingReport {
   report_title: string;
   executive_summary: string;
@@ -1256,6 +1290,24 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to fetch model releases');
+    return data;
+  },
+
+  async sensingAILeaderboard(): Promise<{
+    status: string;
+    categories: AILeaderboardData;
+  }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/ai-leaderboard`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({}),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to fetch AI leaderboard');
     return data;
   },
 
