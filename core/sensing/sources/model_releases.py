@@ -335,7 +335,7 @@ async def fetch_artificial_analysis_releases(
             )
             if models is None:
                 logger.warning("AA /data/llms/models returned None — no LLM data")
-                return []
+                models = []  # continue to media endpoints instead of early return
 
             # Diagnostic counters
             no_date = 0
@@ -413,6 +413,8 @@ async def fetch_artificial_analysis_releases(
             )
 
             # Also fetch media models (text-to-image, video, etc.)
+            # Reset rate-limit flag — media endpoints have separate limits
+            rate_limited[0] = False
             for endpoint, modality in [
                 ("/data/media/text-to-image", "Image"),
                 ("/data/media/text-to-video", "Video"),
@@ -440,7 +442,11 @@ async def fetch_artificial_analysis_releases(
                             m_no_date += 1
                             continue
                         try:
-                            rdt = datetime.fromisoformat(rd)
+                            # Media dates can be YYYY-MM (no day) or YYYY-MM-DD
+                            if len(rd) <= 7:  # "YYYY-MM" format
+                                rdt = datetime.strptime(rd, "%Y-%m")
+                            else:
+                                rdt = datetime.fromisoformat(rd)
                             if rdt.tzinfo is not None:
                                 rdt = rdt.replace(tzinfo=None)
                             if rdt < cutoff:
