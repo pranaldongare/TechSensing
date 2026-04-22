@@ -2266,6 +2266,10 @@ class ModelReleasesRequest(BaseModel):
         ge=1,
         le=90,
     )
+    tracking_id: str = Field(
+        default="",
+        description="If provided, persist the refreshed releases back to this report.",
+    )
 
 
 @router.post("/model-releases")
@@ -2288,13 +2292,34 @@ async def get_latest_model_releases(
         from core.sensing.sources.model_releases import get_model_releases
 
         releases = await get_model_releases(lookback_days=body.lookback_days)
+        releases_dicts = [r.model_dump() for r in releases]
+
+        # Persist to report if tracking_id provided
+        if body.tracking_id:
+            user_id = payload.userId
+            sensing_dir = _get_sensing_dir(user_id)
+            for fname in (
+                f"status_{body.tracking_id}.json",
+                f"report_{body.tracking_id}.json",
+            ):
+                fpath = os.path.join(sensing_dir, fname)
+                if os.path.exists(fpath):
+                    try:
+                        async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                            report_data = json.loads(await f.read())
+                        if "report" in report_data and isinstance(report_data["report"], dict):
+                            report_data["report"]["model_releases"] = releases_dicts
+                            async with aiofiles.open(fpath, "w", encoding="utf-8") as f:
+                                await f.write(json.dumps(report_data, ensure_ascii=False, indent=2))
+                    except Exception as e:
+                        logger.warning(f"Failed to update model_releases in {fname}: {e}")
 
         return JSONResponse(
             content={
                 "status": "ok",
                 "lookback_days": body.lookback_days,
                 "count": len(releases),
-                "model_releases": [r.model_dump() for r in releases],
+                "model_releases": releases_dicts,
             }
         )
     except Exception as e:

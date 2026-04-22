@@ -379,7 +379,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                 <Cpu className="w-5 h-5 text-purple-600" />
                 Latest Model Releases ({report.model_releases.length})
               </h3>
-              <RefreshModelReleasesButton onRefresh={(releases) => { report.model_releases = releases; }} />
+              <RefreshModelReleasesButton trackingId={meta.tracking_id} onRefresh={(releases) => { report.model_releases = releases; }} />
             </div>
             <p className="text-sm text-muted-foreground -mt-1">
               Recent AI model announcements and releases.
@@ -829,13 +829,13 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
   );
 };
 
-function RefreshModelReleasesButton({ onRefresh }: { onRefresh: (releases: ModelRelease[]) => void }) {
+function RefreshModelReleasesButton({ trackingId, onRefresh }: { trackingId?: string; onRefresh: (releases: ModelRelease[]) => void }) {
   const [loading, setLoading] = useState(false);
 
   const handleRefresh = async () => {
     setLoading(true);
     try {
-      const result = await api.sensingModelReleases(30);
+      const result = await api.sensingModelReleases(30, trackingId);
       onRefresh(result.model_releases);
     } catch {
       // silent fail — user can retry

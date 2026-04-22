@@ -743,7 +743,7 @@ const TechSensing: React.FC = () => {
             />
           </TabsContent>
           <TabsContent value="model-releases" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <ModelReleasesView initialReleases={reportData?.report?.model_releases} />
+            <ModelReleasesView initialReleases={reportData?.report?.model_releases} trackingId={reportData?.meta?.tracking_id} />
           </TabsContent>
           <TabsContent value="leading-indicators" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
             <LIRCandidateFeed />
@@ -1340,7 +1340,7 @@ const TechSensing: React.FC = () => {
           )}
         </TabsContent>
         <TabsContent value="model-releases" className="flex-1 min-h-0 mt-2 overflow-auto">
-          <ModelReleasesView initialReleases={reportData?.report?.model_releases} />
+          <ModelReleasesView initialReleases={reportData?.report?.model_releases} trackingId={reportData?.meta?.tracking_id} />
         </TabsContent>
         <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
           <LIRCandidateFeed />

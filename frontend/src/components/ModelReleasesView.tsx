@@ -10,9 +10,11 @@ import type { ModelRelease } from '@/lib/api';
 interface ModelReleasesViewProps {
   /** If provided, show these releases initially (from report) */
   initialReleases?: ModelRelease[];
+  /** If provided, refreshed releases are persisted back to this report */
+  trackingId?: string;
 }
 
-const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases }) => {
+const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, trackingId }) => {
   const [releases, setReleases] = useState<ModelRelease[]>(initialReleases || []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +27,7 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases }
     setLoading(true);
     setError(null);
     try {
-      const result = await api.sensingModelReleases(parseInt(lookbackDays));
+      const result = await api.sensingModelReleases(parseInt(lookbackDays), trackingId);
       setReleases(result.model_releases);
       setLastFetched(new Date().toLocaleTimeString());
     } catch (e: unknown) {
@@ -33,7 +35,7 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases }
     } finally {
       setLoading(false);
     }
-  }, [lookbackDays]);
+  }, [lookbackDays, trackingId]);
 
   const aaReleases = useMemo(
     () => releases.filter((r) => r.data_source === 'Artificial Analysis'),

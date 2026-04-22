@@ -1237,19 +1237,21 @@ export const api = {
     return data;
   },
 
-  async sensingModelReleases(lookbackDays: number = 30): Promise<{
+  async sensingModelReleases(lookbackDays: number = 30, trackingId?: string): Promise<{
     status: string;
     lookback_days: number;
     count: number;
     model_releases: ModelRelease[];
   }> {
     const token = getAuthToken();
+    const body: Record<string, unknown> = { lookback_days: lookbackDays };
+    if (trackingId) body.tracking_id = trackingId;
     const response = await fetch(
       `${API_URL}/sensing/model-releases`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ lookback_days: lookbackDays }),
+        body: JSON.stringify(body),
       },
     );
     const data = await response.json();
