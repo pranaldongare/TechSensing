@@ -140,11 +140,16 @@ const LIRConceptDetail: React.FC<Props> = ({ conceptId, onBack }) => {
           </div>
           {/* Individual score bars */}
           <div className="space-y-1 pt-1">
-            {(['convergence', 'velocity', 'novelty', 'authority', 'pattern_match'] as const).map(
-              (key) => (
+            {(['convergence', 'velocity', 'novelty', 'authority', 'pattern_match', 'persistence', 'cross_platform'] as const).map(
+              (key) => {
+                const labels: Record<string, string> = {
+                  pattern_match: 'Pattern',
+                  cross_platform: 'Cross-Plat.',
+                };
+                return (
                 <div key={key} className="flex items-center gap-2">
                   <span className="w-20 text-muted-foreground capitalize text-[10px]">
-                    {key === 'pattern_match' ? 'Pattern' : key}
+                    {labels[key] || key}
                   </span>
                   <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
                     <div
@@ -154,7 +159,8 @@ const LIRConceptDetail: React.FC<Props> = ({ conceptId, onBack }) => {
                   </div>
                   <span className="w-8 text-right">{((detail.scores[key] || 0) * 100).toFixed(0)}%</span>
                 </div>
-              ),
+                );
+              },
             )}
           </div>
         </div>

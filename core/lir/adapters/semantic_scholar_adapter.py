@@ -1,7 +1,9 @@
 """
-Semantic Scholar LIR adapter — wraps existing fetch_semantic_scholar() for LIR.
+Semantic Scholar LIR adapter — broad academic discovery with citation data.
 
 Tier 1: Academic papers from all disciplines, 12-36 month lead time.
+Uses broad category queries instead of AI-only keywords, and captures
+citation counts for authority scoring.
 """
 
 import hashlib
@@ -15,7 +17,7 @@ logger = logging.getLogger("lir.adapters.semantic_scholar")
 
 
 class SemanticScholarLIRAdapter:
-    """Tier-1 adapter: Semantic Scholar academic papers."""
+    """Tier-1 adapter: Semantic Scholar academic papers (broad discovery)."""
 
     source_id: str = "semantic_scholar"
     tier: str = "T1"
@@ -31,17 +33,25 @@ class SemanticScholarLIRAdapter:
 
         lookback_days = max(1, (datetime.utcnow() - since.replace(tzinfo=None)).days)
 
+        # Broad queries covering diverse research domains
+        # (not just AI/ML — let the LLM determine relevance)
         queries = [
-            "large language model",
-            "neural architecture",
-            "reinforcement learning from human feedback",
-            "multimodal AI",
+            "artificial intelligence",
+            "quantum computing",
+            "robotics automation",
+            "biotechnology computational",
+            "cybersecurity",
+            "distributed systems",
+            "edge computing",
+            "computer vision",
+            "natural language processing",
+            "reinforcement learning",
         ]
 
         all_items: List[LIRRawItem] = []
         seen_urls: set = set()
 
-        per_query = max(5, max_results // len(queries))
+        per_query = max(3, max_results // len(queries))
 
         for query in queries:
             try:
@@ -54,6 +64,19 @@ class SemanticScholarLIRAdapter:
                     if a.url in seen_urls:
                         continue
                     seen_urls.add(a.url)
+
+                    # Extract citation count from snippet if available
+                    citation_count = 0
+                    if a.snippet and "citations:" in a.snippet.lower():
+                        try:
+                            parts = a.snippet.split("|")
+                            for part in parts:
+                                if "citation" in part.lower():
+                                    citation_count = int(
+                                        "".join(c for c in part if c.isdigit()) or "0"
+                                    )
+                        except (ValueError, IndexError):
+                            pass
 
                     item_id = f"s2:{hashlib.sha256(a.url.encode()).hexdigest()[:12]}"
                     all_items.append(
@@ -68,6 +91,7 @@ class SemanticScholarLIRAdapter:
                             content=a.content or a.snippet,
                             authors=a.snippet.split(" | ")[0] if " | " in a.snippet else "",
                             categories="Semantic Scholar",
+                            metadata={"citation_count": citation_count},
                         )
                     )
             except Exception as e:

@@ -28,11 +28,13 @@ LIR_MAX_CANDIDATES = 50
 # ──────────────────────── Scoring weights ────────────────────────
 
 SCORE_WEIGHTS = {
-    "convergence": 0.30,
-    "velocity": 0.25,
-    "novelty": 0.20,
+    "convergence": 0.20,
+    "velocity": 0.20,
+    "novelty": 0.15,
     "authority": 0.15,
     "pattern_match": 0.10,
+    "persistence": 0.10,
+    "cross_platform": 0.10,
 }
 
 # ──────────────────────── Ring thresholds ────────────────────────
@@ -81,3 +83,37 @@ MAX_CONVERGENCE_BONUS = 0.45   # Cap on tier-diversity bonus
 
 EXTRACTION_BATCH_SIZE = 10     # Items per LLM extraction call
 CANONICALIZATION_BATCH_SIZE = 5  # Concepts per LLM canonicalization call
+
+# ──────────────────────── Persistence parameters (EScore-inspired) ────────────────────────
+
+PERSISTENCE_MIN_SIGNALS = 7       # Minimum signal count to start scoring
+PERSISTENCE_MIN_MONTHS = 3        # Minimum distinct months with signals
+PERSISTENCE_FULL_SIGNALS = 20     # Signals for full persistence score
+PERSISTENCE_FULL_MONTHS = 6       # Months for full persistence score
+
+# ──────────────────────── Cross-platform parameters ────────────────────────
+
+CROSS_PLATFORM_MIN_SOURCES = 2    # Minimum unique source_ids for >0
+CROSS_PLATFORM_FULL_SOURCES = 5   # Source_ids for full score
+CROSS_PLATFORM_TIER_BONUS = 0.15  # Bonus per tier beyond the first
+
+# ──────────────────────── Velocity decay detection ────────────────────────
+
+VELOCITY_DECAY_THRESHOLD = 0.50   # >50% drop from peak = hype flag
+VELOCITY_DECAY_WINDOW_WEEKS = 4   # Recent window to check for decay
+VELOCITY_DECAY_PENALTY = 0.3      # Multiplier applied to velocity if decaying
+
+# ──────────────────────── EScore novelty blend ────────────────────────
+
+ESCORE_NOVELTY_WEIGHT = 0.40      # Weight for objective novelty ratio
+LLM_NOVELTY_WEIGHT = 0.60         # Weight for LLM stated_novelty
+
+# ──────────────────────── Global velocity baseline ────────────────────────
+# Fallback signals-per-week by tier when concept has no historical baseline
+
+GLOBAL_VELOCITY_BASELINE = {
+    "T1": 0.5,   # Academic sources are slower
+    "T2": 2.0,   # Open-source/ecosystem moderate
+    "T3": 5.0,   # Community chatter is frequent
+    "T4": 3.0,   # Mainstream press moderate
+}

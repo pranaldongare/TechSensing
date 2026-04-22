@@ -107,6 +107,10 @@ SENSING_FEATURES = {
     "lir_vendor_changelogs": _env_flag("SENSING_FEATURE_LIR_VENDOR", True),
     "lir_standards": _env_flag("SENSING_FEATURE_LIR_STANDARDS", True),
     "lir_patents": _env_flag("SENSING_FEATURE_LIR_PATENTS", False),
+    "lir_openalex": _env_flag("SENSING_FEATURE_LIR_OPENALEX", True),
+    "lir_google_trends": _env_flag("SENSING_FEATURE_LIR_GTRENDS", False),
+    "lir_stackexchange": _env_flag("SENSING_FEATURE_LIR_STACKEX", True),
+    "lir_job_postings": _env_flag("SENSING_FEATURE_LIR_JOBS", True),
 }
 
 

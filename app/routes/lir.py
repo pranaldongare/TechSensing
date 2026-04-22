@@ -197,6 +197,8 @@ async def lir_candidates(
             novelty=score_data.get("novelty", 0.5),
             authority=score_data.get("authority", 0.5),
             pattern_match=score_data.get("pattern_match", 0.0),
+            persistence=score_data.get("persistence", 0.0),
+            cross_platform=score_data.get("cross_platform", 0.0),
         )
         composite = score_set.composite
 

@@ -1,7 +1,9 @@
 """
-GitHub LIR adapter — wraps existing fetch_github_trending() for LIR.
+GitHub LIR adapter — open-ended discovery of trending repositories.
 
 Tier 2: Open-source repos, 6-18 month lead time.
+Uses date-based and language-based queries instead of AI-only keywords
+to discover emerging technologies across all domains.
 """
 
 import hashlib
@@ -15,7 +17,7 @@ logger = logging.getLogger("lir.adapters.github")
 
 
 class GitHubLIRAdapter:
-    """Tier-2 adapter: GitHub trending repositories."""
+    """Tier-2 adapter: GitHub trending repositories (open-ended discovery)."""
 
     source_id: str = "github"
     tier: str = "T2"
@@ -31,12 +33,19 @@ class GitHubLIRAdapter:
 
         lookback_days = max(1, (datetime.utcnow() - since.replace(tzinfo=None)).days)
 
-        # Use broad AI/ML queries for LIR discovery
+        # Open-ended discovery: broad queries across diverse domains
+        # plus language-specific trending to catch non-AI breakthroughs
         queries = [
-            "machine learning",
-            "large language model",
-            "transformer neural network",
-            "deep learning framework",
+            # Broad open-ended discovery (no AI-specific keywords)
+            "stars:>100",                     # Any popular new repo
+            "language:rust stars:>50",        # Rust ecosystem (systems/infra)
+            "language:go stars:>50",          # Go ecosystem (cloud/infra)
+            "language:typescript stars:>50",  # TS ecosystem (frontend/tooling)
+            # Keep one broad AI query for coverage
+            "AI OR machine-learning OR deep-learning OR LLM",
+            # Cross-domain discovery
+            "quantum OR blockchain OR robotics OR biotech",
+            "developer-tools OR devops OR infrastructure",
         ]
 
         all_items: List[LIRRawItem] = []

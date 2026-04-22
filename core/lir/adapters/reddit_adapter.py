@@ -1,7 +1,9 @@
 """
-Reddit LIR adapter — wraps existing search_reddit() for LIR.
+Reddit LIR adapter — subreddit-based open-ended discovery.
 
 Tier 3: Community chatter, 1-6 month lead time.
+Monitors top posts from diverse tech subreddits without keyword filters,
+letting the LLM extraction step determine relevance.
 """
 
 import hashlib
@@ -13,9 +15,25 @@ from core.lir.models import LIRRawItem
 
 logger = logging.getLogger("lir.adapters.reddit")
 
+# Curated tech subreddits covering diverse domains
+TECH_SUBREDDITS = [
+    "programming",
+    "technology",
+    "MachineLearning",
+    "compsci",
+    "netsec",
+    "devops",
+    "rust",
+    "golang",
+    "webdev",
+    "selfhosted",
+    "datascience",
+    "robotics",
+]
+
 
 class RedditLIRAdapter:
-    """Tier-3 adapter: Reddit discussions."""
+    """Tier-3 adapter: Reddit discussions (subreddit-based discovery)."""
 
     source_id: str = "reddit"
     tier: str = "T3"
@@ -31,16 +49,21 @@ class RedditLIRAdapter:
 
         lookback_days = max(1, (datetime.utcnow() - since.replace(tzinfo=None)).days)
 
-        queries = [
-            "artificial intelligence breakthrough",
-            "new machine learning technique",
-            "LLM new model",
-        ]
+        # Mix of subreddit browsing + broad queries
+        # Subreddit names serve as queries to fetch top posts from each
+        queries = TECH_SUBREDDITS[:8]  # Top 8 subreddits
+
+        # Add a few broad cross-domain discovery queries
+        queries.extend([
+            "emerging technology",
+            "new programming language",
+            "open source project",
+        ])
 
         all_items: List[LIRRawItem] = []
         seen_urls: set = set()
 
-        per_query = max(5, max_results // len(queries))
+        per_query = max(3, max_results // len(queries))
 
         for query in queries:
             try:

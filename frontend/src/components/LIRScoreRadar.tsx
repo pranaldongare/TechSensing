@@ -21,6 +21,8 @@ const SCORE_LABELS: Record<string, string> = {
   novelty: 'Novelty',
   authority: 'Authority',
   pattern_match: 'Pattern',
+  persistence: 'Persistence',
+  cross_platform: 'Cross-Platform',
 };
 
 const LIRScoreRadar: React.FC<Props> = ({ scores, size = 180 }) => {

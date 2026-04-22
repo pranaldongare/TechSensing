@@ -60,13 +60,15 @@ class LIRConcept:
 
 @dataclass
 class LIRScoreSet:
-    """5-component score for a concept at a point in time."""
+    """7-component score for a concept at a point in time."""
 
     convergence: float = 0.0
     velocity: float = 0.0
     novelty: float = 0.5       # Default prior
     authority: float = 0.5     # Default prior
-    pattern_match: float = 0.0  # Phase 3
+    pattern_match: float = 0.0
+    persistence: float = 0.0   # EScore-inspired temporal persistence
+    cross_platform: float = 0.0  # Multi-source confirmation
 
     @property
     def composite(self) -> float:
@@ -79,6 +81,8 @@ class LIRScoreSet:
             + self.novelty * SCORE_WEIGHTS["novelty"]
             + self.authority * SCORE_WEIGHTS["authority"]
             + self.pattern_match * SCORE_WEIGHTS["pattern_match"]
+            + self.persistence * SCORE_WEIGHTS["persistence"]
+            + self.cross_platform * SCORE_WEIGHTS["cross_platform"]
         )
 
 

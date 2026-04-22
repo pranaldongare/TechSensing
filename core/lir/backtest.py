@@ -1,19 +1,43 @@
 """
 LIR backtest engine — replay mode with clock-freezing and weight learning.
 
-Phase 3: Replays historical data through the scoring engine at past
+Replays historical data through the 7-component scoring engine at past
 timestamps to evaluate how early concepts reach ring thresholds.
 """
 
 import itertools
 import logging
+import math
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional
 
-from core.lir.config import RING_THRESHOLDS, SCORE_WEIGHTS, score_to_ring
+from core.lir.config import (
+    CONVERGENCE_TIER_BONUS,
+    CROSS_PLATFORM_FULL_SOURCES,
+    CROSS_PLATFORM_MIN_SOURCES,
+    CROSS_PLATFORM_TIER_BONUS,
+    ESCORE_NOVELTY_WEIGHT,
+    GLOBAL_VELOCITY_BASELINE,
+    LLM_NOVELTY_WEIGHT,
+    MAX_CONVERGENCE_BONUS,
+    PERSISTENCE_FULL_MONTHS,
+    PERSISTENCE_FULL_SIGNALS,
+    PERSISTENCE_MIN_MONTHS,
+    PERSISTENCE_MIN_SIGNALS,
+    RING_THRESHOLDS,
+    SCORE_WEIGHTS,
+    SOURCE_TIER_AUTHORITY,
+    VELOCITY_BASELINE_WEEKS,
+    VELOCITY_DECAY_PENALTY,
+    VELOCITY_DECAY_THRESHOLD,
+    VELOCITY_DECAY_WINDOW_WEEKS,
+    VELOCITY_SIGMOID_K,
+    VELOCITY_SIGMOID_X0,
+    score_to_ring,
+)
 from core.lir.models import LIRConcept, LIRScoreSet, LIRSignalRecord
 from core.lir.patterns import compute_pattern_match, load_fingerprints
 from core.lir.storage import load_concept_signals, load_concepts, load_signals
@@ -28,7 +52,7 @@ class BacktestSnapshot:
     week_offset: int  # Weeks from start of backtest window
     date: str  # ISO date of the snapshot
     signal_count: int
-    scores: Dict[str, float]  # {convergence, velocity, novelty, authority, pattern_match}
+    scores: Dict[str, float]  # All 7 score components
     composite: float
     ring: str
 
@@ -72,20 +96,8 @@ def _score_at_time(
     """Score a concept using only signals available before the cutoff date.
 
     This is the clock-frozen variant of compute_scores — it filters
-    signals by published_date and computes all 5 components.
+    signals by published_date and computes all 7 components.
     """
-    import math
-    from collections import defaultdict
-
-    from core.lir.config import (
-        CONVERGENCE_TIER_BONUS,
-        MAX_CONVERGENCE_BONUS,
-        SOURCE_TIER_AUTHORITY,
-        VELOCITY_BASELINE_WEEKS,
-        VELOCITY_SIGMOID_K,
-        VELOCITY_SIGMOID_X0,
-    )
-
     # Filter signals to those published before cutoff
     visible = []
     for s in concept_signals:
@@ -128,21 +140,64 @@ def _score_at_time(
         recent_avg = recent_total / max(1, recent_weeks)
 
         if baseline_avg == 0:
-            velocity = min(1.0, recent_avg / 5.0)
+            # Cold-start: use global baseline by dominant tier
+            tier_counts = Counter(s.tier for s in visible)
+            dominant_tier = tier_counts.most_common(1)[0][0]
+            global_baseline = GLOBAL_VELOCITY_BASELINE.get(dominant_tier, 2.0)
+            if recent_avg > 0:
+                ratio = recent_avg / global_baseline
+                mads_above = max(0.0, ratio - 1.0)
+                velocity = 1.0 / (1.0 + math.exp(-VELOCITY_SIGMOID_K * (mads_above - VELOCITY_SIGMOID_X0)))
         else:
             ratio = recent_avg / baseline_avg
             mads_above = max(0.0, ratio - 1.0)
             velocity = 1.0 / (1.0 + math.exp(-VELOCITY_SIGMOID_K * (mads_above - VELOCITY_SIGMOID_X0)))
             velocity = min(1.0, velocity)
 
-    # ── Novelty ──
+        # Decay detection
+        decay_window = VELOCITY_DECAY_WINDOW_WEEKS
+        recent_decay_avg = sum(
+            weekly_counts.get(w, 0) for w in range(decay_window)
+        ) / max(1, decay_window)
+        peak_count = max(
+            (weekly_counts.get(w, 0) for w in range(VELOCITY_BASELINE_WEEKS)),
+            default=0,
+        )
+        if peak_count > 0 and recent_decay_avg > 0:
+            drop_ratio = recent_decay_avg / peak_count
+            if drop_ratio < VELOCITY_DECAY_THRESHOLD:
+                velocity *= VELOCITY_DECAY_PENALTY
+
+    velocity = min(1.0, velocity)
+
+    # ── Novelty (EScore blend) ──
+    dated_signals = []
+    for s in visible:
+        try:
+            pub = datetime.fromisoformat(s.published_date.replace("Z", "+00:00"))
+            dated_signals.append((pub, s))
+        except (ValueError, TypeError):
+            continue
+
+    escore_novelty = 0.5
+    if len(dated_signals) >= 2:
+        dated_signals.sort(key=lambda x: x[0])
+        midpoint = len(dated_signals) // 2
+        base_count = midpoint
+        active_count = len(dated_signals) - midpoint
+        if base_count > 0:
+            novelty_ratio = active_count / base_count
+            escore_novelty = min(1.0, novelty_ratio / 3.0)
+
     novelties = [s.stated_novelty for s in visible if s.stated_novelty > 0]
     if novelties:
         avg_n = sum(novelties) / len(novelties)
         max_n = max(novelties)
-        novelty = min(1.0, 0.6 * avg_n + 0.4 * max_n)
+        llm_novelty = min(1.0, 0.6 * avg_n + 0.4 * max_n)
     else:
-        novelty = 0.5
+        llm_novelty = 0.5
+
+    novelty = min(1.0, ESCORE_NOVELTY_WEIGHT * escore_novelty + LLM_NOVELTY_WEIGHT * llm_novelty)
 
     # ── Authority ──
     total_w = 0.0
@@ -155,11 +210,29 @@ def _score_at_time(
     authority = min(1.0, weighted_auth / total_w) if total_w > 0 else 0.5
 
     # ── Pattern match ──
-    # Build weekly counts for DTW (last 52 weeks, oldest first)
     weekly_for_pattern = []
     for w in range(51, -1, -1):
         weekly_for_pattern.append(float(weekly_counts.get(w, 0)))
     pattern_match = compute_pattern_match(weekly_for_pattern, fingerprints)
+
+    # ── Persistence ──
+    months = set()
+    for pub_dt, _ in dated_signals:
+        months.add((pub_dt.year, pub_dt.month))
+    distinct_months = len(months)
+
+    persistence = 0.0
+    if count >= PERSISTENCE_MIN_SIGNALS and distinct_months >= PERSISTENCE_MIN_MONTHS:
+        signal_component = min(1.0, count / PERSISTENCE_FULL_SIGNALS)
+        month_component = min(1.0, distinct_months / PERSISTENCE_FULL_MONTHS)
+        persistence = min(1.0, 0.5 * signal_component + 0.5 * month_component)
+
+    # ── Cross-platform ──
+    cross_platform = 0.0
+    if len(unique_sources) >= CROSS_PLATFORM_MIN_SOURCES:
+        cp_base = min(1.0, (len(unique_sources) - 1) / max(1, CROSS_PLATFORM_FULL_SOURCES - 1))
+        cp_tier_bonus = min(0.30, (len(unique_tiers) - 1) * CROSS_PLATFORM_TIER_BONUS)
+        cross_platform = min(1.0, cp_base + cp_tier_bonus)
 
     return LIRScoreSet(
         convergence=convergence,
@@ -167,6 +240,8 @@ def _score_at_time(
         novelty=novelty,
         authority=authority,
         pattern_match=pattern_match,
+        persistence=persistence,
+        cross_platform=cross_platform,
     )
 
 
@@ -284,12 +359,11 @@ async def run_backtest(
                     weights,
                     fingerprints,
                 )
-                composite = (
-                    score_set.convergence * weights.get("convergence", 0.3)
-                    + score_set.velocity * weights.get("velocity", 0.25)
-                    + score_set.novelty * weights.get("novelty", 0.2)
-                    + score_set.authority * weights.get("authority", 0.15)
-                    + score_set.pattern_match * weights.get("pattern_match", 0.1)
+
+                # Compute composite using all 7 weights
+                composite = sum(
+                    getattr(score_set, k, 0.0) * weights.get(k, 0.0)
+                    for k in weights
                 )
                 ring = score_to_ring(composite)
 
@@ -369,9 +443,8 @@ async def weight_grid_search(
 ) -> List[Dict]:
     """Search for optimal SCORE_WEIGHTS that maximize early detection.
 
-    Tries a grid of weight combinations and evaluates how early
-    the target concept reaches the target ring relative to the
-    consensus date.
+    Tries a grid of weight combinations (all 7 components) and evaluates
+    how early the target concept reaches the target ring.
 
     Args:
         target_concept_id: Concept to optimize for.
@@ -380,16 +453,18 @@ async def weight_grid_search(
         consensus_date: ISO date when the concept became mainstream.
 
     Returns:
-        List of {weights, first_ring_week, lead_weeks, score} dicts,
-        sorted by lead_weeks descending.
+        List of {weights, first_ring_week, target_ring} dicts,
+        sorted by earliest ring achievement.
     """
-    # Define weight grid (must sum to ~1.0)
+    # Define weight grid for all 7 components (must sum to ~1.0)
     weight_options = {
-        "convergence": [0.20, 0.30, 0.40],
-        "velocity": [0.15, 0.25, 0.35],
-        "novelty": [0.10, 0.20, 0.30],
-        "authority": [0.05, 0.15, 0.25],
-        "pattern_match": [0.05, 0.10, 0.20],
+        "convergence": [0.15, 0.20, 0.25],
+        "velocity": [0.15, 0.20, 0.25],
+        "novelty": [0.10, 0.15, 0.20],
+        "authority": [0.10, 0.15, 0.20],
+        "pattern_match": [0.05, 0.10, 0.15],
+        "persistence": [0.05, 0.10, 0.15],
+        "cross_platform": [0.05, 0.10, 0.15],
     }
 
     keys = list(weight_options.keys())

@@ -34,6 +34,9 @@ lxml-html-clean>=0.1.0
 # Web Search (Tavily — Google Patents)
 tavily-python>=0.5.0
 
+# Google Trends (optional, for lir_google_trends adapter)
+pytrends>=4.9.0
+
 # JSON Repair
 json-repair>=0.30.0
 

@@ -79,6 +79,22 @@ def get_enabled_lir_adapters() -> List[LIRAdapter]:
         from core.lir.adapters.patent_adapter import PatentLIRAdapter
         adapters.append(PatentLIRAdapter())
 
+    if sensing_feature("lir_openalex"):
+        from core.lir.adapters.openalex_adapter import OpenAlexLIRAdapter
+        adapters.append(OpenAlexLIRAdapter())
+
+    if sensing_feature("lir_google_trends"):
+        from core.lir.adapters.google_trends_adapter import GoogleTrendsLIRAdapter
+        adapters.append(GoogleTrendsLIRAdapter())
+
+    if sensing_feature("lir_stackexchange"):
+        from core.lir.adapters.stackexchange_adapter import StackExchangeLIRAdapter
+        adapters.append(StackExchangeLIRAdapter())
+
+    if sensing_feature("lir_job_postings"):
+        from core.lir.adapters.job_posting_adapter import JobPostingLIRAdapter
+        adapters.append(JobPostingLIRAdapter())
+
     return adapters
 
 

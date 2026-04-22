@@ -755,6 +755,8 @@ export interface LIRScoreSet {
   novelty: number;
   authority: number;
   pattern_match: number;
+  persistence: number;
+  cross_platform: number;
 }
 
 export interface LIREvidence {
