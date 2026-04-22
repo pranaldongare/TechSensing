@@ -279,8 +279,9 @@ async def _aa_fetch_cached(
                 _aa_write_file_cache(endpoint, data)
                 _rate_limited[0] = False
                 return data
-            except httpx.HTTPStatusError:
-                raise
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"AA {endpoint}: HTTP {e.response.status_code} error")
+                break  # fall through to stale cache instead of raising
             except Exception as e:
                 logger.warning(f"AA {endpoint} attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
@@ -415,6 +416,8 @@ async def fetch_artificial_analysis_releases(
             for endpoint, modality in [
                 ("/data/media/text-to-image", "Image"),
                 ("/data/media/text-to-video", "Video"),
+                ("/data/media/image-to-video", "Video"),
+                ("/data/media/image-editing", "Image"),
                 ("/data/media/text-to-speech", "Speech"),
             ]:
                 try:
@@ -422,26 +425,46 @@ async def fetch_artificial_analysis_releases(
                         client, endpoint, api_key, rate_limited
                     )
                     if not media_models:
+                        logger.info(f"AA {endpoint}: no models returned")
                         continue
+
+                    m_no_date = 0
+                    m_bad_date = 0
+                    m_old_date = 0
+                    m_no_name = 0
+                    m_passed = 0
 
                     for mm in media_models:
                         rd = mm.get("release_date") or ""
                         if not rd:
+                            m_no_date += 1
                             continue
                         try:
                             rdt = datetime.fromisoformat(rd)
                             if rdt.tzinfo is not None:
                                 rdt = rdt.replace(tzinfo=None)
                             if rdt < cutoff:
+                                m_old_date += 1
                                 continue
                         except (ValueError, TypeError):
+                            m_bad_date += 1
                             continue
 
                         mm_name = mm.get("name", "")
                         if not mm_name:
+                            m_no_name += 1
                             continue
                         mm_creator = mm.get("model_creator", {})
                         mm_org = mm_creator.get("name", "") if isinstance(mm_creator, dict) else ""
+
+                        # Build notable features from ELO / rank data
+                        feat_parts = []
+                        elo = mm.get("elo")
+                        if elo is not None:
+                            feat_parts.append(f"ELO: {elo}")
+                        rank = mm.get("rank")
+                        if rank is not None:
+                            feat_parts.append(f"Rank #{rank}")
 
                         releases.append(ModelRelease(
                             model_name=mm_name,
@@ -453,10 +476,18 @@ async def fetch_artificial_analysis_releases(
                             is_open_source="",
                             model_type="",
                             modality=modality,
-                            notable_features="",
+                            notable_features="; ".join(feat_parts),
                             source_url=f"https://artificialanalysis.ai/models/{mm.get('slug', '')}",
                             data_source="Artificial Analysis",
                         ))
+                        m_passed += 1
+
+                    logger.info(
+                        f"AA {endpoint} filter: {len(media_models)} total, "
+                        f"{m_passed} passed, {m_no_date} no_date, "
+                        f"{m_bad_date} bad_date, {m_old_date} older_than_{lookback_days}d, "
+                        f"{m_no_name} no_name"
+                    )
                 except Exception as e:
                     logger.warning(f"AA media endpoint {endpoint} failed: {e}")
                     continue
