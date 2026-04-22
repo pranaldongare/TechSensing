@@ -32,7 +32,6 @@ HF_API_URL = "https://huggingface.co/api/models"
 _AA_CACHE_DIR = Path("data/sensing_cache/aa")
 _AA_CACHE_TTL = 24 * 3600  # 24 hours
 _aa_mem_cache: Dict[str, Tuple[float, list]] = {}  # in-memory hot cache
-_aa_rate_limited = False  # set True when 429 hit, skip further API calls
 
 
 def _aa_cache_path(endpoint: str) -> Path:
@@ -219,6 +218,7 @@ async def _aa_fetch_cached(
     client: httpx.AsyncClient,
     endpoint: str,
     api_key: str,
+    _rate_limited: list,  # mutable flag: [bool], shared across endpoints in one call
 ) -> Optional[list]:
     """Fetch an AA endpoint with daily file cache and retry on 429.
 
@@ -233,17 +233,18 @@ async def _aa_fetch_cached(
     # Layer 1: in-memory hot cache
     mem = _aa_mem_cache.get(endpoint)
     if mem and (now - mem[0]) < 3600:  # 1h in-memory TTL
+        logger.debug(f"AA {endpoint}: in-memory cache hit")
         return mem[1]
 
     # Layer 2: file cache (24h TTL)
     file_data = _aa_read_file_cache(endpoint)
     if file_data is not None:
+        logger.debug(f"AA {endpoint}: file cache hit ({len(file_data)} items)")
         _aa_mem_cache[endpoint] = (now, file_data)
         return file_data
 
-    # Layer 3: API call with retry (skip if already rate-limited this run)
-    global _aa_rate_limited
-    if not _aa_rate_limited:
+    # Layer 3: API call with retry (skip if already rate-limited this invocation)
+    if not _rate_limited[0]:
         for attempt in range(3):
             try:
                 resp = await client.get(
@@ -251,14 +252,14 @@ async def _aa_fetch_cached(
                     headers={"x-api-key": api_key},
                 )
                 if resp.status_code == 429:
-                    _aa_rate_limited = True  # skip other endpoints immediately
+                    _rate_limited[0] = True
                     if attempt < 2:
                         wait = 2 ** attempt
                         logger.info(f"AA 429 rate-limited, retrying in {wait}s...")
                         await asyncio.sleep(wait)
                         continue
                     else:
-                        logger.warning("AA still rate-limited after retries")
+                        logger.warning(f"AA {endpoint}: still 429 after retries")
                         break
                 resp.raise_for_status()
                 payload = resp.json()
@@ -267,16 +268,21 @@ async def _aa_fetch_cached(
                 elif isinstance(payload, list):
                     data = payload
                 else:
+                    logger.warning(
+                        f"AA {endpoint}: unexpected response type: "
+                        f"{type(payload).__name__}"
+                    )
                     break
-                # Success — update both caches, clear rate-limit flag
+                # Success — update both caches
+                logger.info(f"AA {endpoint}: API returned {len(data)} items")
                 _aa_mem_cache[endpoint] = (now, data)
                 _aa_write_file_cache(endpoint, data)
-                _aa_rate_limited = False
+                _rate_limited[0] = False
                 return data
             except httpx.HTTPStatusError:
                 raise
             except Exception as e:
-                logger.debug(f"AA fetch attempt {attempt + 1} failed: {e}")
+                logger.warning(f"AA {endpoint} attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
 
@@ -286,10 +292,10 @@ async def _aa_fetch_cached(
         _aa_mem_cache[endpoint] = (now, stale)
         return stale
 
-    if _aa_rate_limited:
-        logger.debug(f"AA {endpoint}: skipped (rate-limited), no cache available")
+    if _rate_limited[0]:
+        logger.warning(f"AA {endpoint}: skipped (rate-limited), no cache available")
     else:
-        logger.warning(f"AA endpoint {endpoint}: no data available (API + cache)")
+        logger.warning(f"AA {endpoint}: no data available (API + cache both failed)")
     return None
 
 
@@ -307,7 +313,7 @@ async def fetch_artificial_analysis_releases(
 
     api_key = os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY", "")
     if not api_key:
-        logger.debug("Artificial Analysis API key not set, skipping Tier 1")
+        logger.info("Artificial Analysis API key not set, skipping Tier 1")
         return []
 
     # Use naive date for comparison — AA dates are plain "YYYY-MM-DD"
@@ -316,30 +322,45 @@ async def fetch_artificial_analysis_releases(
     )
     releases: list = []
 
+    # Per-invocation rate-limit flag (mutable list so it can be shared across
+    # endpoints without leaking state between requests in a long-running server)
+    rate_limited: list = [False]
+
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             # Fetch LLM models
             models = await _aa_fetch_cached(
-                client, "/data/llms/models", api_key
+                client, "/data/llms/models", api_key, rate_limited
             )
             if models is None:
+                logger.warning("AA /data/llms/models returned None — no LLM data")
                 return []
+
+            # Diagnostic counters
+            no_date = 0
+            bad_date = 0
+            old_date = 0
+            no_name = 0
 
             for model in models:
                 release_date_str = model.get("release_date") or ""
                 if not release_date_str:
+                    no_date += 1
                     continue
                 try:
                     release_dt = datetime.fromisoformat(release_date_str)
                     if release_dt.tzinfo is not None:
                         release_dt = release_dt.replace(tzinfo=None)
                     if release_dt < cutoff:
+                        old_date += 1
                         continue
                 except (ValueError, TypeError):
+                    bad_date += 1
                     continue
 
                 name = model.get("name", "")
                 if not name:
+                    no_name += 1
                     continue
 
                 creator = model.get("model_creator", {})
@@ -382,6 +403,13 @@ async def fetch_artificial_analysis_releases(
                     source_url=f"https://artificialanalysis.ai/models/{model.get('slug', '')}",
                 ))
 
+            logger.info(
+                f"AA LLM filter: {len(models)} total, "
+                f"{len(releases)} passed, "
+                f"{no_date} no_date, {bad_date} bad_date, "
+                f"{old_date} older_than_{lookback_days}d, {no_name} no_name"
+            )
+
             # Also fetch media models (text-to-image, video, etc.)
             for endpoint, modality in [
                 ("/data/media/text-to-image", "Image"),
@@ -390,7 +418,7 @@ async def fetch_artificial_analysis_releases(
             ]:
                 try:
                     media_models = await _aa_fetch_cached(
-                        client, endpoint, api_key
+                        client, endpoint, api_key, rate_limited
                     )
                     if not media_models:
                         continue
@@ -427,7 +455,8 @@ async def fetch_artificial_analysis_releases(
                             notable_features="",
                             source_url=f"https://artificialanalysis.ai/models/{mm.get('slug', '')}",
                         ))
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"AA media endpoint {endpoint} failed: {e}")
                     continue
 
         logger.info(
