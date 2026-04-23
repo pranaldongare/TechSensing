@@ -5,13 +5,13 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
-  Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play, Zap,
+  Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
-  SensingHeadlineMove, SensingTrendingVideo, WeakSignal, TopicPreferences, ModelRelease,
+  SensingHeadlineMove, SensingTrendingVideo, TopicPreferences, ModelRelease,
 } from '@/lib/api';
 
 interface Meta {
@@ -295,79 +295,6 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                 )}
               </Card>
             ))}
-          </div>
-        )}
-
-        {/* Emerging Signals (Weak Signals) */}
-        {report.weak_signals && report.weak_signals.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="text-lg font-semibold flex items-center gap-2">
-              <Zap className="w-5 h-5 text-orange-500" />
-              Emerging Signals ({report.weak_signals.length})
-            </h3>
-            <p className="text-sm text-muted-foreground -mt-1">
-              Technologies with low visibility but accelerating growth — potential breakouts.
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {report.weak_signals.map((ws: WeakSignal, idx: number) => {
-                const accelColor =
-                  ws.acceleration_rate >= 3 ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' :
-                  ws.acceleration_rate >= 2 ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' :
-                  'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
-                // Sparkline from trajectory
-                const pts = ws.trajectory || [];
-                const maxCount = Math.max(...pts.map(p => p.article_count), 1);
-                const sparkW = 80;
-                const sparkH = 24;
-                const sparkPoints = pts.map((p, i) =>
-                  `${(i / Math.max(pts.length - 1, 1)) * sparkW},${sparkH - (p.article_count / maxCount) * sparkH}`
-                ).join(' ');
-
-                return (
-                  <Card key={idx} className="border-l-4 border-l-orange-400">
-                    <div className="p-3 space-y-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-sm">{ws.technology_name}</span>
-                        <Badge className={accelColor} variant="secondary">
-                          {ws.acceleration_rate.toFixed(1)}x
-                        </Badge>
-                        <Badge variant="outline" className="text-xs font-mono">
-                          DVI {(ws.dvi_score * 100).toFixed(0)}%
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1">
-                          <div className="text-xs text-muted-foreground mb-1">
-                            Strength: {(ws.current_strength * 100).toFixed(0)}%
-                          </div>
-                          <div className="w-full bg-muted rounded-full h-1.5">
-                            <div
-                              className="bg-orange-400 h-1.5 rounded-full"
-                              style={{ width: `${ws.current_strength * 100}%` }}
-                            />
-                          </div>
-                        </div>
-                        {pts.length >= 2 && (
-                          <svg width={sparkW} height={sparkH} className="shrink-0">
-                            <polyline
-                              points={sparkPoints}
-                              fill="none"
-                              stroke="#f97316"
-                              strokeWidth="1.5"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Tracked across {ws.run_count} runs &middot; First seen {new Date(ws.first_seen).toLocaleDateString()}
-                      </div>
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
           </div>
         )}
 
