@@ -56,30 +56,51 @@ async def query_reports(
         fpath = os.path.join(sensing_dir, fname)
         try:
             async with aiofiles.open(fpath, "r") as f:
-                data = json.loads(await f.read())
+                raw = json.loads(await f.read())
 
-            if domain and data.get("domain", "").lower() != domain.lower():
+            # Reports are stored as {"report": {...}, "meta": {...}}
+            report = raw.get("report", raw)
+            meta = raw.get("meta", {})
+
+            # Domain lives in meta or report
+            report_domain = (
+                meta.get("domain", "")
+                or report.get("domain", "")
+            )
+            if domain and report_domain.lower() != domain.lower():
                 continue
 
-            report_id = fname.replace("report_", "").replace(".json", "")
+            report_id = meta.get("tracking_id") or fname.replace("report_", "").replace(".json", "")
+            generated_at = meta.get("generated_at", "")
 
             # Extract relevant sections for context
             context = {
                 "report_id": report_id,
-                "domain": data.get("domain", ""),
-                "date_range": data.get("date_range", ""),
-                "executive_summary": data.get("executive_summary", ""),
+                "domain": report_domain,
+                "generated_at": generated_at,
+                "report_title": report.get("report_title", ""),
+                "date_range": report.get("date_range", ""),
+                "executive_summary": report.get("executive_summary", ""),
+                "recommendations": report.get("recommendations", []),
                 "radar_items": [
                     {"name": r.get("name"), "ring": r.get("ring"),
                      "quadrant": r.get("quadrant"),
-                     "description": r.get("description", "")[:200],
+                     "description": r.get("description", "")[:300],
                      "is_new": r.get("is_new", False),
-                     "moved_in": r.get("moved_in")}
-                    for r in data.get("radar_items", [])
+                     "moved_in": r.get("moved_in"),
+                     "key_players": r.get("key_players", []),
+                     "practical_applications": r.get("practical_applications", [])[:3]}
+                    for r in report.get("radar_items", [])
                 ],
                 "key_trends": [
-                    {"name": t.get("trend_name"), "impact": t.get("impact_level")}
-                    for t in data.get("key_trends", [])
+                    {"name": t.get("trend_name"), "impact": t.get("impact_level"),
+                     "description": t.get("description", "")[:200]}
+                    for t in report.get("key_trends", [])
+                ],
+                "market_signals": [
+                    {"company": s.get("company_name"), "signal": s.get("signal_type"),
+                     "description": s.get("description", "")[:150]}
+                    for s in report.get("market_signals", [])[:10]
                 ],
             }
             report_contexts.append(context)
@@ -100,6 +121,12 @@ async def query_reports(
         )
 
     # Build LLM prompt
+    logger.info(
+        f"Query: '{question}' | domain={domain} | "
+        f"{len(report_contexts)} reports loaded | "
+        f"radar_items={sum(len(c['radar_items']) for c in report_contexts)} | "
+        f"trends={sum(len(c['key_trends']) for c in report_contexts)}"
+    )
     context_json = json.dumps(report_contexts, indent=1)
     schema_json = json.dumps(QueryAnswer.model_json_schema(), indent=2)
 
@@ -108,8 +135,11 @@ async def query_reports(
             "role": "system",
             "parts": (
                 "You are a technology intelligence analyst. Answer the user's question "
-                "using ONLY the report data provided below. Be specific, cite report dates, "
-                "and mention specific technologies by name.\n\n"
+                "using ONLY the report data provided below. Be specific, cite report dates "
+                "and generation timestamps, and mention specific technologies by name. "
+                "Include details from radar items, key trends, market signals, and "
+                "recommendations where relevant. If the data contains relevant information, "
+                "provide a thorough answer.\n\n"
                 f"REPORT DATA:\n{context_json}\n\n"
                 f"Respond with valid JSON matching this schema:\n{schema_json}"
             ),
@@ -117,11 +147,19 @@ async def query_reports(
         {"role": "user", "parts": question},
     ]
 
-    result = await invoke_llm(
-        gpu_model=GPU_SENSING_CLASSIFY_LLM.model,
-        response_schema=QueryAnswer,
-        contents=prompt,
-        port=GPU_SENSING_CLASSIFY_LLM.port,
-    )
-
-    return QueryAnswer.model_validate(result)
+    try:
+        result = await invoke_llm(
+            gpu_model=GPU_SENSING_CLASSIFY_LLM.model,
+            response_schema=QueryAnswer,
+            contents=prompt,
+            port=GPU_SENSING_CLASSIFY_LLM.port,
+        )
+        return QueryAnswer.model_validate(result)
+    except Exception as e:
+        logger.error(f"Query LLM call failed: {e}")
+        return QueryAnswer(
+            answer="Sorry, I encountered an error processing your question. Please try again.",
+            sources=[c["report_id"] for c in report_contexts],
+            technologies_mentioned=[],
+            confidence="low",
+        )
