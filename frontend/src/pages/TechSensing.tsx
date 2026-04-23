@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -61,8 +60,6 @@ import { downloadSensingReportPdf } from '@/lib/sensing-report-pdf';
 import { downloadSensingReportPptx } from '@/lib/sensing-report-pptx';
 import AppNavbar from '@/components/AppNavbar';
 
-const POLL_INTERVAL_MS = 10_000;
-const MAX_POLL_COUNT = 360; // 1 hour max
 
 type DateRangePreset = 'last_week' | 'last_month' | 'custom' | 'no_range';
 
@@ -79,11 +76,8 @@ const TechSensing: React.FC = () => {
   const [dateRange, setDateRange] = useState<DateRangePreset>('last_week');
   const [customDays, setCustomDays] = useState(14);
 
-  // Generation state
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState('');
-  const [trackingId, setTrackingId] = useState<string | null>(null);
+  // Generation state (only used to disable button during API call)
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Report state
   const [reportData, setReportData] = useState<SensingReportData | null>(null);
@@ -155,8 +149,6 @@ const TechSensing: React.FC = () => {
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pollCountRef = useRef(0);
 
   const lookbackDays = dateRange === 'no_range' ? 0 : dateRange === 'last_week' ? 7 : dateRange === 'last_month' ? 30 : customDays;
 
@@ -176,9 +168,9 @@ const TechSensing: React.FC = () => {
     }
   }, [reportData?.report?.domain]);
 
-  // Socket.IO for progress events
+  // Global WebSocket listener — always on, notifies when any report completes
   useEffect(() => {
-    if (!isGenerating || !trackingId || !user) return;
+    if (!user) return;
 
     const token = getAuthToken();
     const socket = io(API_URL, {
@@ -191,21 +183,20 @@ const TechSensing: React.FC = () => {
     const eventName = `${user.userId}/sensing_progress`;
 
     socket.on(eventName, (payload: { tracking_id: string; stage: string; progress: number; message: string }) => {
-      if (payload.tracking_id !== trackingId) return;
-
-      setProgress(payload.progress);
-      setProgressMessage(payload.message);
-
       if (payload.stage === 'complete') {
-        fetchReport(trackingId);
+        loadHistory();
+        toast({ title: 'Report Ready', description: payload.message || 'Your sensing report is ready to view.' });
       } else if (payload.stage === 'error') {
-        setIsGenerating(false);
+        loadHistory();
         toast({ title: 'Generation Failed', description: payload.message, variant: 'destructive' });
+      } else {
+        // Update in-progress history item with live stage info
+        setHistory(prev => prev.map(item =>
+          item.tracking_id === payload.tracking_id && item.status === 'generating'
+            ? { ...item, progress_message: payload.message, progress_pct: payload.progress }
+            : item
+        ));
       }
-    });
-
-    socket.on('connect_error', () => {
-      startPolling(trackingId);
     });
 
     return () => {
@@ -213,7 +204,7 @@ const TechSensing: React.FC = () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [isGenerating, trackingId, user]);
+  }, [user]);
 
   // ESC to exit full-screen
   useEffect(() => {
@@ -236,72 +227,12 @@ const TechSensing: React.FC = () => {
     }
   };
 
-  const startPolling = useCallback((tid: string) => {
-    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    pollCountRef.current = 0;
-
-    const poll = async () => {
-      if (pollCountRef.current >= MAX_POLL_COUNT) {
-        setIsGenerating(false);
-        toast({ title: 'Timeout', description: 'Report generation timed out.', variant: 'destructive' });
-        return;
-      }
-      pollCountRef.current++;
-
-      try {
-        const res = await api.sensingStatus(tid);
-        if (res.status === 'completed' && res.data) {
-          setReportData(res.data);
-          setIsGenerating(false);
-          setProgress(100);
-          setProgressMessage('Report ready');
-          loadHistory();
-          return;
-        } else if (res.status === 'failed') {
-          setIsGenerating(false);
-          toast({ title: 'Generation Failed', description: res.error || 'Unknown error', variant: 'destructive' });
-          return;
-        }
-      } catch {
-        // Continue polling
-      }
-
-      pollTimerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
-    };
-
-    pollTimerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
-  }, []);
-
-  const fetchReport = async (tid: string) => {
-    try {
-      const res = await api.sensingStatus(tid);
-      if (res.status === 'completed' && res.data) {
-        setReportData(res.data);
-        setIsGenerating(false);
-        setProgress(100);
-        loadHistory();
-      } else if (res.status === 'pending') {
-        startPolling(tid);
-      } else {
-        setIsGenerating(false);
-        toast({ title: 'Error', description: res.error || 'Failed to load report', variant: 'destructive' });
-      }
-    } catch {
-      startPolling(tid);
-    }
-  };
-
   const handleGenerate = async () => {
-    setIsGenerating(true);
-    setProgress(0);
-    setProgressMessage('Starting...');
-    setReportData(null);
+    setIsSubmitting(true);
 
     try {
-      let res;
       if (uploadFile) {
-        // Document-based pipeline
-        res = await api.sensingGenerateFromDocument(
+        await api.sensingGenerateFromDocument(
           uploadFile,
           domain,
           customReqs,
@@ -311,8 +242,7 @@ const TechSensing: React.FC = () => {
           includeVideos,
         );
       } else {
-        // Normal web-based pipeline
-        res = await api.sensingGenerate(
+        await api.sensingGenerate(
           domain,
           customReqs,
           mustInclude.length > 0 ? mustInclude : undefined,
@@ -323,24 +253,32 @@ const TechSensing: React.FC = () => {
           includeVideos,
         );
       }
-      setTrackingId(res.tracking_id);
-      startPolling(res.tracking_id);
+      toast({ title: 'Report submitted', description: 'Generation is running in the background. It will appear in history when ready.' });
+      loadHistory();
     } catch (err) {
-      setIsGenerating(false);
       toast({
         title: 'Failed to start',
         description: err instanceof Error ? err.message : 'Unknown error',
         variant: 'destructive',
       });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleLoadReport = async (tid: string) => {
-    setIsGenerating(true);
-    setProgress(50);
-    setProgressMessage('Loading report...');
-    setTrackingId(tid);
-    await fetchReport(tid);
+    try {
+      const res = await api.sensingStatus(tid);
+      if (res.status === 'completed' && res.data) {
+        setReportData(res.data);
+      } else if (res.status === 'pending') {
+        toast({ title: 'Still generating', description: 'This report is still being generated. It will appear when ready.' });
+      } else {
+        toast({ title: 'Error', description: res.error || 'Failed to load report', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Error', description: 'Failed to load report', variant: 'destructive' });
+    }
   };
 
   const handleDeleteReport = async (tid: string) => {
@@ -625,13 +563,6 @@ const TechSensing: React.FC = () => {
     }
   };
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    };
-  }, []);
-
   // Full-screen report view
   if (isFullScreen && reportData) {
     return (
@@ -797,7 +728,7 @@ const TechSensing: React.FC = () => {
                   });
                 }
               }}
-              disabled={isGenerating}
+              disabled={isSubmitting}
             >
               <RotateCcw className="w-4 h-4 mr-1.5" />
               Regenerate
@@ -884,7 +815,7 @@ const TechSensing: React.FC = () => {
                       value={domain}
                       onChange={(e) => setDomain(e.target.value)}
                       placeholder="e.g., Generative AI, Robotics, Quantum Computing"
-                      disabled={isGenerating}
+                      disabled={isSubmitting}
                     />
                   </div>
                   <div className="w-40">
@@ -894,7 +825,7 @@ const TechSensing: React.FC = () => {
                     <Select
                       value={dateRange}
                       onValueChange={(v) => setDateRange(v as DateRangePreset)}
-                      disabled={isGenerating}
+                      disabled={isSubmitting}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -918,7 +849,7 @@ const TechSensing: React.FC = () => {
                         max={365}
                         value={customDays}
                         onChange={(e) => setCustomDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 7)))}
-                        disabled={isGenerating}
+                        disabled={isSubmitting}
                       />
                     </div>
                   )}
@@ -934,7 +865,7 @@ const TechSensing: React.FC = () => {
                       onChange={(e) => setCustomReqs(e.target.value)}
                       placeholder="e.g., Focus on enterprise adoption, compare with previous trends..."
                       rows={2}
-                      disabled={isGenerating}
+                      disabled={isSubmitting}
                     />
                   </div>
                   <div className="flex items-center gap-2 pt-5">
@@ -942,7 +873,7 @@ const TechSensing: React.FC = () => {
                       id="include-videos"
                       checked={includeVideos}
                       onCheckedChange={setIncludeVideos}
-                      disabled={isGenerating}
+                      disabled={isSubmitting}
                     />
                     <label htmlFor="include-videos" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
                       YouTube Videos
@@ -950,7 +881,7 @@ const TechSensing: React.FC = () => {
                   </div>
                   <div className="pt-3">
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">Audience</label>
-                    <Select value={stakeholderRole} onValueChange={setStakeholderRole} disabled={isGenerating}>
+                    <Select value={stakeholderRole} onValueChange={setStakeholderRole} disabled={isSubmitting}>
                       <SelectTrigger className="w-40">
                         <SelectValue />
                       </SelectTrigger>
@@ -978,7 +909,7 @@ const TechSensing: React.FC = () => {
                       onChange={(e) => setMustIncludeInput(e.target.value)}
                       onKeyDown={(e) => handleKeywordKeyDown(e, mustInclude, setMustInclude, mustIncludeInput, setMustIncludeInput)}
                       placeholder="Type keyword and press Enter"
-                      disabled={isGenerating}
+                      disabled={isSubmitting}
                       className="text-sm"
                     />
                     <Button
@@ -986,7 +917,7 @@ const TechSensing: React.FC = () => {
                       size="icon"
                       className="shrink-0 h-9 w-9"
                       onClick={() => addKeyword(mustInclude, setMustInclude, mustIncludeInput, setMustIncludeInput)}
-                      disabled={isGenerating || !mustIncludeInput.trim()}
+                      disabled={isSubmitting || !mustIncludeInput.trim()}
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </Button>
@@ -996,7 +927,7 @@ const TechSensing: React.FC = () => {
                       {mustInclude.map((kw) => (
                         <Badge key={kw} variant="secondary" className="text-xs gap-1 bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
                           {kw}
-                          <button onClick={() => removeKeyword(mustInclude, setMustInclude, kw)} disabled={isGenerating}>
+                          <button onClick={() => removeKeyword(mustInclude, setMustInclude, kw)} disabled={isSubmitting}>
                             <XCircle className="w-3 h-3" />
                           </button>
                         </Badge>
@@ -1014,7 +945,7 @@ const TechSensing: React.FC = () => {
                       onChange={(e) => setDontIncludeInput(e.target.value)}
                       onKeyDown={(e) => handleKeywordKeyDown(e, dontInclude, setDontInclude, dontIncludeInput, setDontIncludeInput)}
                       placeholder="Type keyword and press Enter"
-                      disabled={isGenerating}
+                      disabled={isSubmitting}
                       className="text-sm"
                     />
                     <Button
@@ -1022,7 +953,7 @@ const TechSensing: React.FC = () => {
                       size="icon"
                       className="shrink-0 h-9 w-9"
                       onClick={() => addKeyword(dontInclude, setDontInclude, dontIncludeInput, setDontIncludeInput)}
-                      disabled={isGenerating || !dontIncludeInput.trim()}
+                      disabled={isSubmitting || !dontIncludeInput.trim()}
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </Button>
@@ -1032,7 +963,7 @@ const TechSensing: React.FC = () => {
                       {dontInclude.map((kw) => (
                         <Badge key={kw} variant="secondary" className="text-xs gap-1 bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300">
                           {kw}
-                          <button onClick={() => removeKeyword(dontInclude, setDontInclude, kw)} disabled={isGenerating}>
+                          <button onClick={() => removeKeyword(dontInclude, setDontInclude, kw)} disabled={isSubmitting}>
                             <XCircle className="w-3 h-3" />
                           </button>
                         </Badge>
@@ -1132,7 +1063,7 @@ const TechSensing: React.FC = () => {
                   type="file"
                   accept=".pdf,.docx,.doc,.pptx,.xlsx,.csv,.md,.txt"
                   onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                  disabled={isGenerating}
+                  disabled={isSubmitting}
                   className="text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 file:cursor-pointer"
                 />
                 {uploadFile && (
@@ -1149,13 +1080,13 @@ const TechSensing: React.FC = () => {
               </div>
             </div>
 
-            {/* Generate button + progress */}
+            {/* Generate button */}
             <div className="flex items-center gap-3">
-              <Button onClick={handleGenerate} disabled={isGenerating || !domain.trim()}>
-                {isGenerating ? (
+              <Button onClick={handleGenerate} disabled={isSubmitting || !domain.trim()}>
+                {isSubmitting ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Generating...
+                    Submitting...
                   </>
                 ) : (
                   <>
@@ -1164,12 +1095,6 @@ const TechSensing: React.FC = () => {
                   </>
                 )}
               </Button>
-              {isGenerating && (
-                <div className="flex-1 space-y-1">
-                  <Progress value={progress} className="h-2" />
-                  <p className="text-xs text-muted-foreground">{progressMessage}</p>
-                </div>
-              )}
             </div>
           </CardContent>
         </Card>
@@ -1191,7 +1116,9 @@ const TechSensing: React.FC = () => {
                 <p className="text-xs text-muted-foreground text-center py-4">No reports yet</p>
               ) : (
                 <div className="space-y-1.5">
-                  {history.map((item) => (
+                  {history.map((item) => {
+                    const isItemGenerating = item.status === 'generating';
+                    return (
                     <div
                       key={item.tracking_id}
                       className={`flex items-center gap-1.5 p-1.5 rounded text-xs hover:bg-muted/50 cursor-pointer group ${
@@ -1200,43 +1127,57 @@ const TechSensing: React.FC = () => {
                     >
                       <button
                         className="flex-1 text-left truncate"
-                        onClick={() => handleLoadReport(item.tracking_id)}
-                        disabled={isGenerating}
+                        onClick={() => !isItemGenerating && handleLoadReport(item.tracking_id)}
+                        disabled={isSubmitting || isItemGenerating}
                       >
-                        <span className="font-medium block truncate">{item.report_title || item.domain}</span>
+                        <span className="font-medium block truncate">
+                          {isItemGenerating && <Loader2 className="w-3 h-3 mr-1 animate-spin inline" />}
+                          {item.report_title || item.domain}
+                        </span>
                         <span className="text-muted-foreground">
-                          {item.generated_at ? new Date(item.generated_at).toLocaleDateString() : ''}
-                          {' · '}
-                          {item.total_articles} articles
+                          {isItemGenerating ? (
+                            item.progress_message || 'Starting...'
+                          ) : (
+                            <>
+                              {item.generated_at ? new Date(item.generated_at).toLocaleDateString() : ''}
+                              {' \u00b7 '}
+                              {item.total_articles} articles
+                            </>
+                          )}
                         </span>
                       </button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
-                        title="Regenerate with new parameters"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRegenerate(item);
-                        }}
-                        disabled={isGenerating}
-                      >
-                        <RotateCcw className="w-3 h-3" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
-                        title="Delete report"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteTarget(item);
-                        }}
-                      >
-                        <Trash2 className="w-3 h-3 text-destructive" />
-                      </Button>
+                      {!isItemGenerating && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
+                            title="Regenerate with new parameters"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRegenerate(item);
+                            }}
+                            disabled={isSubmitting}
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 opacity-0 group-hover:opacity-100 shrink-0"
+                            title="Delete report"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteTarget(item);
+                            }}
+                          >
+                            <Trash2 className="w-3 h-3 text-destructive" />
+                          </Button>
+                        </>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </ScrollArea>
@@ -1262,7 +1203,7 @@ const TechSensing: React.FC = () => {
         <TabsContent value="report" className="flex-1 min-h-0 mt-2">
           {reportData ? (
             <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} />
-          ) : !isGenerating ? (
+          ) : !isSubmitting ? (
             <div className="flex-1 flex items-center justify-center text-muted-foreground py-12">
               <div className="text-center space-y-2">
                 <Radar className="w-12 h-12 mx-auto opacity-20" />

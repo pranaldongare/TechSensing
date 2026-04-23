@@ -282,6 +282,9 @@ export interface SensingHistoryItem {
   must_include?: string[] | null;
   dont_include?: string[] | null;
   lookback_days?: number;
+  status?: string; // "generating" for in-progress reports
+  progress_message?: string; // live stage message from WebSocket
+  progress_pct?: number; // live progress percentage from WebSocket
 }
 
 export interface SensingSchedule {

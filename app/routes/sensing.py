@@ -31,9 +31,9 @@ from core.utils.generation_status import (
     write_result,
 )
 
-# Sensing pipeline can take 10-15 min (RSS + DDG + LLM classify + LLM report).
+# Sensing pipeline can take 10-60+ min (RSS + DDG + LLM classify + LLM report).
 # Override the global 8-min stale timeout for sensing status reads.
-SENSING_STALE_TIMEOUT_MINUTES = 60
+SENSING_STALE_TIMEOUT_MINUTES = 120
 
 logger = logging.getLogger("sensing.routes")
 
@@ -101,13 +101,22 @@ async def generate_sensing_report(
     sensing_dir = _get_sensing_dir(user_id)
     os.makedirs(sensing_dir, exist_ok=True)
     status_path = os.path.join(sensing_dir, f"status_{tracking_id}.json")
-    await write_pending_status(status_path)
+    # Write pending status with domain info so history can show in-progress jobs
+    pending_data = {
+        "_status": "pending",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "domain": body.domain,
+        "tracking_id": tracking_id,
+    }
+    async with aiofiles.open(status_path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(pending_data, ensure_ascii=False))
 
     async def _run():
         try:
             from core.sensing.pipeline import run_sensing_pipeline
 
             async def _progress_cb(stage, pct, msg):
+                logger.info(f"[{tracking_id[:8]}] [{stage}] {pct}% — {msg}")
                 await sio.emit(
                     f"{user_id}/sensing_progress",
                     {
@@ -220,7 +229,15 @@ async def generate_sensing_from_document(
     sensing_dir = _get_sensing_dir(user_id)
     os.makedirs(sensing_dir, exist_ok=True)
     status_path = os.path.join(sensing_dir, f"status_{tracking_id}.json")
-    await write_pending_status(status_path)
+    # Write pending status with domain info so history can show in-progress jobs
+    pending_data = {
+        "_status": "pending",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "tracking_id": tracking_id,
+    }
+    async with aiofiles.open(status_path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(pending_data, ensure_ascii=False))
 
     # Parse comma-separated keyword lists from form fields
     must_list = (
@@ -248,6 +265,7 @@ async def generate_sensing_from_document(
             from core.sensing.pipeline import run_sensing_pipeline_from_document
 
             async def _progress_cb(stage, pct, msg):
+                logger.info(f"[{tracking_id[:8]}] [{stage}] {pct}% — {msg}")
                 await sio.emit(
                     f"{user_id}/sensing_progress",
                     {
@@ -449,6 +467,7 @@ async def sensing_history(request: Request):
         return JSONResponse(content={"reports": []})
 
     reports = []
+    seen_ids = set()
     for fname in os.listdir(sensing_dir):
         if fname.startswith("report_") and fname.endswith(".json"):
             try:
@@ -457,9 +476,12 @@ async def sensing_history(request: Request):
                     data = json.loads(await f.read())
                 meta = data.get("meta", {})
                 report = data.get("report", {})
+                tid = meta.get("tracking_id")
+                if tid:
+                    seen_ids.add(tid)
                 reports.append(
                     {
-                        "tracking_id": meta.get("tracking_id"),
+                        "tracking_id": tid,
                         "domain": meta.get("domain"),
                         "generated_at": meta.get("generated_at"),
                         "report_title": report.get("report_title", "Untitled"),
@@ -471,6 +493,42 @@ async def sensing_history(request: Request):
                         "must_include": meta.get("must_include"),
                         "dont_include": meta.get("dont_include"),
                         "lookback_days": meta.get("lookback_days", 7),
+                    }
+                )
+            except Exception:
+                continue
+
+    # Include in-progress (pending) reports from status files
+    for fname in os.listdir(sensing_dir):
+        if fname.startswith("status_") and fname.endswith(".json"):
+            try:
+                tid = fname.replace("status_", "").replace(".json", "")
+                if tid in seen_ids:
+                    continue  # Already have the completed report
+                fpath = os.path.join(sensing_dir, fname)
+                async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                if data.get("_status") != "pending":
+                    continue  # Only show actively generating jobs
+                # Check if stale (past timeout)
+                started_at = data.get("started_at")
+                if started_at:
+                    try:
+                        started = datetime.fromisoformat(started_at)
+                        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+                        if elapsed > SENSING_STALE_TIMEOUT_MINUTES * 60:
+                            continue  # Stale — don't show
+                    except (ValueError, TypeError):
+                        pass
+                domain_name = data.get("domain", "Unknown")
+                reports.append(
+                    {
+                        "tracking_id": tid,
+                        "domain": domain_name,
+                        "generated_at": data.get("started_at"),
+                        "report_title": f"Generating: {domain_name}",
+                        "total_articles": 0,
+                        "status": "generating",
                     }
                 )
             except Exception:
@@ -812,6 +870,7 @@ async def start_deep_dive(
             from core.sensing.deep_dive import run_deep_dive
 
             async def _progress_cb(stage, pct, msg):
+                logger.info(f"[{tracking_id[:8]}] [deep_dive/{stage}] {pct}% — {msg}")
                 await sio.emit(
                     f"{user_id}/sensing_progress",
                     {
@@ -1127,6 +1186,7 @@ async def start_company_analysis(
             )
 
             async def _progress_cb(stage, pct, msg):
+                logger.info(f"[{tracking_id[:8]}] [company/{stage}] {pct}% — {msg}")
                 await sio.emit(
                     f"{user_id}/sensing_progress",
                     {
@@ -1369,6 +1429,7 @@ async def start_key_companies(
             )
 
             async def _progress_cb(stage, pct, msg):
+                logger.info(f"[{tracking_id[:8]}] [key_companies/{stage}] {pct}% — {msg}")
                 await sio.emit(
                     f"{user_id}/sensing_progress",
                     {

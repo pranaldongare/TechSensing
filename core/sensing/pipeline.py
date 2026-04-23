@@ -431,6 +431,7 @@ async def run_sensing_pipeline(
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
 
     # Funding signal enrichment
+    logger.info(f"Checking funding signals... [{_elapsed()}]")
     await _emit("funding", 95, "Checking funding signals...")
     try:
         from core.sensing.sources.funding_signals import enrich_with_funding_signals
@@ -537,6 +538,7 @@ async def run_sensing_pipeline(
             logger.warning(f"Model releases extraction failed (non-fatal): {e}")
             report.model_releases = []
 
+    logger.info(f"Report ready [{_elapsed()}]")
     await _emit("complete", 100, "Report ready")
 
     elapsed = time.time() - start
@@ -1290,6 +1292,7 @@ async def run_sensing_pipeline_from_document(
 
     # Movement detection
     if user_id:
+        logger.info(f"Detecting technology movements... [{_elapsed()}]")
         await _emit("movement", 92, "Detecting technology movements...")
         report = await detect_radar_movements(
             new_report=report,
@@ -1298,6 +1301,7 @@ async def run_sensing_pipeline_from_document(
         )
 
     # Signal strength scoring
+    logger.info(f"Computing signal strengths... [{_elapsed()}]")
     await _emit("scoring", 92, "Computing signal strengths...")
     report = await compute_signal_strengths(report, classified, user_id=user_id)
 
@@ -1404,6 +1408,7 @@ async def run_sensing_pipeline_from_document(
             logger.warning(f"Model releases extraction failed (non-fatal): {e}")
             report.model_releases = []
 
+    logger.info(f"Report ready [{_elapsed()}]")
     await _emit("complete", 100, "Report ready")
 
     elapsed = time.time() - start
