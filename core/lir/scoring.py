@@ -136,6 +136,8 @@ def _compute_velocity(signals: List[LIRSignalRecord]) -> float:
             pub = datetime.fromisoformat(
                 sig.published_date.replace("Z", "+00:00")
             )
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
             weeks_ago = max(0, (now - pub).days // 7)
             weekly_counts[weeks_ago] = weekly_counts.get(weeks_ago, 0) + 1
         except (ValueError, TypeError):
@@ -213,6 +215,9 @@ def _compute_novelty(signals: List[LIRSignalRecord]) -> float:
     for s in signals:
         try:
             pub = datetime.fromisoformat(s.published_date.replace("Z", "+00:00"))
+            # Strip timezone to avoid mixing offset-naive and offset-aware datetimes
+            if pub.tzinfo is not None:
+                pub = pub.replace(tzinfo=None)
             dated_signals.append((pub, s))
         except (ValueError, TypeError):
             continue
@@ -285,6 +290,8 @@ def _compute_pattern_match(
             pub = datetime.fromisoformat(
                 sig.published_date.replace("Z", "+00:00")
             )
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
             weeks_ago = (now - pub).days // 7
             if 0 <= weeks_ago < 52:
                 weekly_counts[51 - weeks_ago] += 1.0
@@ -318,6 +325,8 @@ def _compute_persistence(signals: List[LIRSignalRecord]) -> float:
             pub = datetime.fromisoformat(
                 sig.published_date.replace("Z", "+00:00")
             )
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
             months.add((pub.year, pub.month))
         except (ValueError, TypeError):
             continue
