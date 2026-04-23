@@ -39,7 +39,7 @@ async def classify_articles(
     uncached_articles: List[RawArticle] = []
     cache_hits = 0
     for article in articles:
-        cached = get_cached_classification(article.url)
+        cached = await get_cached_classification(article.url)
         if cached and cached.relevance_score >= MIN_RELEVANCE_SCORE:
             all_classified.append(cached)
             cache_hits += 1
@@ -90,7 +90,7 @@ async def classify_articles(
 
             for article in validated.articles:
                 # Cache every classified article (regardless of score)
-                cache_classification(article)
+                await cache_classification(article)
                 if article.relevance_score >= MIN_RELEVANCE_SCORE:
                     all_classified.append(article)
                     batch_classified += 1

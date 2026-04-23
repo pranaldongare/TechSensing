@@ -13,6 +13,8 @@ import os
 import time
 from typing import Optional
 
+import aiofiles
+
 from core.llm.output_schemas.sensing_outputs import ClassifiedArticle
 
 logger = logging.getLogger("sensing.cache")
@@ -30,7 +32,7 @@ def _ensure_cache_dir() -> None:
     os.makedirs(CACHE_DIR, exist_ok=True)
 
 
-def get_cached_classification(url: str) -> Optional[ClassifiedArticle]:
+async def get_cached_classification(url: str) -> Optional[ClassifiedArticle]:
     """Look up a cached classification by article URL."""
     h = _url_hash(url)
     fpath = os.path.join(CACHE_DIR, f"{h}.json")
@@ -39,8 +41,8 @@ def get_cached_classification(url: str) -> Optional[ClassifiedArticle]:
         return None
 
     try:
-        with open(fpath, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+            data = json.loads(await f.read())
     except Exception:
         return None
 
@@ -59,24 +61,23 @@ def get_cached_classification(url: str) -> Optional[ClassifiedArticle]:
         return None
 
 
-def cache_classification(article: ClassifiedArticle) -> None:
+async def cache_classification(article: ClassifiedArticle) -> None:
     """Cache a classified article by its URL."""
     _ensure_cache_dir()
     h = _url_hash(article.url)
     fpath = os.path.join(CACHE_DIR, f"{h}.json")
 
     try:
-        with open(fpath, "w", encoding="utf-8") as f:
-            json.dump(
+        async with aiofiles.open(fpath, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(
                 {"cached_at": time.time(), "article": article.model_dump()},
-                f,
                 ensure_ascii=False,
-            )
+            ))
     except Exception as e:
         logger.warning(f"Failed to cache classification for {article.url}: {e}")
 
 
-def clear_expired_cache() -> int:
+async def clear_expired_cache() -> int:
     """Remove expired cache entries. Returns count of removed files."""
     if not os.path.exists(CACHE_DIR):
         return 0
@@ -88,8 +89,8 @@ def clear_expired_cache() -> int:
             continue
         fpath = os.path.join(CACHE_DIR, fname)
         try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            async with aiofiles.open(fpath, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
             if now - data.get("cached_at", 0) > CACHE_TTL_SECONDS:
                 os.remove(fpath)
                 removed += 1

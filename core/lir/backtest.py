@@ -280,9 +280,9 @@ async def run_backtest(
         weights = SCORE_WEIGHTS.copy()
 
     # Load all data
-    concepts = load_concepts()
-    signals = load_signals()
-    concept_signals_map = load_concept_signals()
+    concepts = await load_concepts()
+    signals = await load_signals()
+    concept_signals_map = await load_concept_signals()
     fingerprints = load_fingerprints()
 
     if concept_filter:

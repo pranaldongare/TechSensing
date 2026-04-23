@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.socket_handler import sio
+from core.llm.client import tracking_id_var
 from core.utils.generation_status import (
     read_generation_status,
     write_failed_status,
@@ -112,6 +113,7 @@ async def generate_sensing_report(
         await f.write(json.dumps(pending_data, ensure_ascii=False))
 
     async def _run():
+        tracking_id_var.set(tracking_id)
         try:
             from core.sensing.pipeline import run_sensing_pipeline
 
@@ -182,7 +184,7 @@ async def generate_sensing_report(
         except Exception:
             error_details = traceback.format_exc()
             await write_failed_status(status_path, error_details)
-            print(f"[Sensing:route] Generation failed: {error_details}")
+            logger.error("Generation failed: %s", error_details)
             await sio.emit(
                 f"{user_id}/sensing_progress",
                 {
@@ -261,6 +263,7 @@ async def generate_sensing_from_document(
         await f.write(content)
 
     async def _run():
+        tracking_id_var.set(tracking_id)
         try:
             from core.sensing.pipeline import run_sensing_pipeline_from_document
 
@@ -331,7 +334,7 @@ async def generate_sensing_from_document(
         except Exception:
             error_details = traceback.format_exc()
             await write_failed_status(status_path, error_details)
-            print(f"[Sensing:route] Document generation failed: {error_details}")
+            logger.error("Document generation failed: %s", error_details)
             await sio.emit(
                 f"{user_id}/sensing_progress",
                 {
@@ -866,6 +869,7 @@ async def start_deep_dive(
     await write_pending_status(status_path)
 
     async def _run():
+        tracking_id_var.set(tracking_id)
         try:
             from core.sensing.deep_dive import run_deep_dive
 
@@ -1179,6 +1183,7 @@ async def start_company_analysis(
     await write_pending_status(status_path)
 
     async def _run():
+        tracking_id_var.set(tracking_id)
         try:
             from core.sensing.company_analysis import (
                 run_company_analysis,
@@ -1241,7 +1246,7 @@ async def start_company_analysis(
         except Exception:
             error_details = traceback.format_exc()
             await write_failed_status(status_path, error_details)
-            print(f"[Sensing:route] Company analysis failed: {error_details}")
+            logger.error("Company analysis failed: %s", error_details)
             await sio.emit(
                 f"{user_id}/sensing_progress",
                 {
@@ -1422,6 +1427,7 @@ async def start_key_companies(
     period_days = int(body.period_days or 7)
 
     async def _run():
+        tracking_id_var.set(tracking_id)
         try:
             from core.sensing.key_companies import (
                 run_key_companies,
@@ -1482,7 +1488,7 @@ async def start_key_companies(
         except Exception:
             error_details = traceback.format_exc()
             await write_failed_status(status_path, error_details)
-            print(f"[Sensing:route] Key Companies failed: {error_details}")
+            logger.error("Key Companies failed: %s", error_details)
             await sio.emit(
                 f"{user_id}/sensing_progress",
                 {
@@ -1811,6 +1817,19 @@ def _require_user(request: Request):
     if not payload:
         raise HTTPException(status_code=401, detail="User not authenticated")
     return payload
+
+
+@router.get("/telemetry/cost-summary")
+async def get_cost_summary(
+    request: Request,
+    days: int = 30,
+):
+    """Aggregated cost/usage across all runs for the last N days."""
+    from core.llm.telemetry import load_cost_summary
+
+    payload = _require_user(request)
+    data = await load_cost_summary(payload.userId, days=days)
+    return JSONResponse(content=data)
 
 
 @router.get("/telemetry/{tracking_id}")

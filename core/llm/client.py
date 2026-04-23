@@ -1,10 +1,11 @@
 import asyncio
+import contextvars
 import itertools
 import json
 import logging
 import os
 import time
-import traceback
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 from google import genai
@@ -15,11 +16,38 @@ from core.config import settings
 from core.constants import FALLBACK_GEMINI_MODEL, FALLBACK_OPENAI_MODEL, SWITCHES
 from core.utils.llm_output_sanitizer import parse_llm_json, sanitize_llm_json
 
+# ── Logging with tracking_id correlation ──────────────────────────
+tracking_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "tracking_id", default=""
+)
+
+
+class _TrackingFilter(logging.Filter):
+    """Inject tracking_id into every log record for correlation."""
+    def filter(self, record):
+        record.tracking_id = tracking_id_var.get("")
+        return True
+
+
 logger = logging.getLogger("llm.client")
+logger.addFilter(_TrackingFilter())
 
 # Directory for logging parse failures
 _PARSE_ERRORS_DIR = "DEBUG/parse_errors"
 os.makedirs(_PARSE_ERRORS_DIR, exist_ok=True)
+
+# ── LLM concurrency semaphore ────────────────────────────────────
+# Limits concurrent LLM calls to avoid GPU thrashing.
+# Configurable via LLM_MAX_CONCURRENCY env var (default: 2).
+_LLM_SEMAPHORE = asyncio.Semaphore(int(os.getenv("LLM_MAX_CONCURRENCY", "2")))
+
+# ── Timeouts (seconds) ───────────────────────────────────────────
+GPU_TIMEOUT = int(os.getenv("LLM_GPU_TIMEOUT", "1200"))       # 20 minutes
+GEMINI_TIMEOUT = int(os.getenv("LLM_GEMINI_TIMEOUT", "180"))  # 3 minutes
+OPENAI_TIMEOUT = int(os.getenv("LLM_OPENAI_TIMEOUT", "180"))  # 3 minutes
+
+# ── Max output tokens for fallback providers ─────────────────────
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_GEMINI_MAX_TOKENS", "16384"))
 
 
 def _log_parse_failure(
@@ -33,6 +61,7 @@ def _log_parse_failure(
     """Log a parse failure to a JSONL file for later analysis."""
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tracking_id": tracking_id_var.get(""),
         "source": source,
         "attempt": attempt,
         "schema": schema_name,
@@ -51,16 +80,22 @@ def _log_parse_failure(
 # Always use local Ollama LLM
 from core.llm.configurations.local_llm import MyServerLLM
 
-# Cache LLM client instances to avoid repeated initialization overhead
-_llm_cache = {}
+# ── LRU cache for LLM client instances ───────────────────────────
+_LLM_CACHE_MAX = int(os.getenv("LLM_CACHE_MAX", "8"))
+_llm_cache: OrderedDict = OrderedDict()
 
 
 def _get_cached_llm(model: str, port: int) -> MyServerLLM:
-    """Return a cached MyServerLLM instance, creating one if needed."""
+    """Return a cached MyServerLLM instance with LRU eviction."""
     key = (model, port)
-    if key not in _llm_cache:
-        _llm_cache[key] = MyServerLLM(model=model, port=port)
-    return _llm_cache[key]
+    if key in _llm_cache:
+        _llm_cache.move_to_end(key)
+        return _llm_cache[key]
+    llm = MyServerLLM(model=model, port=port)
+    _llm_cache[key] = llm
+    while len(_llm_cache) > _LLM_CACHE_MAX:
+        _llm_cache.popitem(last=False)
+    return llm
 
 
 API_KEYS = [
@@ -170,8 +205,24 @@ async def invoke_llm(
     - GPU server (local Ollama)
     - Gemini API
     - OpenAI API
+
+    Guarded by a concurrency semaphore to prevent GPU thrashing.
     """
+    async with _LLM_SEMAPHORE:
+        return await _invoke_llm_inner(
+            gpu_model, response_schema, contents, port, remove_thinking
+        )
+
+
+async def _invoke_llm_inner(
+    gpu_model,
+    response_schema,
+    contents,
+    port,
+    remove_thinking,
+):
     parser = PydanticOutputParser(pydantic_object=response_schema)
+    schema_name = getattr(response_schema, "__name__", "unknown")
 
     if isinstance(contents, list) and contents and isinstance(contents[0], dict) and "role" in contents[0]:
         serialized = _serialize_prompt_messages(contents)
@@ -213,7 +264,7 @@ CRITICAL OUTPUT RULES:
 
     def _build_prompt(base, failed_output, parse_error):
         if failed_output and parse_error:
-            print("[Self-correction] Injecting previous output + error into prompt")
+            logger.info("Self-correction: injecting previous output + error into prompt")
             return (
                 f"{base}\n\n"
                 "--- PREVIOUS ATTEMPT FAILED ---\n"
@@ -229,30 +280,42 @@ CRITICAL OUTPUT RULES:
     last_parse_error = None
 
     for attempt in range(1, MAX_RETRIES + 1):
-        print(f"\n=== Attempt {attempt}/{MAX_RETRIES} ===")
+        logger.info("Attempt %d/%d for schema=%s", attempt, MAX_RETRIES, schema_name)
         effective_prompt = _build_prompt(prompt, last_failed_output, last_parse_error)
 
         if gpu_model:
             llm_output = None
             for blank_retry in range(2):
                 try:
-                    print("Trying GPU server...")
+                    logger.info("Trying GPU server (port=%d)...", port)
                     gpu_llm = _get_cached_llm(gpu_model, port)
                     s = time.time()
-                    llm_output = await asyncio.to_thread(gpu_llm._call, effective_prompt)
-                    e = time.time()
-                    print(f"Success via GPU server, LLM call took {e - s:.2f}s")
+                    llm_output = await asyncio.wait_for(
+                        asyncio.to_thread(gpu_llm._call, effective_prompt),
+                        timeout=GPU_TIMEOUT,
+                    )
+                    elapsed = time.time() - s
+                    logger.info("GPU server responded in %.2fs", elapsed)
 
                     if not llm_output or not llm_output.strip():
-                        print(f"[Blank response] GPU returned empty output, retrying same attempt ({blank_retry + 1}/2)")
+                        logger.warning(
+                            "GPU returned empty output, retrying (%d/2)",
+                            blank_retry + 1,
+                        )
                         llm_output = None
                         continue
 
                     structured = _try_parse(llm_output, parser, response_schema)
                     return structured
+                except asyncio.TimeoutError:
+                    logger.error(
+                        "GPU server timed out after %ds (port=%d)",
+                        GPU_TIMEOUT, port,
+                    )
+                    break
                 except Exception as e:
                     error_str = str(e)
-                    print(f"GPU server failed at port {port}: {error_str}")
+                    logger.warning("GPU server failed (port=%d): %s", port, error_str)
                     if llm_output:
                         last_failed_output = llm_output
                         last_parse_error = error_str
@@ -261,28 +324,32 @@ CRITICAL OUTPUT RULES:
                             attempt=attempt,
                             raw_output=llm_output,
                             error=error_str,
-                            schema_name=response_schema.__name__,
+                            schema_name=schema_name,
                             prompt_snippet=effective_prompt if isinstance(effective_prompt, str) else str(effective_prompt),
                         )
-                        print(f"[Self-correction] Captured failed GPU output ({len(llm_output)} chars)")
+                        logger.info(
+                            "Self-correction: captured failed GPU output (%d chars)",
+                            len(llm_output),
+                        )
                     break
             else:
-                print(f"[Blank response] GPU returned empty output twice, moving to next attempt")
+                logger.warning("GPU returned empty output twice, moving to next attempt")
             if last_failed_output:
                 continue
 
         # === GEMINI FALLBACK ===
         if SWITCHES["FALLBACK_TO_GEMINI"]:
-            print("Falling back to Gemini...")
+            logger.info("Falling back to Gemini...")
 
             for _ in range(len(API_KEYS)):
                 api_key = await _next_api_key()
                 client = genai.Client(api_key=api_key)
                 s = time.time()
+                raw_output = None
                 try:
                     config = genai.types.GenerateContentConfig(
                         temperature=0.2,
-                        max_output_tokens=200000,
+                        max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS,
                         response_mime_type="text/plain",
                         safety_settings=[],
                     )
@@ -299,31 +366,33 @@ CRITICAL OUTPUT RULES:
                             contents=effective_prompt,
                             config=config,
                         ),
-                        timeout=80,
+                        timeout=GEMINI_TIMEOUT,
                     )
 
-                    raw_output = None
                     try:
                         raw_output = response.text or str(response)
                     except Exception:
                         raw_output = str(response)
 
                     structured = _try_parse(raw_output, parser, response_schema)
-                    e = time.time()
-                    print(f"Success via Gemini, LLM call took {e - s:.2f}s")
+                    elapsed = time.time() - s
+                    logger.info("Gemini responded in %.2fs", elapsed)
                     return structured
 
                 except asyncio.TimeoutError:
-                    print("Gemini timeout — switching key...")
+                    logger.warning(
+                        "Gemini timed out after %ds — switching key...",
+                        GEMINI_TIMEOUT,
+                    )
                 except Exception as e:
-                    print(f"Gemini error: {e}")
+                    logger.warning("Gemini error: %s", e)
                     if raw_output:
                         _log_parse_failure(
                             source="gemini",
                             attempt=attempt,
                             raw_output=raw_output,
                             error=str(e),
-                            schema_name=response_schema.__name__,
+                            schema_name=schema_name,
                         )
                     await asyncio.sleep(0.2)
 
@@ -331,29 +400,34 @@ CRITICAL OUTPUT RULES:
         if SWITCHES["FALLBACK_TO_OPENAI"]:
             openai_raw = None
             try:
-                print("Falling back to OpenAI...")
+                logger.info("Falling back to OpenAI...")
                 s = time.time()
-                response = await openai_client.chat.completions.create(
-                    model=FALLBACK_OPENAI_MODEL,
-                    messages=[{"role": "user", "content": effective_prompt}],
-                    temperature=0.2,
+                response = await asyncio.wait_for(
+                    openai_client.chat.completions.create(
+                        model=FALLBACK_OPENAI_MODEL,
+                        messages=[{"role": "user", "content": effective_prompt}],
+                        temperature=0.2,
+                    ),
+                    timeout=OPENAI_TIMEOUT,
                 )
 
                 openai_raw = response.choices[0].message.content
                 structured = _try_parse(openai_raw, parser, response_schema)
-                e = time.time()
-                print(f"Success via OpenAI, LLM call took {e - s:.2f}s")
+                elapsed = time.time() - s
+                logger.info("OpenAI responded in %.2fs", elapsed)
                 return structured
 
+            except asyncio.TimeoutError:
+                logger.error("OpenAI timed out after %ds", OPENAI_TIMEOUT)
             except Exception as e:
-                print(f"OpenAI fallback error: {e}")
+                logger.warning("OpenAI fallback error: %s", e)
                 if openai_raw:
                     _log_parse_failure(
                         source="openai",
                         attempt=attempt,
                         raw_output=openai_raw,
                         error=str(e),
-                        schema_name=response_schema.__name__,
+                        schema_name=schema_name,
                     )
 
         await asyncio.sleep(2)

@@ -25,7 +25,10 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import aiofiles
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+
+from core.llm.client import tracking_id_var
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -88,6 +91,7 @@ async def lir_refresh(
     await write_pending_status(status_file)
 
     async def _run():
+        tracking_id_var.set(tracking_id)
         try:
             from core.lir.pipeline import run_lir_pipeline
 
@@ -178,13 +182,13 @@ async def lir_candidates(
     )
     from core.lir.config import score_to_ring
 
-    concepts = load_concepts()
+    concepts = await load_concepts()
     if not concepts:
         return JSONResponse(content={"candidates": [], "total": 0})
 
-    scores_raw = load_latest_scores()
-    signals = load_signals()
-    concept_signals = load_concept_signals()
+    scores_raw = await load_latest_scores()
+    signals = await load_signals()
+    concept_signals = await load_concept_signals()
 
     candidates = []
     effective_min = max(min_score, LIR_MIN_COMPOSITE_SCORE)
@@ -260,7 +264,7 @@ async def lir_concepts_search(
     """Search the concept registry."""
     from core.lir.storage import load_concepts
 
-    concepts = load_concepts()
+    concepts = await load_concepts()
     results = []
 
     for cid, concept in concepts.items():
@@ -310,12 +314,12 @@ async def lir_concept_detail(concept_id: str):
         load_signals,
     )
 
-    concepts = load_concepts()
+    concepts = await load_concepts()
     if concept_id not in concepts:
         raise HTTPException(status_code=404, detail="Concept not found")
 
     concept = concepts[concept_id]
-    scores_raw = load_latest_scores()
+    scores_raw = await load_latest_scores()
     score_data = scores_raw.get(concept_id, {})
     score_set = LIRScoreSet(
         convergence=score_data.get("convergence", 0.0),
@@ -326,8 +330,8 @@ async def lir_concept_detail(concept_id: str):
     )
 
     # Get all linked signals
-    signals = load_signals()
-    concept_signals = load_concept_signals()
+    signals = await load_signals()
+    concept_signals = await load_concept_signals()
     sig_ids = concept_signals.get(concept_id, [])
     concept_sigs = [signals[sid] for sid in sig_ids if sid in signals]
 
@@ -374,7 +378,7 @@ async def lir_concept_timeseries(
     """Score history for a concept (weekly snapshots)."""
     from core.lir.storage import load_signal_history
 
-    history = load_signal_history(concept_id)
+    history = await load_signal_history(concept_id)
     if not history:
         return JSONResponse(content={"concept_id": concept_id, "timeseries": [], "weeks": weeks})
 
@@ -425,19 +429,19 @@ async def lir_concept_rationale(concept_id: str):
 
     if _os.path.exists(cache_path):
         try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                cached = json.load(f)
+            async with aiofiles.open(cache_path, "r", encoding="utf-8") as f:
+                cached = json.loads(await f.read())
             return JSONResponse(content=cached)
         except Exception:
             pass
 
     # Load concept data
-    concepts = load_concepts()
+    concepts = await load_concepts()
     if concept_id not in concepts:
         raise HTTPException(status_code=404, detail="Concept not found")
 
     concept = concepts[concept_id]
-    scores_raw = load_latest_scores()
+    scores_raw = await load_latest_scores()
     score_data = scores_raw.get(concept_id, {})
 
     from core.lir.config import score_to_ring
@@ -453,8 +457,8 @@ async def lir_concept_rationale(concept_id: str):
     ring = score_to_ring(score_set.composite)
 
     # Build top evidence
-    signals = load_signals()
-    concept_signals_map = load_concept_signals()
+    signals = await load_signals()
+    concept_signals_map = await load_concept_signals()
     sig_ids = concept_signals_map.get(concept_id, [])
     concept_sigs = [signals[sid] for sid in sig_ids if sid in signals]
 
@@ -511,8 +515,8 @@ async def lir_concept_rationale(concept_id: str):
 
         # Cache the result
         try:
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(rationale_data, f, ensure_ascii=False, indent=2)
+            async with aiofiles.open(cache_path, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(rationale_data, ensure_ascii=False, indent=2))
         except Exception as cache_err:
             logger.warning(f"Failed to cache rationale: {cache_err}")
 
@@ -586,6 +590,7 @@ async def lir_backtest_run(
     await write_pending_status(status_file)
 
     async def _run_bt():
+        tracking_id_var.set(tracking_id)
         try:
             from core.lir.backtest import run_backtest
 

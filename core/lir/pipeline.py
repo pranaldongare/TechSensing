@@ -110,7 +110,7 @@ async def run_lir_pipeline(
     await _progress("dedup", 20, "Deduplicating...")
 
     # Load existing signal item_ids to skip known items
-    existing_signals = load_signals()
+    existing_signals = await load_signals()
     existing_item_ids = {s.item_id for s in existing_signals.values()}
 
     deduped = deduplicate_lir_items(raw_items, existing_item_ids)
@@ -118,7 +118,7 @@ async def run_lir_pipeline(
     await _progress("dedup", 25, f"{len(deduped)} new items after dedup")
 
     # Save raw items for audit trail
-    save_raw_items(deduped)
+    await save_raw_items(deduped)
 
     # Pre-load fingerprints once for scoring
     fingerprints = load_fingerprints()
@@ -126,11 +126,11 @@ async def run_lir_pipeline(
     if not deduped:
         # No new items — still re-score existing data
         logger.info("No new items; re-scoring existing concepts")
-        concepts = load_concepts()
-        concept_signals_map = load_concept_signals()
+        concepts = await load_concepts()
+        concept_signals_map = await load_concept_signals()
         scores = compute_scores(concepts, existing_signals, concept_signals_map, fingerprints)
         candidates = _build_candidates(concepts, scores, existing_signals, concept_signals_map)
-        save_scores({cid: asdict(s) for cid, s in scores.items()})
+        await save_scores({cid: asdict(s) for cid, s in scores.items()})
         elapsed = time.time() - start
         return LIRPipelineResult(
             candidates=candidates,
@@ -158,7 +158,7 @@ async def run_lir_pipeline(
     # ─── 4. Canonicalize concepts ───
     await _progress("canonicalize", 60, "Canonicalizing concepts...")
 
-    concepts = load_concepts()
+    concepts = await load_concepts()
 
     try:
         new_signals, concepts, new_concept_count = await canonicalize_signals(
@@ -181,7 +181,7 @@ async def run_lir_pipeline(
         all_signals[sig.signal_id] = sig
 
     # Build concept-signal mapping
-    concept_signals_map = load_concept_signals()
+    concept_signals_map = await load_concept_signals()
     for sig in new_signals:
         if sig.canonical_concept_id:
             cid = sig.canonical_concept_id
@@ -201,10 +201,10 @@ async def run_lir_pipeline(
     # ─── 8. Persist ───
     await _progress("save", 95, "Saving results...")
 
-    save_concepts(concepts)
-    save_signals(all_signals)
-    save_concept_signals(concept_signals_map)
-    save_scores({cid: asdict(s) for cid, s in scores.items()})
+    await save_concepts(concepts)
+    await save_signals(all_signals)
+    await save_concept_signals(concept_signals_map)
+    await save_scores({cid: asdict(s) for cid, s in scores.items()})
 
     elapsed = time.time() - start
     logger.info(f"LIR pipeline complete in {elapsed:.1f}s")

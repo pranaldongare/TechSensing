@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -7,7 +9,16 @@ from app.middlewares.auth import UserJwtPayload
 from app.routes import lir, sensing
 from app.socket_handler import cancel_all_heartbeats, sio
 
-fastapi_app = FastAPI(title="Tech Sensing Platform")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from core.sensing.scheduler import start_scheduler
+    await start_scheduler()
+    yield
+    await cancel_all_heartbeats()
+
+
+fastapi_app = FastAPI(title="Tech Sensing Platform", lifespan=lifespan)
 
 
 # Default user middleware — no login required
@@ -20,17 +31,6 @@ class DefaultUserMiddleware(BaseHTTPMiddleware):
             email="user@techsensing.com",
         )
         return await call_next(request)
-
-
-@fastapi_app.on_event("startup")
-async def startup_event():
-    from core.sensing.scheduler import start_scheduler
-    await start_scheduler()
-
-
-@fastapi_app.on_event("shutdown")
-async def shutdown_event():
-    await cancel_all_heartbeats()
 
 
 fastapi_app.add_middleware(DefaultUserMiddleware)
