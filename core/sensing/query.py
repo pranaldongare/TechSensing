@@ -3,20 +3,29 @@ Natural Language Query — answers questions using stored report data.
 
 Searches report JSONs for relevant context, then uses LLM to generate
 a grounded answer.
+
+Uses a direct Ollama call (no PydanticOutputParser schema injection)
+to prevent the local model from echoing the JSON schema instead of
+producing actual data.
 """
 
 import json
 import logging
 import os
+import re
 from typing import List, Optional
 
 import aiofiles
+import httpx
 
 from core.constants import GPU_SENSING_CLASSIFY_LLM
-from core.llm.client import invoke_llm
 from core.llm.output_schemas.base import LLMOutputBase
 
 logger = logging.getLogger("sensing.query")
+
+# Ollama generate endpoint
+_OLLAMA_BASE = "http://localhost:{port}"
+_OLLAMA_TIMEOUT = 120.0  # seconds
 
 
 class QueryAnswer(LLMOutputBase):
@@ -26,6 +35,94 @@ class QueryAnswer(LLMOutputBase):
     sources: List[str]  # report IDs used
     technologies_mentioned: List[str]  # radar item names referenced
     confidence: str  # "high", "medium", "low"
+
+
+async def _call_ollama_raw(prompt: str, model: str, port: int) -> str:
+    """Call Ollama /api/generate directly (no schema injection)."""
+    url = f"{_OLLAMA_BASE.format(port=port)}/api/generate"
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.3, "num_predict": 4096},
+    }
+    async with httpx.AsyncClient(timeout=_OLLAMA_TIMEOUT) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("response", "")
+
+
+def _parse_query_json(raw: str) -> dict:
+    """Extract a JSON object from the LLM's raw text output."""
+    # Strip thinking tags
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL)
+    text = text.strip()
+
+    # Strip markdown code fences
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    text = text.strip()
+
+    # Try direct parse
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting the first JSON object
+    match = re.search(r"\{", text)
+    if match:
+        start = match.start()
+        # Find the matching closing brace
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if escape:
+                escape = False
+                continue
+            if c == "\\":
+                escape = True
+                continue
+            if c == '"' and not escape:
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+
+    # Try json_repair as last resort
+    try:
+        import json_repair
+
+        repaired = json_repair.loads(text)
+        if isinstance(repaired, dict):
+            return repaired
+    except Exception:
+        pass
+
+    raise ValueError(f"Could not extract JSON from LLM output: {text[:500]}")
+
+
+def _is_schema_echo(parsed: dict) -> bool:
+    """Detect if the parsed dict is a JSON schema definition rather than data."""
+    schema_keys = {"properties", "required", "type", "description", "$defs", "$ref", "title"}
+    top_keys = set(parsed.keys())
+    # If most top-level keys are schema keywords, it's an echo
+    return len(top_keys & schema_keys) >= 2 and "answer" not in parsed
 
 
 async def query_reports(
@@ -135,7 +232,7 @@ async def query_reports(
             confidence="low",
         )
 
-    # Build LLM prompt
+    # Build LLM prompt — no JSON schema injection to avoid echo issues
     logger.info(
         f"Query: '{question}' | domain={domain} | "
         f"{len(report_contexts)} reports loaded | "
@@ -143,38 +240,57 @@ async def query_reports(
         f"trends={sum(len(c['key_trends']) for c in report_contexts)}"
     )
     context_json = json.dumps(report_contexts, indent=1)
-    schema_json = json.dumps(QueryAnswer.model_json_schema(), indent=2)
 
-    prompt = [
-        {
-            "role": "system",
-            "parts": (
-                "You are a technology intelligence analyst. Answer the user's question "
-                "using ONLY the report data provided below. Be specific, cite report dates "
-                "and generation timestamps, and mention specific technologies by name. "
-                "Include details from radar items, key trends, market signals, and "
-                "recommendations where relevant. If the data contains relevant information, "
-                "provide a thorough answer.\n\n"
-                f"REPORT DATA:\n{context_json}\n\n"
-                f"Respond with valid JSON matching this schema:\n{schema_json}"
-            ),
-        },
-        {"role": "user", "parts": question},
-    ]
+    prompt = (
+        "You are a technology intelligence analyst. Answer the user's question "
+        "using ONLY the report data provided below. Be specific, cite report dates "
+        "and generation timestamps, and mention specific technologies by name. "
+        "Include details from radar items, key trends, market signals, and "
+        "recommendations where relevant. If the data contains relevant information, "
+        "provide a thorough answer.\n\n"
+        f"REPORT DATA:\n{context_json}\n\n"
+        f"USER QUESTION: {question}\n\n"
+        "Respond with ONLY a JSON object (no commentary, no markdown fences) "
+        "with exactly these four keys:\n"
+        '- "answer": your detailed answer as a string\n'
+        '- "sources": array of report_id strings you referenced\n'
+        '- "technologies_mentioned": array of technology name strings\n'
+        '- "confidence": one of "high", "medium", or "low"\n\n'
+        "OUTPUT ONLY THE JSON OBJECT. Example:\n"
+        '{"answer": "Based on the report from April 2026...", '
+        '"sources": ["abc-123"], '
+        '"technologies_mentioned": ["TechA"], '
+        '"confidence": "high"}\n\n'
+        "YOUR JSON RESPONSE:"
+    )
 
-    try:
-        result = await invoke_llm(
-            gpu_model=GPU_SENSING_CLASSIFY_LLM.model,
-            response_schema=QueryAnswer,
-            contents=prompt,
-            port=GPU_SENSING_CLASSIFY_LLM.port,
-        )
-        return QueryAnswer.model_validate(result)
-    except Exception as e:
-        logger.error(f"Query LLM call failed: {e}")
-        return QueryAnswer(
-            answer="Sorry, I encountered an error processing your question. Please try again.",
-            sources=[c["report_id"] for c in report_contexts],
-            technologies_mentioned=[],
-            confidence="low",
-        )
+    model = GPU_SENSING_CLASSIFY_LLM.model
+    port = GPU_SENSING_CLASSIFY_LLM.port
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            raw_output = await _call_ollama_raw(prompt, model, port)
+            logger.info(f"Query LLM attempt {attempt}: got {len(raw_output)} chars")
+
+            parsed = _parse_query_json(raw_output)
+
+            # Detect and reject schema echo
+            if _is_schema_echo(parsed):
+                logger.warning(
+                    f"Query attempt {attempt}: LLM echoed schema instead of data, retrying"
+                )
+                continue
+
+            return QueryAnswer.model_validate(parsed)
+
+        except Exception as e:
+            logger.warning(f"Query attempt {attempt} failed: {e}")
+
+    logger.error(f"All {max_attempts} query attempts failed")
+    return QueryAnswer(
+        answer="Sorry, I encountered an error processing your question. Please try again.",
+        sources=[c["report_id"] for c in report_contexts],
+        technologies_mentioned=[],
+        confidence="low",
+    )

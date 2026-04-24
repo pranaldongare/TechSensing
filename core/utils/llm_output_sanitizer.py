@@ -350,7 +350,15 @@ def _strip_schema_metadata(parsed: dict, schema: type) -> dict:
         inner = parsed["properties"]
         inner_data_keys = {k for k in inner if k in model_fields}
         if inner_data_keys:
-            return {k: v for k, v in inner.items() if k in model_fields}
+            # Check if values are schema definitions (dicts with "type"/"title")
+            # vs actual data.  Pure schema echo has ALL values as dicts with "type".
+            schema_like = sum(
+                1 for k in inner_data_keys
+                if isinstance(inner[k], dict) and "type" in inner[k]
+            )
+            if schema_like < len(inner_data_keys):
+                # Some values are real data — extract them
+                return {k: v for k, v in inner.items() if k in model_fields}
 
     # Schema-only output (Pattern 5): nothing usable
     return parsed
