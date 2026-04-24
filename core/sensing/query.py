@@ -52,7 +52,7 @@ async def query_reports(
     )
 
     report_contexts = []
-    for fname in report_files[:max_reports * 2]:  # load extra to filter
+    for fname in report_files:  # scan all reports to find domain matches
         fpath = os.path.join(sensing_dir, fname)
         try:
             async with aiofiles.open(fpath, "r") as f:
@@ -97,11 +97,21 @@ async def query_reports(
                      "description": t.get("description", "")[:200]}
                     for t in report.get("key_trends", [])
                 ],
+                "top_events": [
+                    {"headline": e.get("headline"), "actor": e.get("actor"),
+                     "event_type": e.get("event_type"),
+                     "impact_summary": e.get("impact_summary", "")[:200]}
+                    for e in report.get("top_events", [])
+                ] if report.get("top_events") else [],
                 "market_signals": [
-                    {"company": s.get("company_name"), "signal": s.get("signal_type"),
-                     "description": s.get("description", "")[:150]}
+                    {"company": s.get("company_or_player"), "signal": s.get("signal"),
+                     "description": s.get("industry_impact", "")[:150]}
                     for s in report.get("market_signals", [])[:10]
                 ],
+                "blind_spots": [
+                    {"area": b.get("area"), "why_it_matters": b.get("why_it_matters", "")[:150]}
+                    for b in report.get("blind_spots", [])
+                ] if report.get("blind_spots") else [],
             }
             report_contexts.append(context)
 

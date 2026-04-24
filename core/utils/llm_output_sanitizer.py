@@ -345,6 +345,13 @@ def _strip_schema_metadata(parsed: dict, schema: type) -> dict:
     if data_keys:
         return {k: v for k, v in parsed.items() if k in model_fields}
 
+    # Pattern 6: LLM wrapped actual data inside "properties" (schema echo)
+    if "properties" in parsed and isinstance(parsed["properties"], dict):
+        inner = parsed["properties"]
+        inner_data_keys = {k for k in inner if k in model_fields}
+        if inner_data_keys:
+            return {k: v for k, v in inner.items() if k in model_fields}
+
     # Schema-only output (Pattern 5): nothing usable
     return parsed
 
