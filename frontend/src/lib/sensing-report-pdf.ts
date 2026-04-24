@@ -123,6 +123,93 @@ function ringColor(ring: string): string {
     return colors.hold;
 }
 
+/** Convert inline markdown (**bold**) to pdfmake text array. */
+function parseInlineMd(text: string, baseStyle: Record<string, any> = {}): Content {
+    const parts: Content[] = [];
+    const regex = /\*\*(.+?)\*\*/g;
+    let last = 0;
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+        if (m.index > last) {
+            parts.push({ text: sanitize(text.slice(last, m.index)), ...baseStyle });
+        }
+        parts.push({ text: sanitize(m[1]), ...baseStyle, bold: true });
+        last = m.index + m[0].length;
+    }
+    if (last < text.length) {
+        parts.push({ text: sanitize(text.slice(last)), ...baseStyle });
+    }
+    return parts.length === 1 ? parts[0] : { text: parts };
+}
+
+/**
+ * Convert a block of markdown text to an array of pdfmake content nodes.
+ * Supports: ## headings, **bold** inline, - bullet lists, paragraphs.
+ */
+function markdownToContent(
+    md: string,
+    baseFontSize = 9,
+    baseColor = colors.slate600,
+): Content[] {
+    if (!md) return [];
+    const lines = md.split('\n');
+    const result: Content[] = [];
+    const baseStyle = { fontSize: baseFontSize, color: baseColor, lineHeight: 1.35 };
+
+    let bulletBuffer: Content[] = [];
+
+    const flushBullets = () => {
+        if (bulletBuffer.length > 0) {
+            result.push({
+                ul: bulletBuffer,
+                margin: [0, 2, 0, 4] as any,
+            });
+            bulletBuffer = [];
+        }
+    };
+
+    for (const raw of lines) {
+        const line = raw.trimEnd();
+
+        // Blank line → flush
+        if (!line.trim()) {
+            flushBullets();
+            continue;
+        }
+
+        // ## Heading
+        const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
+        if (headingMatch) {
+            flushBullets();
+            const level = headingMatch[1].length; // 1, 2, or 3
+            const headingSize = level === 1 ? 13 : level === 2 ? 11 : 10;
+            result.push({
+                ...parseInlineMd(headingMatch[2], { fontSize: headingSize, color: colors.slate800 }),
+                bold: true,
+                margin: [0, 6, 0, 3] as any,
+            });
+            continue;
+        }
+
+        // - Bullet item
+        const bulletMatch = line.match(/^\s*[-*]\s+(.+)/);
+        if (bulletMatch) {
+            bulletBuffer.push(parseInlineMd(bulletMatch[1], baseStyle));
+            continue;
+        }
+
+        // Regular paragraph line
+        flushBullets();
+        result.push({
+            ...parseInlineMd(line, baseStyle),
+            margin: [0, 0, 0, 4] as any,
+        });
+    }
+
+    flushBullets();
+    return result;
+}
+
 function sourceUrlsBlock(urls?: string[]): Content[] {
     if (!urls?.length) return [];
     const items = urls.map((url, i) => `[${i + 1}] ${sanitize(url)}`).join('  ');
@@ -348,7 +435,7 @@ export function renderRadarToCanvas(items: SensingRadarItem[]): string {
 
 // ── Build Document ─────────────────────────────────────────────────────────
 
-function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): TDocumentDefinitions {
+function buildSensingPdf(data: SensingReportData): TDocumentDefinitions {
     const { report, meta } = data;
     const today = new Date().toLocaleDateString();
     const content: Content[] = [];
@@ -388,33 +475,10 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
         ], '#FDA4AF'));
     }
 
-    // Technology Radar visualization
-    if (radarImageDataUrl && report.radar_items?.length > 0) {
-        content.push(sectionHeader('Technology Radar', colors.radar));
-        content.push({
-            image: radarImageDataUrl,
-            width: 450,
-            alignment: 'center' as const,
-            margin: [0, 0, 0, 12],
-        });
-    }
-
-    // Executive Summary — split into paragraphs for readability
+    // Executive Summary — parse markdown for bold, headings, bullets
     content.push(sectionHeader('Executive Summary', colors.executive));
-    const summaryParagraphs = (report.executive_summary || '')
-        .split(/\n\s*\n/)
-        .map(p => p.trim())
-        .filter(Boolean);
     content.push(card(
-        summaryParagraphs.length > 1
-            ? summaryParagraphs.map((p, i) => ({
-                text: sanitize(p),
-                fontSize: 10,
-                color: colors.slate800,
-                lineHeight: 1.4,
-                margin: [0, 0, 0, i < summaryParagraphs.length - 1 ? 6 : 0] as any,
-            }))
-            : [{ text: sanitize(report.executive_summary), fontSize: 10, color: colors.slate800, lineHeight: 1.4 }],
+        markdownToContent(report.executive_summary || '', 10, colors.slate800),
         '#BFDBFE',
     ));
 
@@ -647,13 +711,13 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
         }
     }
 
-    // Report Sections
+    // Report Sections — parse markdown for bold, headings, bullets
     if (report.report_sections?.length > 0) {
         content.push(sectionHeader('Detailed Analysis', colors.sections));
         for (const section of report.report_sections) {
             content.push(card([
                 { text: sanitize(section.section_title), fontSize: 11, bold: true, margin: [0, 0, 0, 4] },
-                { text: sanitize(section.content), fontSize: 9, color: colors.slate600, lineHeight: 1.3 },
+                ...markdownToContent(section.content || '', 9, colors.slate600),
                 ...sourceUrlsBlock(section.source_urls),
             ]));
         }
@@ -750,15 +814,7 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
 }
 
 export async function downloadSensingReportPdf(data: SensingReportData, filename?: string) {
-    let radarImageDataUrl: string | undefined;
-    if (data.report.radar_items?.length > 0) {
-        try {
-            radarImageDataUrl = renderRadarToCanvas(data.report.radar_items);
-        } catch {
-            // Fall back to no radar image
-        }
-    }
-    const doc = buildSensingPdf(data, radarImageDataUrl);
+    const doc = buildSensingPdf(data);
     const safe = (data.report.report_title || 'Tech Sensing Report')
         .replace(/[^a-z0-9\-\s]/gi, '').trim() || 'Tech Sensing Report';
     const name = filename || `${safe}.pdf`;
