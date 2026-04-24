@@ -62,13 +62,14 @@ async def query_reports(
             report = raw.get("report", raw)
             meta = raw.get("meta", {})
 
-            # Domain lives in meta or report
-            report_domain = (
-                meta.get("domain", "")
-                or report.get("domain", "")
-            )
-            if domain and report_domain.lower() != domain.lower():
-                continue
+            # Domain lives in meta and/or report (LLM may rephrase the domain)
+            meta_domain = meta.get("domain", "")
+            report_domain = report.get("domain", "")
+            if domain:
+                domain_lower = domain.lower()
+                if (meta_domain.lower() != domain_lower
+                        and report_domain.lower() != domain_lower):
+                    continue
 
             report_id = meta.get("tracking_id") or fname.replace("report_", "").replace(".json", "")
             generated_at = meta.get("generated_at", "")
@@ -122,6 +123,10 @@ async def query_reports(
             logger.warning(f"Failed to load {fname}: {e}")
 
     if not report_contexts:
+        logger.warning(
+            f"No reports matched domain='{domain}' — "
+            f"{len(report_files)} files scanned in {sensing_dir}"
+        )
         return QueryAnswer(
             answer=f"No reports found for domain '{domain}'." if domain
                    else "No reports found.",

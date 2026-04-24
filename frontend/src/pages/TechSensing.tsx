@@ -511,7 +511,7 @@ const TechSensing: React.FC = () => {
     setQueryLoading(true);
     setQueryAnswer(null);
     try {
-      const queryDomain = reportData?.report?.domain || domain || undefined;
+      const queryDomain = reportData?.meta?.domain || reportData?.report?.domain || domain || undefined;
       const answer = await api.sensingQuery(nlQuery.trim(), queryDomain);
       setQueryAnswer(answer);
     } catch (err: unknown) {
@@ -781,7 +781,7 @@ const TechSensing: React.FC = () => {
                 value={nlQuery}
                 onChange={(e) => setNlQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleNlQuery(); }}
-                placeholder={`Ask about ${reportData?.report?.domain || domain || 'all reports'}...`}
+                placeholder={`Ask about ${reportData?.meta?.domain || reportData?.report?.domain || domain || 'all reports'}...`}
                 disabled={queryLoading}
                 className="text-sm"
               />
@@ -789,7 +789,7 @@ const TechSensing: React.FC = () => {
                 {queryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ask'}
               </Button>
               <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
-                <Badge variant="outline" className="text-xs">{reportData?.report?.domain || domain || 'all'}</Badge>
+                <Badge variant="outline" className="text-xs">{reportData?.meta?.domain || reportData?.report?.domain || domain || 'all'}</Badge>
               </span>
             </div>
             {queryAnswer && (
