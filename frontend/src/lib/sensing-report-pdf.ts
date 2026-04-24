@@ -6,6 +6,7 @@ import pdfMake from 'pdfmake/build/pdfmake';
 import 'pdfmake/build/vfs_fonts';
 import type {
     SensingReportData, SensingRadarItem, SensingHeadlineMove,
+    SensingTopEvent, SensingBlindSpot,
     CompanyAnalysisReport,
 } from './api';
 
@@ -28,6 +29,9 @@ const colors = {
     sections: { bg: '#F0F9FF', text: '#0369A1' },
     recommendations: { bg: '#FFF7ED', text: '#C2410C' },
     articles: { bg: '#F1F5F9', text: '#475569' },
+    bottomLine: { bg: '#FFF1F2', text: '#9F1239' },
+    blindSpots: { bg: '#FEFCE8', text: '#A16207' },
+    topEvents: { bg: '#FFF7ED', text: '#9A3412' },
     // General
     slate600: '#475569',
     slate800: '#1F2937',
@@ -367,6 +371,23 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
         margin: [0, 0, 0, 10],
     });
 
+    // Confidence Note
+    if (report.confidence_note) {
+        content.push({
+            text: sanitize(report.confidence_note),
+            fontSize: 8, italics: true, color: colors.slate500,
+            margin: [0, 0, 0, 8],
+        });
+    }
+
+    // Bottom Line
+    if (report.bottom_line) {
+        content.push(card([
+            { text: 'BOTTOM LINE', fontSize: 9, bold: true, color: colors.bottomLine.text, margin: [0, 0, 0, 3] },
+            { text: sanitize(report.bottom_line), fontSize: 10, color: colors.slate800, lineHeight: 1.4 },
+        ], '#FDA4AF'));
+    }
+
     // Technology Radar visualization
     if (radarImageDataUrl && report.radar_items?.length > 0) {
         content.push(sectionHeader('Technology Radar', colors.radar));
@@ -397,8 +418,42 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
         '#BFDBFE',
     ));
 
-    // Headline Moves
-    if (report.headline_moves?.length > 0) {
+    // Top Events (v2) or Headline Moves (legacy)
+    if (report.top_events && report.top_events.length > 0) {
+        content.push(sectionHeader(`Top Events (${report.top_events.length})`, colors.topEvents));
+        for (let idx = 0; idx < report.top_events.length; idx++) {
+            const event = report.top_events[idx] as SensingTopEvent;
+            const eventLabel = (event.event_type || '').replace('_', ' ');
+            content.push(card([
+                {
+                    columns: [
+                        { text: `${idx + 1}.`, fontSize: 11, bold: true, color: colors.accent, width: 18 },
+                        { text: sanitize(event.headline), fontSize: 10, color: colors.slate800, width: '*' },
+                    ],
+                    columnGap: 4,
+                    margin: [0, 0, 0, 3],
+                },
+                {
+                    columns: [
+                        pill(event.actor, { bg: '#DBEAFE', text: '#1E40AF' }),
+                        pill(eventLabel, colors.topEvents),
+                        ...(event.segment ? [pill(event.segment, colors.headline)] : []),
+                    ],
+                    columnGap: 4,
+                    margin: [18, 0, 0, 0],
+                },
+                ...(event.impact_summary ? [
+                    { text: 'Impact:', fontSize: 8, bold: true, color: colors.slate600, margin: [18, 4, 0, 1] as any },
+                    { text: sanitize(event.impact_summary), fontSize: 8, color: colors.slate600, margin: [18, 0, 0, 0] as any },
+                ] : []),
+                ...(event.strategic_intent ? [
+                    { text: 'Strategic Intent:', fontSize: 8, bold: true, color: colors.slate600, margin: [18, 3, 0, 1] as any },
+                    { text: sanitize(event.strategic_intent), fontSize: 8, color: colors.slate600, margin: [18, 0, 0, 0] as any },
+                ] : []),
+                ...sourceUrlsBlock(event.source_urls),
+            ]));
+        }
+    } else if (report.headline_moves?.length > 0) {
         content.push(sectionHeader(`Headline Moves (${report.headline_moves.length})`, colors.headline));
         for (let idx = 0; idx < report.headline_moves.length; idx++) {
             const move = report.headline_moves[idx];
@@ -448,8 +503,8 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
         }
     }
 
-    // Market Signals
-    if (report.market_signals?.length > 0) {
+    // Market Signals (legacy — hidden when top_events present)
+    if (!(report.top_events && report.top_events.length > 0) && report.market_signals?.length > 0) {
         content.push(sectionHeader(`Market Signals (${report.market_signals.length})`, colors.market));
         content.push({
             text: 'What prominent players are doing and where the industry is heading.',
@@ -497,6 +552,10 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
                         { text: sanitize(item.technology_name), fontSize: 11, bold: true, width: '*' },
                         ...(radarItem ? [
                             pill(radarItem.ring, { bg: '#F0FDF4', text: ringColor(radarItem.ring) }),
+                            ...(radarItem.momentum ? [pill(
+                                radarItem.momentum === 'rising' ? '\u2191 Rising' : radarItem.momentum === 'declining' ? '\u2193 Declining' : '- Stable',
+                                radarItem.momentum === 'rising' ? { bg: '#D1FAE5', text: '#065F46' } : radarItem.momentum === 'declining' ? { bg: '#FEE2E2', text: '#991B1B' } : { bg: '#F1F5F9', text: '#64748B' },
+                            )] : []),
                             pill(radarItem.quadrant, colors.radar),
                         ] : []),
                     ],
@@ -556,6 +615,7 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
                 [
                     { text: 'Technology', bold: true, fillColor: '#F8FAFC', color: colors.slate800, margin: [4, 3, 4, 3], fontSize: 8 },
                     { text: 'Ring', bold: true, fillColor: '#F8FAFC', color: colors.slate800, margin: [4, 3, 4, 3], fontSize: 8 },
+                    { text: 'Momentum', bold: true, fillColor: '#F8FAFC', color: colors.slate800, margin: [4, 3, 4, 3], fontSize: 8 },
                     { text: 'Moved', bold: true, fillColor: '#F8FAFC', color: colors.slate800, margin: [4, 3, 4, 3], fontSize: 8 },
                     { text: 'Description', bold: true, fillColor: '#F8FAFC', color: colors.slate800, margin: [4, 3, 4, 3], fontSize: 8 },
                     { text: 'New?', bold: true, fillColor: '#F8FAFC', color: colors.slate800, margin: [4, 3, 4, 3], fontSize: 8 },
@@ -564,9 +624,12 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
 
             for (const item of sorted) {
                 const movedText = item.moved_in ? `From ${item.moved_in}` : '-';
+                const momentumText = item.momentum === 'rising' ? '\u2191' : item.momentum === 'declining' ? '\u2193' : '-';
+                const momentumColor = item.momentum === 'rising' ? '#065F46' : item.momentum === 'declining' ? '#991B1B' : colors.slate500;
                 tableBody.push([
                     { text: sanitize(item.name), margin: [4, 2, 4, 2], fontSize: 8, bold: true },
                     { text: sanitize(item.ring), margin: [4, 2, 4, 2], fontSize: 8, color: ringColor(item.ring) },
+                    { text: momentumText, margin: [4, 2, 4, 2], fontSize: 8, color: momentumColor, alignment: 'center' },
                     { text: movedText, margin: [4, 2, 4, 2], fontSize: 7, color: item.moved_in ? '#D97706' : colors.slate500 },
                     { text: sanitize(item.description), margin: [4, 2, 4, 2], fontSize: 7, color: colors.slate600 },
                     { text: item.is_new ? 'NEW' : '-', margin: [4, 2, 4, 2], fontSize: 7, color: item.is_new ? colors.adopt : colors.slate500 },
@@ -574,7 +637,7 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
             }
 
             content.push({
-                table: { headerRows: 1, widths: ['auto', 'auto', 'auto', '*', 'auto'], body: tableBody },
+                table: { headerRows: 1, widths: ['auto', 'auto', 'auto', 'auto', '*', 'auto'], body: tableBody },
                 layout: {
                     hLineColor: () => colors.border, vLineColor: () => colors.border,
                     hLineWidth: () => 0.5, vLineWidth: () => 0.5,
@@ -605,16 +668,36 @@ function buildSensingPdf(data: SensingReportData, radarImageDataUrl?: string): T
                     columns: [
                         pill(rec.priority, impactTone(rec.priority === 'Critical' ? 'High' : rec.priority)),
                         { text: sanitize(rec.title), fontSize: 10, bold: true, width: '*', margin: [0, 1, 0, 0] },
+                        ...(rec.effort ? [pill(`${rec.effort} effort`, rec.effort === 'Low' ? colors.impactLow : rec.effort === 'High' ? colors.impactHigh : colors.impactMed)] : []),
+                        ...(rec.urgency ? [pill(rec.urgency, rec.urgency === 'Immediate' ? colors.impactHigh : rec.urgency === 'Short-term' ? colors.impactMed : colors.impactLow)] : []),
                     ],
                     columnGap: 6,
                     margin: [0, 0, 0, 3],
                 },
                 { text: sanitize(rec.description), fontSize: 9, color: colors.slate600, margin: [0, 0, 0, 3] },
+                ...(rec.rationale ? [
+                    { text: sanitize(rec.rationale), fontSize: 8, italics: true, color: colors.slate500, margin: [8, 0, 0, 3] as any },
+                ] : []),
                 ...(rec.related_trends?.length > 0 ? [{
                     columns: rec.related_trends.slice(0, 4).map(t => pill(t, colors.trends)),
                     columnGap: 4,
                 }] : []),
             ]));
+        }
+    }
+
+    // Blind Spots
+    if (report.blind_spots && report.blind_spots.length > 0) {
+        content.push(sectionHeader(`Coverage Blind Spots (${report.blind_spots.length})`, colors.blindSpots));
+        for (const spot of report.blind_spots as SensingBlindSpot[]) {
+            content.push(card([
+                { text: sanitize(spot.area), fontSize: 10, bold: true, color: colors.blindSpots.text, margin: [0, 0, 0, 2] },
+                { text: sanitize(spot.why_it_matters), fontSize: 9, color: colors.slate600, margin: [0, 0, 0, 2] },
+                ...(spot.suggested_sources?.length > 0 ? [{
+                    text: `Look at: ${spot.suggested_sources.map(sanitize).join(', ')}`,
+                    fontSize: 7, italics: true, color: colors.slate500,
+                }] : []),
+            ], '#FDE68A'));
         }
     }
 

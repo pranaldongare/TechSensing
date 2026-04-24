@@ -23,6 +23,8 @@ from core.constants import GPU_SENSING_REPORT_LLM
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.sensing_outputs import (
     ClassifiedArticle,
+    HeadlineMove,
+    MarketSignal,
     RadarDetailsOutput,
     ReportCore,
     ReportInsights,
@@ -147,14 +149,14 @@ async def generate_report(
 
     logger.info(
         f"[Phase 1/4] Core generated in {phase1_time:.1f}s — "
-        f"headline_moves={len(core.headline_moves)}, trends={len(core.key_trends)}"
+        f"top_events={len(core.top_events)}, trends={len(core.key_trends)}"
     )
 
     # ── Phase 2: Radar (technology radar entries) ──────────────────────
     core_context = {
-        "headline_moves": [
-            {"headline": m.headline, "actor": m.actor, "segment": m.segment}
-            for m in core.headline_moves
+        "top_events": [
+            {"headline": e.headline, "actor": e.actor, "event_type": e.event_type, "segment": e.segment}
+            for e in core.top_events
         ],
         "key_trends": [
             {"trend_name": t.trend_name, "description": t.description}
@@ -223,8 +225,9 @@ async def generate_report(
 
     logger.info(
         f"[Phase 3/4] Insights generated in {phase3_time:.1f}s — "
-        f"signals={len(insights.market_signals)}, sections={len(insights.report_sections)}, "
-        f"recommendations={len(insights.recommendations)}"
+        f"sections={len(insights.report_sections)}, "
+        f"recommendations={len(insights.recommendations)}, "
+        f"blind_spots={len(insights.blind_spots)}"
     )
 
     # ── Phase 4: Radar item details (batched to avoid output truncation) ─
@@ -315,13 +318,26 @@ async def generate_report(
         f"after dedup/recency/specificity filtering"
     )
 
-    # ── Merge into final report ────────────────────────────────────────
-    report = TechSensingReport(
-        **core.model_dump(),
-        **radar.model_dump(),
-        **insights.model_dump(),
-        radar_item_details=details.radar_item_details,
+    # ── Link trends to report sections (deep_dive) ──────────────────
+    linked_trends = _link_trends_to_sections(
+        core.key_trends, insights.report_sections
     )
+
+    # ── Merge into final report ────────────────────────────────────────
+    core_data = core.model_dump()
+    core_data["key_trends"] = [t.model_dump() for t in linked_trends]
+    insights_data = insights.model_dump()
+
+    report = TechSensingReport(
+        **core_data,
+        **radar.model_dump(),
+        **insights_data,
+        radar_item_details=details.radar_item_details,
+        schema_version="2.0",
+    )
+
+    # ── Backfill legacy fields from top_events ────────────────────────
+    _backfill_legacy_fields(report)
 
     total_time = phase1_time + phase2_time + phase3_time + phase4_time
     logger.info(
@@ -333,6 +349,81 @@ async def generate_report(
     )
 
     return report
+
+
+# ── Legacy backfill + trend linking helpers ────────────────────────────
+
+
+def _backfill_legacy_fields(report: TechSensingReport) -> None:
+    """Populate legacy headline_moves and market_signals from top_events.
+
+    This ensures old frontends that don't know about top_events still get data.
+    """
+    if not report.top_events:
+        return
+
+    # headline_moves: simple mapping
+    if not report.headline_moves:
+        report.headline_moves = [
+            HeadlineMove(
+                headline=e.headline,
+                actor=e.actor,
+                segment=e.segment,
+                source_urls=e.source_urls,
+            )
+            for e in report.top_events
+        ]
+
+    # market_signals: only for events with strategic_intent
+    if not report.market_signals:
+        report.market_signals = [
+            MarketSignal(
+                company_or_player=e.actor,
+                signal=e.headline,
+                strategic_intent=e.strategic_intent or "",
+                industry_impact=e.impact_summary or "",
+                segment=e.segment,
+                related_technologies=e.related_technologies,
+                source_urls=e.source_urls,
+            )
+            for e in report.top_events
+            if e.strategic_intent
+        ]
+
+
+def _link_trends_to_sections(trends, sections) -> list:
+    """Match report_sections to key_trends by title similarity and populate deep_dive.
+
+    Uses word-overlap heuristic: if a section title shares >50% of words with
+    a trend name, the section content becomes that trend's deep_dive.
+    """
+    if not sections:
+        return list(trends)
+
+    linked = list(trends)
+    used_sections: set[int] = set()
+
+    for trend in linked:
+        trend_words = set(trend.trend_name.lower().split())
+        best_idx = -1
+        best_overlap = 0.0
+
+        for i, section in enumerate(sections):
+            if i in used_sections:
+                continue
+            section_words = set(section.section_title.lower().split())
+            if not trend_words or not section_words:
+                continue
+            overlap = len(trend_words & section_words) / min(len(trend_words), len(section_words))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_idx = i
+
+        if best_idx >= 0 and best_overlap >= 0.5:
+            trend.deep_dive = sections[best_idx].content
+            used_sections.add(best_idx)
+
+    return linked
 
 
 # ── Post-processing helpers ────────────────────────────────────────────

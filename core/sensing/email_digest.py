@@ -42,6 +42,9 @@ async def send_report_email(
     trends_count: int,
     radar_count: int,
     report_url: str = "",
+    bottom_line: str = "",
+    confidence_note: str = "",
+    blind_spots_count: int = 0,
 ) -> bool:
     """
     Send a report digest email.
@@ -57,6 +60,33 @@ async def send_report_email(
         logger.warning("No recipient email provided")
         return False
 
+    # Build optional HTML blocks (avoid nested f-string quote issues on Python <3.12)
+    bottom_line_html = ""
+    if bottom_line:
+        bl_escaped = _escape(bottom_line)
+        bottom_line_html = (
+            '<div style="background: #fff1f2; border-left: 4px solid #e11d48; padding: 12px 16px;'
+            ' border-radius: 0 6px 6px 0; margin: 12px 0;">'
+            '<div style="font-size: 11px; font-weight: 700; color: #9f1239; margin-bottom: 4px;">BOTTOM LINE</div>'
+            f'<div style="font-size: 13px; color: #1f2937;">{bl_escaped}</div>'
+            '</div>'
+        )
+
+    confidence_html = ""
+    if confidence_note:
+        cn_escaped = _escape(confidence_note)
+        confidence_html = f'<p style="font-size: 11px; color: #94a3b8; margin: 8px 0;">{cn_escaped}</p>'
+
+    blind_spots_html = ""
+    if blind_spots_count > 0:
+        blind_spots_html = (
+            '<div style="background: white; padding: 12px 16px; border-radius: 6px;'
+            ' border: 1px solid #e2e8f0; flex: 1;">'
+            f'<div style="font-size: 24px; font-weight: bold; color: #d97706;">{blind_spots_count}</div>'
+            '<div style="font-size: 12px; color: #64748b;">Blind Spots</div>'
+            '</div>'
+        )
+
     # Build HTML body
     html = f"""
     <html>
@@ -68,6 +98,10 @@ async def send_report_email(
         <div style="background: #f8fafc; padding: 24px; border: 1px solid #e2e8f0; border-top: none;">
             <h2 style="color: #1e3a5f; font-size: 18px; margin-top: 0;">{_escape(report_title)}</h2>
 
+            {bottom_line_html}
+
+            {confidence_html}
+
             <div style="display: flex; gap: 16px; margin: 16px 0;">
                 <div style="background: white; padding: 12px 16px; border-radius: 6px; border: 1px solid #e2e8f0; flex: 1;">
                     <div style="font-size: 24px; font-weight: bold; color: #1e3a5f;">{trends_count}</div>
@@ -77,6 +111,7 @@ async def send_report_email(
                     <div style="font-size: 24px; font-weight: bold; color: #1e3a5f;">{radar_count}</div>
                     <div style="font-size: 12px; color: #64748b;">Radar Items</div>
                 </div>
+                {blind_spots_html}
             </div>
 
             <h3 style="color: #475569; font-size: 14px; margin-bottom: 8px;">Executive Summary</h3>
@@ -104,12 +139,15 @@ async def send_report_email(
         msg["To"] = to_email
 
         # Plain text fallback
-        plain = (
-            f"Tech Sensing Report Ready\n\n"
-            f"{report_title}\n"
-            f"Domain: {domain}\n"
-            f"Trends: {trends_count} | Radar Items: {radar_count}\n\n"
-            f"Executive Summary:\n{executive_summary[:500]}\n"
+        plain = f"Tech Sensing Report Ready\n\n{report_title}\nDomain: {domain}\n"
+        if bottom_line:
+            plain += f"\nBOTTOM LINE: {bottom_line}\n"
+        if confidence_note:
+            plain += f"\n{confidence_note}\n"
+        plain += (
+            f"\nTrends: {trends_count} | Radar Items: {radar_count}"
+            + (f" | Blind Spots: {blind_spots_count}" if blind_spots_count > 0 else "")
+            + f"\n\nExecutive Summary:\n{executive_summary[:500]}\n"
         )
         if report_url:
             plain += f"\nView full report: {report_url}\n"

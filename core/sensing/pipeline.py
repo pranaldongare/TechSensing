@@ -428,7 +428,16 @@ async def run_sensing_pipeline(
         source_names=set(a.source for a in unique_articles),
         radar_item_count=len(report.radar_items),
     )
+    report.confidence_note = _build_confidence_note(
+        report.report_confidence, report.confidence_factors,
+    )
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
+
+    # Radar momentum computation
+    _compute_radar_momentum(report)
+
+    # Source tier breakdown
+    _compute_source_tiers(report)
 
     # Funding signal enrichment
     logger.info(f"Checking funding signals... [{_elapsed()}]")
@@ -766,6 +775,78 @@ def _boost_focus_matches(
         f"(keywords: {focus_keywords})"
     )
     return classified
+
+
+RING_ORDER = ["Adopt", "Trial", "Assess", "Hold"]
+
+
+def _build_confidence_note(confidence: str, factors: dict) -> str:
+    """Build human-readable confidence explanation from factors."""
+    articles = factors.get("articles_analyzed", 0)
+    sources = factors.get("sources_used", 0)
+    score = factors.get("weighted_score", 0)
+
+    if confidence == "high":
+        return (
+            f"This report is based on {articles} articles from {sources} distinct sources, "
+            f"providing comprehensive coverage (confidence score: {score:.0%})."
+        )
+    elif confidence == "medium":
+        return (
+            f"This report draws on {articles} articles from {sources} sources. "
+            f"Coverage is moderate (confidence score: {score:.0%}); "
+            f"some areas may have limited source diversity."
+        )
+    else:
+        return (
+            f"This report is based on limited data ({articles} articles, {sources} sources, "
+            f"confidence score: {score:.0%}). Findings should be validated with additional sources."
+        )
+
+
+def _compute_radar_momentum(report) -> None:
+    """Set momentum field on each radar item based on movement data."""
+    for item in report.radar_items:
+        if item.is_new:
+            item.momentum = "rising"
+        elif item.moved_in:
+            try:
+                current_idx = RING_ORDER.index(item.ring)
+                prev_idx = RING_ORDER.index(item.moved_in)
+                item.momentum = "rising" if current_idx < prev_idx else "declining"
+            except ValueError:
+                item.momentum = "stable"
+        else:
+            item.momentum = "stable"
+
+
+# Source tier classification
+_TIER1_SOURCES = {
+    "arxiv", "nature", "science", "ieee", "acm", "pnas",
+    "cell", "lancet", "new england journal", "proceedings",
+}
+_TIER2_SOURCES = {
+    "techcrunch", "ars technica", "the verge", "wired", "mit technology review",
+    "reuters", "bloomberg", "financial times", "wall street journal",
+    "the information", "venturebeat", "zdnet", "the register",
+    "hacker news", "github", "huggingface",
+}
+
+
+def _compute_source_tiers(report) -> None:
+    """Classify sources into tiers and store breakdown in confidence_factors."""
+    tier_counts = {"tier1_academic": 0, "tier2_professional": 0, "tier3_community": 0}
+    for article in getattr(report, "notable_articles", []) or []:
+        src = (article.source or "").lower().strip()
+        if any(t in src for t in _TIER1_SOURCES):
+            tier_counts["tier1_academic"] += 1
+        elif any(t in src for t in _TIER2_SOURCES):
+            tier_counts["tier2_professional"] += 1
+        else:
+            tier_counts["tier3_community"] += 1
+    if report.confidence_factors is None:
+        report.confidence_factors = {}
+    report.confidence_factors["source_tiers"] = tier_counts
 
 
 def _compute_report_confidence(
@@ -1318,7 +1399,16 @@ async def run_sensing_pipeline_from_document(
         source_names=set(a.source for a in unique_articles),
         radar_item_count=len(report.radar_items),
     )
+    report.confidence_note = _build_confidence_note(
+        report.report_confidence, report.confidence_factors,
+    )
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
+
+    # Radar momentum computation
+    _compute_radar_momentum(report)
+
+    # Source tier breakdown
+    _compute_source_tiers(report)
 
     # Funding signal enrichment
     await _emit("funding", 94, "Checking funding signals...")

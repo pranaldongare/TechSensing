@@ -6,12 +6,14 @@ import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
-  ThumbsUp, ThumbsDown, RefreshCw, Loader2,
+  ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
+  ArrowDown, Minus, Info, Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
-  SensingHeadlineMove, SensingTrendingVideo, TopicPreferences, ModelRelease,
+  SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
+  TopicPreferences, ModelRelease,
 } from '@/lib/api';
 
 interface Meta {
@@ -54,6 +56,34 @@ const ringColors: Record<string, string> = {
   'Hold': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
 };
 
+const eventTypeColors: Record<string, string> = {
+  'product_launch': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+  'partnership': 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300',
+  'funding': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  'regulation': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+  'research': 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300',
+  'strategic_move': 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+};
+
+const effortColors: Record<string, string> = {
+  'Low': 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+  'Medium': 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
+  'High': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+};
+
+const urgencyColors: Record<string, string> = {
+  'Immediate': 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+  'Short-term': 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
+  'Medium-term': 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300',
+  'Long-term': 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+};
+
+const MomentumIcon: React.FC<{ momentum?: string }> = ({ momentum }) => {
+  if (momentum === 'rising') return <ArrowUp className="w-3 h-3 text-green-600" />;
+  if (momentum === 'declining') return <ArrowDown className="w-3 h-3 text-red-600" />;
+  return <Minus className="w-3 h-3 text-gray-400" />;
+};
+
 const RING_ORDER = ['Adopt', 'Trial', 'Assess', 'Hold'];
 
 const formatViewCount = (count: number): string => {
@@ -89,6 +119,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
   const [expandedTrends, setExpandedTrends] = useState<Set<number>>(new Set());
   const [expandedRadarDetails, setExpandedRadarDetails] = useState<Set<number>>(new Set());
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
+  const [expandedEvents, setExpandedEvents] = useState<Set<number>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-expand and scroll to highlighted technology
@@ -135,6 +166,29 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </div>
         </div>
 
+        {/* Confidence Note */}
+        {report.confidence_note && (
+          <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800 text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-slate-500" />
+            <span>{report.confidence_note}</span>
+          </div>
+        )}
+
+        {/* Bottom Line */}
+        {report.bottom_line && (
+          <Card className="border-l-4 border-l-rose-600 bg-rose-50/50 dark:bg-rose-950/20">
+            <CardContent className="py-4">
+              <div className="flex items-start gap-3">
+                <Zap className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-semibold text-rose-800 dark:text-rose-300 mb-1">Bottom Line</h3>
+                  <p className="text-sm text-foreground">{report.bottom_line}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Executive Summary */}
         <Card className="border-l-4 border-l-blue-600">
           <CardHeader className="pb-2">
@@ -148,8 +202,71 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </CardContent>
         </Card>
 
-        {/* Headline Moves */}
-        {report.headline_moves?.length > 0 && (
+        {/* Top Events (v2.0) or Headline Moves (legacy) */}
+        {report.top_events && report.top_events.length > 0 ? (
+          <div className="space-y-3">
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-orange-500" />
+              Top {report.top_events.length} Events
+            </h3>
+            {report.top_events.map((event: SensingTopEvent, idx: number) => (
+              <Card key={idx} className="overflow-hidden border-l-4 border-l-orange-400">
+                <button
+                  onClick={() => toggleSet(setExpandedEvents, idx)}
+                  className="w-full text-left p-4 flex items-start justify-between hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="flex-shrink-0 w-6 h-6 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-xs font-bold flex items-center justify-center">
+                        {idx + 1}
+                      </span>
+                      <span className="font-medium text-sm">{event.headline}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <Badge variant="outline" className="text-xs">{event.actor}</Badge>
+                      <Badge className={eventTypeColors[event.event_type] || 'bg-gray-100'} variant="secondary">
+                        {event.event_type?.replace('_', ' ')}
+                      </Badge>
+                      {event.segment && (
+                        <Badge variant="secondary" className="text-xs">{event.segment}</Badge>
+                      )}
+                    </div>
+                  </div>
+                  {expandedEvents.has(idx) ? (
+                    <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+                  )}
+                </button>
+                {expandedEvents.has(idx) && (
+                  <div className="px-4 pb-4 border-t space-y-3 mt-0">
+                    {event.impact_summary && (
+                      <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 mt-3">
+                        <h5 className="text-xs font-semibold text-orange-700 dark:text-orange-300 mb-1">Impact</h5>
+                        <p className="text-sm text-muted-foreground">{event.impact_summary}</p>
+                      </div>
+                    )}
+                    {event.strategic_intent && (
+                      <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3">
+                        <h5 className="text-xs font-semibold text-orange-700 dark:text-orange-300 mb-1">Strategic Intent</h5>
+                        <p className="text-sm text-muted-foreground">{event.strategic_intent}</p>
+                      </div>
+                    )}
+                    {event.related_technologies?.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">Related:</span>
+                        {event.related_technologies.map((t, i) => (
+                          <Badge key={i} variant="outline" className="text-xs">{t}</Badge>
+                        ))}
+                      </div>
+                    )}
+                    <SourceLinks urls={event.source_urls} />
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        ) : report.headline_moves && report.headline_moves.length > 0 ? (
           <Card className="border-l-4 border-l-orange-500">
             <CardHeader className="pb-2">
               <CardTitle className="text-lg flex items-center gap-2">
@@ -179,7 +296,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
               </ol>
             </CardContent>
           </Card>
-        )}
+        ) : null}
 
         {/* Key Trends */}
         {report.key_trends?.length > 0 && (
@@ -215,7 +332,11 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                 {expandedTrends.has(idx) && (
                   <div className="px-4 pb-4 border-t">
                     <p className="text-sm mt-3 text-muted-foreground">{trend.description}</p>
-                    {trend.evidence?.length > 0 && (
+                    {trend.deep_dive ? (
+                      <div className="mt-3 prose prose-sm dark:prose-invert max-w-none border-l-2 border-amber-300 pl-3">
+                        <SafeMarkdownRenderer content={trend.deep_dive} />
+                      </div>
+                    ) : trend.evidence?.length > 0 ? (
                       <div className="mt-3">
                         <span className="text-xs font-medium">Evidence:</span>
                         <ul className="list-disc list-inside text-xs text-muted-foreground mt-1 space-y-0.5">
@@ -224,7 +345,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                           ))}
                         </ul>
                       </div>
-                    )}
+                    ) : null}
                     <SourceLinks urls={trend.source_urls} />
                   </div>
                 )}
@@ -233,8 +354,8 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </div>
         )}
 
-        {/* Market Signals */}
-        {report.market_signals?.length > 0 && (
+        {/* Market Signals (legacy — hidden when top_events present) */}
+        {!(report.top_events && report.top_events.length > 0) && report.market_signals?.length > 0 && (
           <div className="space-y-3">
             <h3 className="text-lg font-semibold flex items-center gap-2">
               <Building2 className="w-5 h-5 text-violet-600" />
@@ -428,6 +549,12 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                             <Badge className={ringColors[radarItem.ring] || 'bg-gray-100'} variant="secondary">
                               {radarItem.ring}
                             </Badge>
+                            {radarItem.momentum && (
+                              <span className="flex items-center gap-0.5" title={`Momentum: ${radarItem.momentum}`}>
+                                <MomentumIcon momentum={radarItem.momentum} />
+                                <span className="text-[10px] text-muted-foreground capitalize">{radarItem.momentum}</span>
+                              </span>
+                            )}
                             <Badge variant="outline" className="text-xs">{radarItem.quadrant}</Badge>
                             {radarItem.trl && (
                               <Badge variant="outline" className="text-xs font-mono">TRL {radarItem.trl}</Badge>
@@ -680,8 +807,25 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                     {rec.priority}
                   </Badge>
                   <div className="flex-1">
-                    <h4 className="font-medium">{rec.title}</h4>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="font-medium">{rec.title}</h4>
+                      {rec.effort && (
+                        <Badge className={effortColors[rec.effort] || 'bg-gray-100'} variant="secondary">
+                          {rec.effort} effort
+                        </Badge>
+                      )}
+                      {rec.urgency && (
+                        <Badge className={urgencyColors[rec.urgency] || 'bg-gray-100'} variant="secondary">
+                          {rec.urgency}
+                        </Badge>
+                      )}
+                    </div>
                     <p className="text-sm text-muted-foreground mt-1">{rec.description}</p>
+                    {rec.rationale && (
+                      <p className="text-xs text-muted-foreground mt-2 italic border-l-2 border-orange-300 pl-2">
+                        {rec.rationale}
+                      </p>
+                    )}
                     {rec.related_trends?.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-2">
                         {rec.related_trends.map((t, i) => (
@@ -694,6 +838,40 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
               </Card>
             ))}
           </div>
+        )}
+
+        {/* Blind Spots */}
+        {report.blind_spots && report.blind_spots.length > 0 && (
+          <Card className="border-l-4 border-l-yellow-500 bg-yellow-50/50 dark:bg-yellow-950/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-yellow-600" />
+                Coverage Blind Spots ({report.blind_spots.length})
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Topics, regions, or perspectives that may be underrepresented in this report.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {report.blind_spots.map((spot: SensingBlindSpot, idx: number) => (
+                <div key={idx} className="flex items-start gap-3 p-3 rounded-lg bg-yellow-100/50 dark:bg-yellow-900/20">
+                  <AlertTriangle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h5 className="text-sm font-medium">{spot.area}</h5>
+                    <p className="text-xs text-muted-foreground mt-1">{spot.why_it_matters}</p>
+                    {spot.suggested_sources?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        <span className="text-[10px] text-muted-foreground">Look at:</span>
+                        {spot.suggested_sources.map((s, i) => (
+                          <Badge key={i} variant="outline" className="text-[10px]">{s}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         )}
 
         {/* Notable Articles */}

@@ -29,6 +29,7 @@ export interface SensingRadarItem {
   patent_count?: number;
   lifecycle_stage?: string;
   funding_signal?: string;
+  momentum?: string; // 'rising' | 'stable' | 'declining'
 }
 
 export interface SensingTrendItem {
@@ -38,6 +39,7 @@ export interface SensingTrendItem {
   impact_level: string;
   time_horizon: string;
   source_urls?: string[];
+  deep_dive?: string; // markdown deep-dive content linked from report_sections
 }
 
 export interface SensingReportSection {
@@ -51,6 +53,9 @@ export interface SensingRecommendation {
   description: string;
   priority: string;
   related_trends: string[];
+  rationale?: string;
+  effort?: string;   // 'Low' | 'Medium' | 'High'
+  urgency?: string;  // 'Immediate' | 'Short-term' | 'Medium-term' | 'Long-term'
 }
 
 export interface SensingClassifiedArticle {
@@ -93,6 +98,23 @@ export interface SensingMarketSignal {
   segment?: string;
   related_technologies: string[];
   source_urls?: string[];
+}
+
+export interface SensingTopEvent {
+  headline: string;
+  actor: string;
+  event_type: string; // product_launch | partnership | funding | regulation | research | strategic_move
+  impact_summary: string;
+  strategic_intent: string;
+  segment: string;
+  related_technologies: string[];
+  source_urls: string[];
+}
+
+export interface SensingBlindSpot {
+  area: string;
+  why_it_matters: string;
+  suggested_sources: string[];
 }
 
 export interface SensingTrendingVideo {
@@ -175,24 +197,29 @@ export interface AILeaderboardData {
 }
 
 export interface SensingReport {
+  schema_version?: string; // '1.0' (legacy) or '2.0' (with top_events/blind_spots)
   report_title: string;
+  bottom_line?: string;
   executive_summary: string;
   domain: string;
   date_range: string;
   total_articles_analyzed: number;
+  top_events?: SensingTopEvent[];
   headline_moves?: SensingHeadlineMove[];
   key_trends: SensingTrendItem[];
   report_sections: SensingReportSection[];
   radar_items: SensingRadarItem[];
   radar_item_details: SensingRadarItemDetail[];
-  market_signals: SensingMarketSignal[];
+  market_signals?: SensingMarketSignal[];
   recommendations: SensingRecommendation[];
   notable_articles: SensingClassifiedArticle[];
+  blind_spots?: SensingBlindSpot[];
   trending_videos?: SensingTrendingVideo[];
   weak_signals?: WeakSignal[];
   model_releases?: ModelRelease[];
   relationships?: TechRelationshipMap | null;
   report_confidence?: string;
+  confidence_note?: string;
   confidence_factors?: Record<string, any>;
 }
 

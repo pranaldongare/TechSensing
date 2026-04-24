@@ -189,6 +189,10 @@ class TrendItem(BaseModel):
         default_factory=list,
         description="URLs of articles supporting this trend.",
     )
+    deep_dive: str = Field(
+        default="",
+        description="Optional deep-dive analysis in markdown (200-500 words). Populated from report_sections when a matching section exists.",
+    )
 
 
 class RadarItem(BaseModel):
@@ -236,6 +240,10 @@ class RadarItem(BaseModel):
     funding_signal: str = Field(
         default="",
         description="Recent funding or investment signal, if any.",
+    )
+    momentum: str = Field(
+        default="",
+        description="Momentum direction: 'rising', 'stable', or 'declining'. Computed from movement history.",
     )
 
 
@@ -333,6 +341,52 @@ class ReportSection(BaseModel):
     )
 
 
+class TopEvent(BaseModel):
+    """A top event of the week, merging headline moves and market signals."""
+
+    headline: str = Field(description="1-2 sentence description of the event.")
+    actor: str = Field(description="Person or organization behind this event.")
+    event_type: str = Field(
+        description=(
+            "Event category: 'product_launch', 'partnership', 'funding', "
+            "'regulation', 'research', or 'strategic_move'."
+        )
+    )
+    impact_summary: str = Field(
+        default="",
+        description="Why this event matters — strategic implications (1-2 sentences).",
+    )
+    strategic_intent: str = Field(
+        default="",
+        description="Why the actor is doing this — strategic reasoning (1-2 sentences).",
+    )
+    segment: str = Field(
+        default="",
+        description="Industry segment of the actor.",
+    )
+    related_technologies: List[str] = Field(
+        default_factory=list,
+        description="Radar item names related to this event.",
+    )
+    source_urls: List[str] = Field(
+        default_factory=list,
+        description="URLs of articles reporting this event.",
+    )
+
+
+class BlindSpot(BaseModel):
+    """A coverage gap or underrepresented area in the report."""
+
+    area: str = Field(description="Topic, region, or perspective that is missing.")
+    why_it_matters: str = Field(
+        description="Why this gap matters for decision-making (1-2 sentences)."
+    )
+    suggested_sources: List[str] = Field(
+        default_factory=list,
+        description="Suggested sources or search terms to fill this gap.",
+    )
+
+
 class Recommendation(BaseModel):
     title: str = Field(description="Recommendation title.")
     description: str = Field(description="Actionable recommendation description.")
@@ -341,6 +395,18 @@ class Recommendation(BaseModel):
     )
     related_trends: List[str] = Field(
         description="Names of trends this recommendation relates to."
+    )
+    rationale: str = Field(
+        default="",
+        description="Why this recommendation matters now — the driving context (1-2 sentences).",
+    )
+    effort: str = Field(
+        default="",
+        description="Implementation effort: 'Low', 'Medium', or 'High'.",
+    )
+    urgency: str = Field(
+        default="",
+        description="Time urgency: 'Immediate', 'Short-term', 'Medium-term', or 'Long-term'.",
     )
 
 
@@ -383,11 +449,19 @@ class DeepDiveReport(LLMOutputBase):
 
 
 class ReportCore(LLMOutputBase):
-    """Phase 1 output: executive overview, headline moves, and key trends."""
+    """Phase 1 output: executive overview, top events, and key trends."""
 
     report_title: str = Field(description="Report title including date range.")
+    bottom_line: str = Field(
+        default="",
+        description="2-3 sentence 'so what' — the single most important takeaway for a CTO this week.",
+    )
     executive_summary: str = Field(
-        description="Executive summary in markdown (200-350 words). Use bold for key terms, bullet points for highlights, and separate paragraphs for readability."
+        description=(
+            "Executive summary in markdown (200-350 words), structured in three parts: "
+            "**What Happened** (key facts), **Why It Matters** (strategic implications), "
+            "**What To Do** (recommended actions). Use bold, bullets, and separate paragraphs."
+        )
     )
     domain: str = Field(description="The domain analyzed.")
     date_range: str = Field(
@@ -396,8 +470,13 @@ class ReportCore(LLMOutputBase):
     total_articles_analyzed: int = Field(
         description="Total number of articles analyzed."
     )
+    top_events: List[TopEvent] = Field(
+        default_factory=list,
+        description="Top 10 most impactful events of the week, ranked by significance.",
+    )
     headline_moves: List[HeadlineMove] = Field(
-        description="Top 10 most impactful developments of the week, ranked by significance."
+        default_factory=list,
+        description="(Legacy) Top headline developments. Populated from top_events for backward compat.",
     )
     key_trends: List[TrendItem] = Field(
         description="List of 5-10 key trends identified."
@@ -413,19 +492,24 @@ class ReportRadar(LLMOutputBase):
 
 
 class ReportInsights(LLMOutputBase):
-    """Phase 3 output: market signals, analysis sections, recommendations, notable articles."""
+    """Phase 3 output: analysis sections, recommendations, notable articles, blind spots."""
 
     market_signals: List[MarketSignal] = Field(
-        description="5-10 market signals from prominent companies/players showing where the industry is heading."
+        default_factory=list,
+        description="(Legacy) Market signals. Kept for backward compat; new reports populate from top_events.",
     )
     report_sections: List[ReportSection] = Field(
-        description="3-6 detailed report sections in markdown."
+        description="3-6 detailed report sections in markdown. Each should align with a key trend for deep-dive linking."
     )
     recommendations: List[Recommendation] = Field(
-        description="3-7 actionable recommendations."
+        description="3-7 actionable recommendations with rationale, effort, and urgency."
     )
     notable_articles: List[ClassifiedArticle] = Field(
         description="Top 5-10 most notable articles with full classification."
+    )
+    blind_spots: List[BlindSpot] = Field(
+        default_factory=list,
+        description="2-4 coverage blind spots — topics, regions, or perspectives underrepresented in this report.",
     )
 
 
@@ -528,9 +612,17 @@ class ModelReleasesOutput(LLMOutputBase):
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
+    schema_version: str = Field(
+        default="1.0",
+        description="Schema version for backward compat. '2.0' for reports with top_events/blind_spots.",
+    )
     report_title: str = Field(description="Report title including date range.")
+    bottom_line: str = Field(
+        default="",
+        description="2-3 sentence 'so what' — the single most important takeaway.",
+    )
     executive_summary: str = Field(
-        description="Executive summary in markdown (200-350 words). Use bold for key terms, bullet points for highlights, and separate paragraphs for readability."
+        description="Executive summary in markdown (200-350 words)."
     )
     domain: str = Field(description="The domain analyzed (e.g., 'Generative AI').")
     date_range: str = Field(
@@ -539,8 +631,13 @@ class TechSensingReport(LLMOutputBase):
     total_articles_analyzed: int = Field(
         description="Total number of articles analyzed."
     )
+    top_events: List[TopEvent] = Field(
+        default_factory=list,
+        description="Top 10 most impactful events of the week (v2.0+).",
+    )
     headline_moves: List[HeadlineMove] = Field(
-        description="Top 10 most impactful developments of the week, ranked by significance."
+        default_factory=list,
+        description="(Legacy) Top headline developments. Populated from top_events for backward compat.",
     )
     key_trends: List[TrendItem] = Field(
         description="List of 5-10 key trends identified."
@@ -552,16 +649,21 @@ class TechSensingReport(LLMOutputBase):
         description="Technology radar entries (10-20 items)."
     )
     radar_item_details: List[RadarItemDetail] = Field(
-        description="Detailed write-up for each radar item — what it is, why it matters, who is using it, practical applications."
+        description="Detailed write-up for each radar item."
     )
     market_signals: List[MarketSignal] = Field(
-        description="5-10 market signals from prominent companies/players showing where the industry is heading."
+        default_factory=list,
+        description="(Legacy) Market signals. Populated from top_events for backward compat.",
     )
     recommendations: List[Recommendation] = Field(
-        description="3-7 actionable recommendations."
+        description="3-7 actionable recommendations with rationale, effort, and urgency."
     )
     notable_articles: List[ClassifiedArticle] = Field(
         description="Top 5-10 most notable articles with full classification."
+    )
+    blind_spots: List["BlindSpot"] = Field(
+        default_factory=list,
+        description="Coverage gaps — topics/regions/perspectives underrepresented in this report.",
     )
     trending_videos: List[TrendingVideoItem] = Field(
         default_factory=list,
@@ -582,6 +684,10 @@ class TechSensingReport(LLMOutputBase):
     report_confidence: str = Field(
         default="medium",
         description="Overall report confidence: 'high', 'medium', or 'low'.",
+    )
+    confidence_note: str = Field(
+        default="",
+        description="Human-readable confidence explanation.",
     )
     confidence_factors: dict = Field(
         default_factory=dict,
