@@ -511,7 +511,8 @@ const TechSensing: React.FC = () => {
     setQueryLoading(true);
     setQueryAnswer(null);
     try {
-      const answer = await api.sensingQuery(nlQuery.trim(), domain || undefined);
+      const queryDomain = reportData?.report?.domain || domain || undefined;
+      const answer = await api.sensingQuery(nlQuery.trim(), queryDomain);
       setQueryAnswer(answer);
     } catch (err: unknown) {
       toast({ title: 'Query failed', description: err instanceof Error ? err.message : '', variant: 'destructive' });
@@ -780,13 +781,16 @@ const TechSensing: React.FC = () => {
                 value={nlQuery}
                 onChange={(e) => setNlQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleNlQuery(); }}
-                placeholder="Ask your radar... e.g., 'What happened with RAG frameworks this month?'"
+                placeholder={`Ask about ${reportData?.report?.domain || domain || 'all reports'}...`}
                 disabled={queryLoading}
                 className="text-sm"
               />
               <Button size="sm" onClick={handleNlQuery} disabled={queryLoading || !nlQuery.trim()}>
                 {queryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ask'}
               </Button>
+              <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
+                <Badge variant="outline" className="text-xs">{reportData?.report?.domain || domain || 'all'}</Badge>
+              </span>
             </div>
             {queryAnswer && (
               <Card className="border-l-4 border-l-blue-500 p-3">
