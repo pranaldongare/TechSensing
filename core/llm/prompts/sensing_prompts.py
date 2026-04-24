@@ -527,6 +527,7 @@ def sensing_details_prompt(
     classified_articles_json: str,
     domain: str = "Technology",
     custom_requirements: str = "",
+    org_context: str = "",
 ) -> list[dict]:
     """
     Build a chat prompt to generate detailed write-ups for each radar item.
@@ -542,6 +543,14 @@ def sensing_details_prompt(
                 "You are a senior technology strategist writing detailed technology "
                 f"radar entries for the {domain} domain.\n\n"
                 + _custom_requirements_block(custom_requirements)
+                + (
+                    f"ORGANIZATION CONTEXT:\n{org_context}\n\n"
+                    "When writing technology details:\n"
+                    "- In 'why_it_matters', note relevance to the org's priorities where supported by evidence.\n"
+                    "- In 'practical_applications', include applications relevant to the org's tech stack.\n"
+                    "- Do NOT fabricate org-specific connections unsupported by articles.\n\n"
+                    if org_context else ""
+                )
                 + "You are given a list of RADAR ITEMS (name, quadrant, ring) and the "
                 "CLASSIFIED ARTICLES that were used to create them.\n\n"
                 "For EVERY radar item, generate a detailed write-up covering:\n"
@@ -553,7 +562,10 @@ def sensing_details_prompt(
                 "release this technology. Do NOT include entities that only published the underlying "
                 "research paper unless they also released the implementation.\n"
                 "  * practical_applications: Real-world use cases and applications (2-4 items).\n"
-                "  * source_urls: URLs of articles informing this write-up.\n\n"
+                "  * source_urls: URLs of articles informing this write-up.\n"
+                "  * hiring_indicators: Brief summary of hiring trends for this technology "
+                "(growing demand, notable job postings, skill requirements). "
+                "Leave empty string if no hiring signals found in articles.\n\n"
                 "ATTRIBUTION ACCURACY RULES:\n"
                 "- Distinguish between research authors and implementation authors.\n"
                 "- For key_players: List ONLY entities that actively develop, maintain, or officially "
@@ -569,7 +581,7 @@ def sensing_details_prompt(
                 + "OUTPUT RULES:\n"
                 "- Return ONLY a valid JSON object with one key: radar_item_details (array).\n"
                 "- Each element must have: technology_name, what_it_is, why_it_matters, "
-                "current_state, key_players, practical_applications, source_urls.\n"
+                "current_state, key_players, practical_applications, source_urls, hiring_indicators.\n"
                 "- technology_name MUST exactly match the radar item name provided.\n"
                 "- Do NOT include schema definitions, $defs, $ref, properties, or type metadata.\n"
                 "- Newlines inside string values MUST be written as \\n (escaped).\n"

@@ -32,30 +32,23 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
 import {
-  Radar, Loader2, History, Trash2, RefreshCw, Download,
+  Radar, Loader2, History, Trash2, RefreshCw, Download, Search,
   Maximize2, Minimize2, X, Plus, XCircle, RotateCcw, Calendar,
   ChevronDown, ChevronRight, FileUp,
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { api, getAuthToken } from '@/lib/api';
-import type { SensingReportData, SensingHistoryItem, ReportComparison, SensingSchedule, TimelineData, OrgTechContext, TopicPreferences } from '@/lib/api';
+import type { SensingReportData, SensingHistoryItem, SensingSchedule, OrgTechContext, TopicPreferences, ReportSearchResult, Annotation } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { API_URL } from '../../config';
-import TechRadar from '@/components/TechRadar';
-import SensingRelationshipGraph from '@/components/SensingRelationshipGraph';
 import SensingReportRenderer from '@/components/SensingReportRenderer';
-import SensingComparisonView from '@/components/SensingComparisonView';
-import SensingTimeline from '@/components/SensingTimeline';
-import SensingDashboard from '@/components/SensingDashboard';
 import SensingDeepDive from '@/components/SensingDeepDive';
-import SensingCollaboration from '@/components/SensingCollaboration';
 import CompanyAnalysisView from '@/components/CompanyAnalysisView';
-import LIRCandidateFeed from '@/components/LIRCandidateFeed';
-import LIRBacktestViewer from '@/components/LIRBacktestViewer';
-import ModelReleasesView from '@/components/ModelReleasesView';
+import CompanyWatchlistManager from '@/components/CompanyWatchlistManager';
 import { toast } from '@/components/ui/use-toast';
-import type { DeepDiveReport, DeepDiveHistoryItem, SharedReport } from '@/lib/api';
+import type { DeepDiveReport, DeepDiveHistoryItem } from '@/lib/api';
 import { downloadSensingReportPdf } from '@/lib/sensing-report-pdf';
 import { downloadSensingReportPptx } from '@/lib/sensing-report-pptx';
 import AppNavbar from '@/components/AppNavbar';
@@ -87,6 +80,12 @@ const TechSensing: React.FC = () => {
   const [history, setHistory] = useState<SensingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // Library search state
+  const [historySearch, setHistorySearch] = useState('');
+  const [searchResults, setSearchResults] = useState<ReportSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Full-screen state
   const [isFullScreen, setIsFullScreen] = useState(false);
 
@@ -106,25 +105,19 @@ const TechSensing: React.FC = () => {
   // Document upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [includeVideos, setIncludeVideos] = useState(false);
+
+  // Company report state
+  const [companyName, setCompanyName] = useState('');
+  const [companyGenerating, setCompanyGenerating] = useState(false);
   const [nlQuery, setNlQuery] = useState('');
   const [stakeholderRole, setStakeholderRole] = useState('general');
   const [queryAnswer, setQueryAnswer] = useState<import('@/lib/api').QueryAnswer | null>(null);
   const [queryLoading, setQueryLoading] = useState(false);
 
-  // Comparison state
-  const [compareA, setCompareA] = useState<string>('');
-  const [compareB, setCompareB] = useState<string>('');
-  const [comparison, setComparison] = useState<ReportComparison | null>(null);
-  const [compareLoading, setCompareLoading] = useState(false);
-
   // Schedule state
   const [showScheduleDialog, setShowScheduleDialog] = useState(false);
   const [schedules, setSchedules] = useState<SensingSchedule[]>([]);
   const [scheduleFrequency, setScheduleFrequency] = useState('weekly');
-
-  // Timeline state
-  const [timelineData, setTimelineData] = useState<TimelineData | null>(null);
-  const [timelineLoading, setTimelineLoading] = useState(false);
 
   // Org context state
   const [showOrgDialog, setShowOrgDialog] = useState(false);
@@ -140,12 +133,11 @@ const TechSensing: React.FC = () => {
   const [deepDiveTechName, setDeepDiveTechName] = useState('');
   const [deepDiveHistory, setDeepDiveHistory] = useState<DeepDiveHistoryItem[]>([]);
 
-  // Collaboration state
-  const [shareId, setShareId] = useState<string | null>(null);
-  const [showCollabDialog, setShowCollabDialog] = useState(false);
-
   // Topic preferences state
   const [topicPrefs, setTopicPrefs] = useState<TopicPreferences | null>(null);
+
+  // Annotations state
+  const [annotations, setAnnotations] = useState<Record<string, Annotation>>({});
 
   // Refs
   const socketRef = useRef<Socket | null>(null);
@@ -167,6 +159,17 @@ const TechSensing: React.FC = () => {
         .catch(() => setTopicPrefs(null));
     }
   }, [reportData?.report?.domain]);
+
+  // Load annotations when report changes
+  useEffect(() => {
+    if (reportData?.meta?.tracking_id) {
+      api.sensingGetAnnotations(reportData.meta.tracking_id)
+        .then((res) => setAnnotations(res.annotations || {}))
+        .catch(() => setAnnotations({}));
+    } else {
+      setAnnotations({});
+    }
+  }, [reportData?.meta?.tracking_id]);
 
   // Global WebSocket listener — always on, notifies when any report completes
   useEffect(() => {
@@ -225,6 +228,24 @@ const TechSensing: React.FC = () => {
     } finally {
       setHistoryLoading(false);
     }
+  };
+
+  const handleHistorySearch = (q: string) => {
+    setHistorySearch(q);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (q.length < 2) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.sensingSearch({ q });
+        setSearchResults(res.results || []);
+      } catch { /* ignore */ }
+      finally { setSearchLoading(false); }
+    }, 300);
   };
 
   const handleGenerate = async () => {
@@ -342,16 +363,40 @@ const TechSensing: React.FC = () => {
     }
   };
 
-  const handleCompare = async () => {
-    if (!compareA || !compareB || compareA === compareB) return;
-    setCompareLoading(true);
+  const handleAnnotate = async (key: string, note: string) => {
     try {
-      const result = await api.sensingCompare(compareA, compareB);
-      setComparison(result);
+      const res = await api.sensingUpsertAnnotation(key, note);
+      setAnnotations(res.annotations || {});
+    } catch { /* ignore */ }
+  };
+
+  const handleGenerateCompanyReport = async () => {
+    if (!companyName.trim()) return;
+    setCompanyGenerating(true);
+    try {
+      const res = await api.sensingGenerateCompany({
+        company_name: companyName.trim(),
+        domain: domain || undefined,
+        lookback_days: lookbackDays,
+      });
+      toast({ title: 'Company report started', description: res.message });
+      setCompanyName('');
+      loadHistory();
     } catch (err: unknown) {
-      toast({ title: 'Comparison failed', description: err instanceof Error ? err.message : 'Unknown error', variant: 'destructive' });
+      toast({ title: 'Failed', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     } finally {
-      setCompareLoading(false);
+      setCompanyGenerating(false);
+    }
+  };
+
+  const handleDownloadBoardPdf = async () => {
+    if (!reportData) return;
+    try {
+      const { downloadSensingBoardPdf } = await import('@/lib/sensing-report-pdf');
+      await downloadSensingBoardPdf(reportData);
+      toast({ title: 'Board PDF download started' });
+    } catch {
+      toast({ title: 'Board PDF generation failed', variant: 'destructive' });
     }
   };
 
@@ -392,15 +437,6 @@ const TechSensing: React.FC = () => {
       await api.sensingDeleteSchedule(id);
       await loadSchedules();
     } catch { /* ignore */ }
-  };
-
-  const loadTimeline = async () => {
-    setTimelineLoading(true);
-    try {
-      const data = await api.sensingTimeline(domain);
-      setTimelineData(data);
-    } catch { /* ignore */ }
-    finally { setTimelineLoading(false); }
   };
 
   const loadOrgContext = async () => {
@@ -479,20 +515,6 @@ const TechSensing: React.FC = () => {
       toast({ title: 'Failed to load deep dive', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     } finally {
       setDeepDiveLoading(false);
-    }
-  };
-
-  const handleShare = async () => {
-    if (!reportData) return;
-    try {
-      const shared = await api.sensingShare(reportData.meta.tracking_id);
-      setShareId(shared.share_id);
-      setShowCollabDialog(true);
-      const url = `${window.location.origin}${window.location.pathname}?shared=${shared.share_id}`;
-      navigator.clipboard.writeText(url);
-      toast({ title: 'Report shared', description: 'Link copied to clipboard' });
-    } catch (err: unknown) {
-      toast({ title: 'Share failed', description: err instanceof Error ? err.message : '', variant: 'destructive' });
     }
   };
 
@@ -578,6 +600,10 @@ const TechSensing: React.FC = () => {
               <Download className="w-4 h-4 mr-1.5" />
               PDF
             </Button>
+            <Button variant="outline" size="sm" onClick={handleDownloadBoardPdf}>
+              <Download className="w-4 h-4 mr-1.5" />
+              Board PDF
+            </Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPptx}>
               <Download className="w-4 h-4 mr-1.5" />
               PPTX
@@ -593,94 +619,45 @@ const TechSensing: React.FC = () => {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
           <div className="px-6 pt-2 shrink-0">
             <TabsList>
-              <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
               <TabsTrigger value="report">Report</TabsTrigger>
-              <TabsTrigger value="radar">Technology Radar</TabsTrigger>
-              <TabsTrigger value="relationships" disabled={!reportData?.report?.relationships}>Relationships</TabsTrigger>
-              <TabsTrigger value="compare" disabled={history.length < 2}>Compare</TabsTrigger>
-              <TabsTrigger value="timeline" onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
-              <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
-              <TabsTrigger value="model-releases">Model Releases</TabsTrigger>
-              <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
+              <TabsTrigger value="companies" disabled={!reportData}>Companies</TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent value="dashboard" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
-          </TabsContent>
           <TabsContent value="report" className="flex-1 min-h-0 px-6 pb-4 mt-2">
-            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} />
+            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} annotations={annotations} onAnnotate={handleAnnotate} />
           </TabsContent>
-          <TabsContent value="radar" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <TechRadar items={reportData.report.radar_items || []} onBlipClick={(name) => { setHighlightTech(name); setActiveTab('report'); }} customQuadrants={orgContext.radar_customization?.quadrants} />
-          </TabsContent>
-          <TabsContent value="relationships" className="flex-1 min-h-0 px-6 pb-4 mt-2">
-            {reportData.report.relationships && (
-              <SensingRelationshipGraph
-                relationships={reportData.report.relationships}
-                radarItems={reportData.report.radar_items || []}
-                onTechClick={(name) => { setHighlightTech(name); setActiveTab('report'); }}
+          <TabsContent value="companies" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
+            <div className="space-y-6">
+              <CompanyAnalysisView
+                reportTrackingId={reportData?.meta?.tracking_id}
+                domain={reportData?.report?.domain}
+                radarItems={reportData?.report?.radar_items || []}
               />
-            )}
-          </TabsContent>
-          <TabsContent value="compare" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <div className="space-y-4">
-              <div className="flex items-end gap-3">
-                <div className="flex-1">
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Older Report</label>
-                  <Select value={compareA} onValueChange={setCompareA}>
-                    <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
-                    <SelectContent>
-                      {history.map(h => (
-                        <SelectItem key={h.tracking_id} value={h.tracking_id}>
-                          {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Newer Report</label>
-                  <Select value={compareB} onValueChange={setCompareB}>
-                    <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
-                    <SelectContent>
-                      {history.map(h => (
-                        <SelectItem key={h.tracking_id} value={h.tracking_id}>
-                          {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Button onClick={handleCompare} disabled={!compareA || !compareB || compareA === compareB || compareLoading}>
-                  {compareLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Compare'}
-                </Button>
-              </div>
-              {comparison && <SensingComparisonView comparison={comparison} />}
-            </div>
-          </TabsContent>
-          <TabsContent value="timeline" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            {timelineLoading ? (
-              <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>
-            ) : timelineData ? (
-              <SensingTimeline data={timelineData} />
-            ) : (
-              <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">Loading timeline...</div>
-            )}
-          </TabsContent>
-          <TabsContent value="company-analysis" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <CompanyAnalysisView
-              reportTrackingId={reportData?.meta?.tracking_id}
-              domain={reportData?.report?.domain}
-              radarItems={reportData?.report?.radar_items || []}
-            />
-          </TabsContent>
-          <TabsContent value="model-releases" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <ModelReleasesView initialReleases={reportData?.report?.model_releases} trackingId={reportData?.meta?.tracking_id} />
-          </TabsContent>
-          <TabsContent value="leading-indicators" className="flex-1 min-h-0 px-6 pb-4 mt-2 overflow-auto">
-            <LIRCandidateFeed />
-            <div className="mt-6 border-t border-border pt-4">
-              <LIRBacktestViewer />
+              <Card>
+                <CardContent className="p-4">
+                  <h4 className="text-sm font-medium mb-2">Generate Company Report</h4>
+                  <div className="flex gap-2">
+                    <Input
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder="Company name..."
+                      className="flex-1"
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleGenerateCompanyReport(); }}
+                    />
+                    <Button
+                      onClick={handleGenerateCompanyReport}
+                      disabled={companyGenerating || !companyName.trim()}
+                      size="sm"
+                    >
+                      {companyGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Generate'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Creates a focused report on this company using current domain and date range.
+                  </p>
+                </CardContent>
+              </Card>
+              <CompanyWatchlistManager compact />
             </div>
           </TabsContent>
         </Tabs>
@@ -755,12 +732,13 @@ const TechSensing: React.FC = () => {
               <Download className="w-4 h-4 mr-1.5" />
               PDF
             </Button>
+            <Button variant="outline" size="sm" onClick={handleDownloadBoardPdf}>
+              <Download className="w-4 h-4 mr-1.5" />
+              Board PDF
+            </Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPptx}>
               <Download className="w-4 h-4 mr-1.5" />
               PPTX
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleShare}>
-              Share
             </Button>
             <Button variant="outline" size="sm" onClick={() => setIsFullScreen(true)}>
               <Maximize2 className="w-4 h-4 mr-1.5" />
@@ -805,193 +783,197 @@ const TechSensing: React.FC = () => {
                 </div>
               </Card>
             )}
-            {/* Two-column grid: Left = Domain/Date/Requirements, Right = Keywords */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
-              {/* Left column */}
-              <div className="space-y-3">
-                {/* Domain + Date Range */}
-                <div className="flex gap-3">
-                  <div className="flex-1">
+            {/* Primary fields: Domain, Date Range, Custom Requirements, YouTube, Audience */}
+            <div className="space-y-3">
+              {/* Domain + Date Range */}
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    Domain / Topic
+                  </label>
+                  <Input
+                    value={domain}
+                    onChange={(e) => setDomain(e.target.value)}
+                    placeholder="e.g., Generative AI, Robotics, Quantum Computing"
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <div className="w-40">
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    Date Range
+                  </label>
+                  <Select
+                    value={dateRange}
+                    onValueChange={(v) => setDateRange(v as DateRangePreset)}
+                    disabled={isSubmitting}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="last_week">Last Week</SelectItem>
+                      <SelectItem value="last_month">Last Month</SelectItem>
+                      <SelectItem value="custom">Custom</SelectItem>
+                      <SelectItem value="no_range">No Range</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {dateRange === 'custom' && (
+                  <div className="w-28">
                     <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                      Domain / Topic
+                      Days
                     </label>
                     <Input
-                      value={domain}
-                      onChange={(e) => setDomain(e.target.value)}
-                      placeholder="e.g., Generative AI, Robotics, Quantum Computing"
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={customDays}
+                      onChange={(e) => setCustomDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 7)))}
                       disabled={isSubmitting}
                     />
                   </div>
-                  <div className="w-40">
-                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                      Date Range
-                    </label>
-                    <Select
-                      value={dateRange}
-                      onValueChange={(v) => setDateRange(v as DateRangePreset)}
-                      disabled={isSubmitting}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="last_week">Last Week</SelectItem>
-                        <SelectItem value="last_month">Last Month</SelectItem>
-                        <SelectItem value="custom">Custom</SelectItem>
-                        <SelectItem value="no_range">No Range</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {dateRange === 'custom' && (
-                    <div className="w-28">
-                      <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                        Days
-                      </label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={365}
-                        value={customDays}
-                        onChange={(e) => setCustomDays(Math.max(1, Math.min(365, parseInt(e.target.value) || 7)))}
-                        disabled={isSubmitting}
-                      />
-                    </div>
-                  )}
-                </div>
-                {/* YouTube Videos Toggle + Custom Requirements */}
-                <div className="flex gap-3 items-start">
-                  <div className="flex-1">
-                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                      Custom Requirements (optional)
-                    </label>
-                    <Textarea
-                      value={customReqs}
-                      onChange={(e) => setCustomReqs(e.target.value)}
-                      placeholder="e.g., Focus on enterprise adoption, compare with previous trends..."
-                      rows={2}
-                      disabled={isSubmitting}
-                    />
-                  </div>
-                  <div className="flex items-center gap-2 pt-5">
-                    <Switch
-                      id="include-videos"
-                      checked={includeVideos}
-                      onCheckedChange={setIncludeVideos}
-                      disabled={isSubmitting}
-                    />
-                    <label htmlFor="include-videos" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
-                      YouTube Videos
-                    </label>
-                  </div>
-                  <div className="pt-3">
-                    <label className="text-xs font-medium text-muted-foreground mb-1 block">Audience</label>
-                    <Select value={stakeholderRole} onValueChange={setStakeholderRole} disabled={isSubmitting}>
-                      <SelectTrigger className="w-40">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="general">General</SelectItem>
-                        <SelectItem value="cto">CTO / Strategy</SelectItem>
-                        <SelectItem value="engineering_lead">Engineering Lead</SelectItem>
-                        <SelectItem value="developer">Developer</SelectItem>
-                        <SelectItem value="product_manager">Product Manager</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+                )}
               </div>
-
-              {/* Right column: Keywords */}
-              <div className="space-y-3">
-                <div>
+              {/* Custom Requirements + YouTube + Audience */}
+              <div className="flex gap-3 items-start">
+                <div className="flex-1">
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Must Include Keywords
+                    Custom Requirements (optional)
                   </label>
-                  <div className="flex gap-1.5">
-                    <Input
-                      value={mustIncludeInput}
-                      onChange={(e) => setMustIncludeInput(e.target.value)}
-                      onKeyDown={(e) => handleKeywordKeyDown(e, mustInclude, setMustInclude, mustIncludeInput, setMustIncludeInput)}
-                      placeholder="Type keyword and press Enter"
-                      disabled={isSubmitting}
-                      className="text-sm"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="shrink-0 h-9 w-9"
-                      onClick={() => addKeyword(mustInclude, setMustInclude, mustIncludeInput, setMustIncludeInput)}
-                      disabled={isSubmitting || !mustIncludeInput.trim()}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                  {mustInclude.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {mustInclude.map((kw) => (
-                        <Badge key={kw} variant="secondary" className="text-xs gap-1 bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
-                          {kw}
-                          <button onClick={() => removeKeyword(mustInclude, setMustInclude, kw)} disabled={isSubmitting}>
-                            <XCircle className="w-3 h-3" />
-                          </button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
+                  <Textarea
+                    value={customReqs}
+                    onChange={(e) => setCustomReqs(e.target.value)}
+                    placeholder="e.g., Focus on enterprise adoption, compare with previous trends..."
+                    rows={2}
+                    disabled={isSubmitting}
+                  />
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Don't Include Keywords
+                <div className="flex items-center gap-2 pt-5">
+                  <Switch
+                    id="include-videos"
+                    checked={includeVideos}
+                    onCheckedChange={setIncludeVideos}
+                    disabled={isSubmitting}
+                  />
+                  <label htmlFor="include-videos" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
+                    YouTube Videos
                   </label>
-                  <div className="flex gap-1.5">
-                    <Input
-                      value={dontIncludeInput}
-                      onChange={(e) => setDontIncludeInput(e.target.value)}
-                      onKeyDown={(e) => handleKeywordKeyDown(e, dontInclude, setDontInclude, dontIncludeInput, setDontIncludeInput)}
-                      placeholder="Type keyword and press Enter"
-                      disabled={isSubmitting}
-                      className="text-sm"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="shrink-0 h-9 w-9"
-                      onClick={() => addKeyword(dontInclude, setDontInclude, dontIncludeInput, setDontIncludeInput)}
-                      disabled={isSubmitting || !dontIncludeInput.trim()}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                  {dontInclude.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {dontInclude.map((kw) => (
-                        <Badge key={kw} variant="secondary" className="text-xs gap-1 bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300">
-                          {kw}
-                          <button onClick={() => removeKeyword(dontInclude, setDontInclude, kw)} disabled={isSubmitting}>
-                            <XCircle className="w-3 h-3" />
-                          </button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
+                </div>
+                <div className="pt-3">
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Audience</label>
+                  <Select value={stakeholderRole} onValueChange={setStakeholderRole} disabled={isSubmitting}>
+                    <SelectTrigger className="w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="general">General</SelectItem>
+                      <SelectItem value="cto">CTO / Strategy</SelectItem>
+                      <SelectItem value="engineering_lead">Engineering Lead</SelectItem>
+                      <SelectItem value="developer">Developer</SelectItem>
+                      <SelectItem value="product_manager">Product Manager</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </div>
 
-            {/* Full-width: Advanced Sources + Document Upload side by side */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
-              {/* Advanced: Custom Sources */}
-              <div>
+            {/* Advanced Options toggle */}
+            <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
+              <CollapsibleTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mt-1"
                 >
-                  {showAdvanced ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                  Advanced: Custom Sources
+                  {showAdvanced ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                  Advanced Options
+                  {(mustInclude.length > 0 || dontInclude.length > 0 || feedUrls.length > 0 || searchQueries.length > 0 || uploadFile) && (
+                    <Badge variant="secondary" className="text-[10px] ml-1 px-1.5 py-0">
+                      {mustInclude.length + dontInclude.length + feedUrls.length + searchQueries.length + (uploadFile ? 1 : 0)}
+                    </Badge>
+                  )}
                 </button>
-                {showAdvanced && (
-                  <div className="mt-2 space-y-3 p-3 border rounded-md">
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-3 space-y-3">
+                {/* Keywords row */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      Must Include Keywords
+                    </label>
+                    <div className="flex gap-1.5">
+                      <Input
+                        value={mustIncludeInput}
+                        onChange={(e) => setMustIncludeInput(e.target.value)}
+                        onKeyDown={(e) => handleKeywordKeyDown(e, mustInclude, setMustInclude, mustIncludeInput, setMustIncludeInput)}
+                        placeholder="Type keyword and press Enter"
+                        disabled={isSubmitting}
+                        className="text-sm"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="shrink-0 h-9 w-9"
+                        onClick={() => addKeyword(mustInclude, setMustInclude, mustIncludeInput, setMustIncludeInput)}
+                        disabled={isSubmitting || !mustIncludeInput.trim()}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                    {mustInclude.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {mustInclude.map((kw) => (
+                          <Badge key={kw} variant="secondary" className="text-xs gap-1 bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+                            {kw}
+                            <button onClick={() => removeKeyword(mustInclude, setMustInclude, kw)} disabled={isSubmitting}>
+                              <XCircle className="w-3 h-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      Don't Include Keywords
+                    </label>
+                    <div className="flex gap-1.5">
+                      <Input
+                        value={dontIncludeInput}
+                        onChange={(e) => setDontIncludeInput(e.target.value)}
+                        onKeyDown={(e) => handleKeywordKeyDown(e, dontInclude, setDontInclude, dontIncludeInput, setDontIncludeInput)}
+                        placeholder="Type keyword and press Enter"
+                        disabled={isSubmitting}
+                        className="text-sm"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="shrink-0 h-9 w-9"
+                        onClick={() => addKeyword(dontInclude, setDontInclude, dontIncludeInput, setDontIncludeInput)}
+                        disabled={isSubmitting || !dontIncludeInput.trim()}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                    {dontInclude.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {dontInclude.map((kw) => (
+                          <Badge key={kw} variant="secondary" className="text-xs gap-1 bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300">
+                            {kw}
+                            <button onClick={() => removeKeyword(dontInclude, setDontInclude, kw)} disabled={isSubmitting}>
+                              <XCircle className="w-3 h-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Custom Sources + Document Upload row */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
+                  {/* Custom Sources */}
+                  <div className="space-y-3 p-3 border rounded-md">
                     <div>
                       <label className="text-xs font-medium">Custom RSS Feeds</label>
                       <div className="flex gap-2 mt-1">
@@ -1049,40 +1031,40 @@ const TechSensing: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
 
-              {/* Document Upload */}
-              <div className="border rounded-md p-3 bg-muted/20">
-                <div className="flex items-center gap-2 mb-1">
-                  <FileUp className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="text-xs font-medium text-muted-foreground">
-                    Source Document (optional)
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Upload a document — themes will be extracted and combined with web sources.
-                </p>
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.doc,.pptx,.xlsx,.csv,.md,.txt"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                  disabled={isSubmitting}
-                  className="text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 file:cursor-pointer"
-                />
-                {uploadFile && (
-                  <div className="flex items-center gap-2 mt-1.5">
-                    <Badge variant="secondary" className="text-xs gap-1">
-                      {uploadFile.name}
-                      <XCircle className="w-3 h-3 cursor-pointer" onClick={() => setUploadFile(null)} />
-                    </Badge>
-                    <span className="text-xs text-muted-foreground">
-                      Document + web sources
-                    </span>
+                  {/* Document Upload */}
+                  <div className="border rounded-md p-3 bg-muted/20">
+                    <div className="flex items-center gap-2 mb-1">
+                      <FileUp className="w-3.5 h-3.5 text-muted-foreground" />
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Source Document (optional)
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Upload a document — themes will be extracted and combined with web sources.
+                    </p>
+                    <input
+                      type="file"
+                      accept=".pdf,.docx,.doc,.pptx,.xlsx,.csv,.md,.txt"
+                      onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                      disabled={isSubmitting}
+                      className="text-sm file:mr-3 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 file:cursor-pointer"
+                    />
+                    {uploadFile && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <Badge variant="secondary" className="text-xs gap-1">
+                          {uploadFile.name}
+                          <XCircle className="w-3 h-3 cursor-pointer" onClick={() => setUploadFile(null)} />
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          Document + web sources
+                        </span>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             {/* Generate button */}
             <div className="flex items-center gap-3">
@@ -1115,8 +1097,51 @@ const TechSensing: React.FC = () => {
                 <RefreshCw className={`w-3 h-3 ${historyLoading ? 'animate-spin' : ''}`} />
               </Button>
             </div>
+            <div className="relative mb-2 shrink-0">
+              <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={historySearch}
+                onChange={(e) => handleHistorySearch(e.target.value)}
+                placeholder="Search reports..."
+                className="pl-7 h-7 text-xs"
+              />
+              {historySearch && (
+                <button
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2"
+                  onClick={() => handleHistorySearch('')}
+                >
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                </button>
+              )}
+            </div>
             <ScrollArea className="flex-1 min-h-0">
-              {history.length === 0 ? (
+              {historySearch.length >= 2 ? (
+                /* Search results mode */
+                searchLoading ? (
+                  <div className="flex justify-center py-4"><Loader2 className="w-4 h-4 animate-spin" /></div>
+                ) : searchResults.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">No matching reports</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {searchResults.map((sr) => (
+                      <div
+                        key={sr.tracking_id}
+                        className="p-1.5 rounded text-xs hover:bg-muted/50 cursor-pointer"
+                        onClick={() => handleLoadReport(sr.tracking_id)}
+                      >
+                        <span className="font-medium block truncate">{sr.report_title}</span>
+                        <span className="text-muted-foreground block truncate">
+                          {sr.domain} · {sr.generated_at ? new Date(sr.generated_at).toLocaleDateString() : ''}
+                          {sr.match_count > 1 && ` · ${sr.match_count} matches`}
+                        </span>
+                        {sr.bottom_line_snippet && (
+                          <span className="text-muted-foreground/70 block truncate text-[10px]">{sr.bottom_line_snippet}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )
+              ) : history.length === 0 ? (
                 <p className="text-xs text-muted-foreground text-center py-4">No reports yet</p>
               ) : (
                 <div className="space-y-1.5">
@@ -1192,21 +1217,12 @@ const TechSensing: React.FC = () => {
       {/* Report display — tabs always visible; report-dependent tabs disabled when no report */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
         <TabsList className="shrink-0">
-          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-          <TabsTrigger value="report" disabled={!reportData}>Report</TabsTrigger>
-          <TabsTrigger value="radar" disabled={!reportData}>Technology Radar</TabsTrigger>
-          <TabsTrigger value="relationships" disabled={!reportData?.report?.relationships}>Relationships</TabsTrigger>
-          <TabsTrigger value="compare" disabled={!reportData || history.length < 2}>Compare</TabsTrigger>
-          <TabsTrigger value="timeline" disabled={!reportData} onClick={() => { if (!timelineData) loadTimeline(); }}>Timeline</TabsTrigger>
-          <TabsTrigger value="company-analysis" disabled={!reportData}>Company Analysis</TabsTrigger>
-          <TabsTrigger value="leading-indicators">Leading Indicators</TabsTrigger>
+          <TabsTrigger value="report">Report</TabsTrigger>
+          <TabsTrigger value="companies" disabled={!reportData}>Companies</TabsTrigger>
         </TabsList>
-        <TabsContent value="dashboard" className="flex-1 min-h-0 mt-2 overflow-auto">
-          <SensingDashboard onSelectDomain={(d) => { setDomain(d); setActiveTab('report'); }} />
-        </TabsContent>
         <TabsContent value="report" className="flex-1 min-h-0 mt-2">
           {reportData ? (
-            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} />
+            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} annotations={annotations} onAnnotate={handleAnnotate} />
           ) : !isSubmitting ? (
             <div className="flex-1 flex items-center justify-center text-muted-foreground py-12">
               <div className="text-center space-y-2">
@@ -1216,81 +1232,40 @@ const TechSensing: React.FC = () => {
             </div>
           ) : null}
         </TabsContent>
-        <TabsContent value="radar" className="flex-1 min-h-0 mt-2 overflow-auto">
-          {reportData && (
-            <TechRadar items={reportData.report.radar_items || []} onBlipClick={(name) => { setHighlightTech(name); setActiveTab('report'); }} customQuadrants={orgContext.radar_customization?.quadrants} />
-          )}
-        </TabsContent>
-        <TabsContent value="relationships" className="flex-1 min-h-0 mt-2">
-          {reportData?.report?.relationships && (
-            <SensingRelationshipGraph
-              relationships={reportData.report.relationships}
-              radarItems={reportData.report.radar_items || []}
-              onTechClick={(name) => { setHighlightTech(name); setActiveTab('report'); }}
-            />
-          )}
-        </TabsContent>
-        <TabsContent value="compare" className="flex-1 min-h-0 mt-2 overflow-auto">
-          <div className="space-y-4">
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Older Report</label>
-                <Select value={compareA} onValueChange={setCompareA}>
-                  <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
-                  <SelectContent>
-                    {history.map(h => (
-                      <SelectItem key={h.tracking_id} value={h.tracking_id}>
-                        {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex-1">
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Newer Report</label>
-                <Select value={compareB} onValueChange={setCompareB}>
-                  <SelectTrigger><SelectValue placeholder="Select report..." /></SelectTrigger>
-                  <SelectContent>
-                    {history.map(h => (
-                      <SelectItem key={h.tracking_id} value={h.tracking_id}>
-                        {h.report_title} ({new Date(h.generated_at).toLocaleDateString()})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={handleCompare} disabled={!compareA || !compareB || compareA === compareB || compareLoading}>
-                {compareLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Compare'}
-              </Button>
-            </div>
-            {comparison && <SensingComparisonView comparison={comparison} />}
-          </div>
-        </TabsContent>
-        <TabsContent value="timeline" className="flex-1 min-h-0 mt-2 overflow-auto">
-          {timelineLoading ? (
-            <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>
-          ) : timelineData ? (
-            <SensingTimeline data={timelineData} />
-          ) : (
-            <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">Loading timeline...</div>
-          )}
-        </TabsContent>
-        <TabsContent value="company-analysis" className="flex-1 min-h-0 mt-2 overflow-auto">
-          {reportData && (
-            <CompanyAnalysisView
-              reportTrackingId={reportData?.meta?.tracking_id}
-              domain={reportData?.report?.domain}
-              radarItems={reportData?.report?.radar_items || []}
-            />
-          )}
-        </TabsContent>
-        <TabsContent value="model-releases" className="flex-1 min-h-0 mt-2 overflow-auto">
-          <ModelReleasesView initialReleases={reportData?.report?.model_releases} trackingId={reportData?.meta?.tracking_id} />
-        </TabsContent>
-        <TabsContent value="leading-indicators" className="flex-1 min-h-0 mt-2 overflow-auto">
-          <LIRCandidateFeed />
-          <div className="mt-6 border-t border-border pt-4">
-            <LIRBacktestViewer />
+        <TabsContent value="companies" className="flex-1 min-h-0 mt-2 overflow-auto">
+          <div className="space-y-6">
+            {reportData && (
+              <CompanyAnalysisView
+                reportTrackingId={reportData?.meta?.tracking_id}
+                domain={reportData?.report?.domain}
+                radarItems={reportData?.report?.radar_items || []}
+              />
+            )}
+            <Card>
+              <CardContent className="p-4">
+                <h4 className="text-sm font-medium mb-2">Generate Company Report</h4>
+                <div className="flex gap-2">
+                  <Input
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                    placeholder="Company name..."
+                    className="flex-1"
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleGenerateCompanyReport(); }}
+                  />
+                  <Button
+                    onClick={handleGenerateCompanyReport}
+                    disabled={companyGenerating || !companyName.trim()}
+                    size="sm"
+                  >
+                    {companyGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Generate'}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Creates a focused report on this company using current domain and date range.
+                </p>
+              </CardContent>
+            </Card>
+            <CompanyWatchlistManager compact />
           </div>
         </TabsContent>
       </Tabs>
@@ -1542,23 +1517,6 @@ const TechSensing: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Collaboration dialog */}
-      <Dialog open={showCollabDialog} onOpenChange={setShowCollabDialog}>
-        <DialogContent className="max-w-3xl max-h-[85vh]">
-          <DialogHeader>
-            <DialogTitle>Collaborate on Report</DialogTitle>
-            <DialogDescription>Share, vote on ring placements, and discuss technologies.</DialogDescription>
-          </DialogHeader>
-          {shareId && reportData ? (
-            <SensingCollaboration
-              shareId={shareId}
-              radarItems={reportData.report.radar_items || []}
-            />
-          ) : (
-            <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin" /></div>
-          )}
-        </DialogContent>
-      </Dialog>
       </div>
     </div>
   );

@@ -206,6 +206,150 @@ async def generate_sensing_report(
     )
 
 
+# --- Generate Company-Scoped Report ---
+
+
+class CompanyGenerateRequest(BaseModel):
+    company_name: str = Field(description="Company name to focus on")
+    domain: str = Field(default="", description="Optional domain / topic")
+    lookback_days: int = Field(default=7, description="Lookback period in days")
+    custom_requirements: str = Field(default="", description="Additional guidance")
+
+
+@router.post("/generate-company")
+async def generate_company_report(
+    request: Request,
+    body: CompanyGenerateRequest = Body(...),
+):
+    """Generate a company-focused sensing report using existing pipeline."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    tracking_id = str(uuid.uuid4())
+    sensing_dir = _get_sensing_dir(user_id)
+    os.makedirs(sensing_dir, exist_ok=True)
+    status_path = os.path.join(sensing_dir, f"status_{tracking_id}.json")
+
+    # Resolve company aliases
+    from core.sensing.aliases import load_aliases
+
+    aliases_map = await load_aliases(user_id)
+    company_terms = [body.company_name]
+    for canonical, alias_list in aliases_map.items():
+        if canonical.lower() == body.company_name.lower():
+            company_terms.extend(alias_list)
+            break
+
+    # Domain defaults to company name if not specified
+    domain = body.domain or body.company_name
+
+    # Prepend company-focused instructions
+    company_reqs = (
+        f"This report should focus specifically on {body.company_name}. "
+        f"Analyze their technology strategy, product launches, partnerships, "
+        f"competitive positioning, and market moves. "
+    )
+    if body.custom_requirements:
+        company_reqs += body.custom_requirements
+
+    pending_data = {
+        "_status": "pending",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "tracking_id": tracking_id,
+    }
+    async with aiofiles.open(status_path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(pending_data, ensure_ascii=False))
+
+    async def _run():
+        tracking_id_var.set(tracking_id)
+        try:
+            from core.sensing.pipeline import run_sensing_pipeline
+
+            async def _progress_cb(stage, pct, msg):
+                logger.info(f"[{tracking_id[:8]}] [{stage}] {pct}% — {msg}")
+                await sio.emit(
+                    f"{user_id}/sensing_progress",
+                    {
+                        "tracking_id": tracking_id,
+                        "stage": stage,
+                        "progress": pct,
+                        "message": msg,
+                    },
+                )
+
+            result = await run_sensing_pipeline(
+                domain=domain,
+                custom_requirements=company_reqs,
+                must_include=company_terms,
+                lookback_days=body.lookback_days,
+                progress_callback=_progress_cb,
+                user_id=user_id,
+            )
+
+            report_data = {
+                "report": result.report.model_dump(),
+                "meta": {
+                    "tracking_id": tracking_id,
+                    "domain": domain,
+                    "company_focus": body.company_name,
+                    "raw_article_count": result.raw_article_count,
+                    "deduped_article_count": result.deduped_article_count,
+                    "classified_article_count": result.classified_article_count,
+                    "execution_time_seconds": result.execution_time_seconds,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "custom_requirements": company_reqs,
+                    "must_include": company_terms,
+                    "lookback_days": body.lookback_days,
+                },
+            }
+
+            await write_result(status_path, report_data)
+
+            report_path = os.path.join(
+                sensing_dir, f"report_{tracking_id}.json"
+            )
+            async with aiofiles.open(report_path, "w", encoding="utf-8") as f:
+                await f.write(
+                    json.dumps(report_data, ensure_ascii=False, indent=2)
+                )
+
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "stage": "complete",
+                    "progress": 100,
+                    "message": "Company report ready",
+                },
+            )
+
+        except Exception:
+            error_details = traceback.format_exc()
+            await write_failed_status(status_path, error_details)
+            await sio.emit(
+                f"{user_id}/sensing_progress",
+                {
+                    "tracking_id": tracking_id,
+                    "stage": "error",
+                    "progress": 0,
+                    "message": "Company report generation failed",
+                },
+            )
+
+    asyncio.create_task(_run())
+
+    return JSONResponse(
+        content={
+            "status": "pending",
+            "tracking_id": tracking_id,
+            "message": f"Generating company report for '{body.company_name}'",
+        }
+    )
+
+
 # --- Generate from Document ---
 
 
@@ -451,6 +595,95 @@ async def _read_sensing_status(file_path: str) -> dict | None:
 
     # Completed (no _status key)
     return {"state": "completed", "data": data}
+
+
+# --- Annotations ---
+
+
+class AnnotationBody(BaseModel):
+    key: str = Field(description="Annotation key: {tracking_id}:{item_type}:{item_key}")
+    note: str = Field(description="The annotation text")
+    item_type: str = Field(default="radar", description="Type of item being annotated")
+
+
+@router.get("/annotations/{tracking_id}")
+async def get_annotations(tracking_id: str, request: Request):
+    """Get all annotations for a specific report."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    from core.sensing.annotations import load_annotations
+
+    annotations = await load_annotations(payload.userId, tracking_id=tracking_id)
+    return JSONResponse(content={"annotations": annotations})
+
+
+@router.put("/annotations")
+async def upsert_annotation(body: AnnotationBody, request: Request):
+    """Create or update an annotation."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    from core.sensing.annotations import save_annotation
+
+    annotations = await save_annotation(
+        user_id=payload.userId,
+        key=body.key,
+        note=body.note,
+        item_type=body.item_type,
+    )
+    return JSONResponse(content={"annotations": annotations})
+
+
+@router.delete("/annotations")
+async def remove_annotation(request: Request, key: str = ""):
+    """Delete an annotation."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    if not key:
+        raise HTTPException(status_code=400, detail="key parameter required")
+
+    from core.sensing.annotations import delete_annotation
+
+    annotations = await delete_annotation(user_id=payload.userId, key=key)
+    return JSONResponse(content={"annotations": annotations})
+
+
+# --- Search ---
+
+
+@router.get("/search")
+async def sensing_search(
+    request: Request,
+    q: str = "",
+    domain: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 20,
+):
+    """Full-text search across stored sensing reports."""
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    if not q or len(q) < 2:
+        return JSONResponse(content={"results": []})
+
+    from core.sensing.report_search import search_reports
+
+    results = await search_reports(
+        user_id=payload.userId,
+        query=q,
+        domain=domain,
+        date_from=date_from,
+        date_to=date_to,
+        max_results=min(limit, 50),
+    )
+    return JSONResponse(content={"results": results})
 
 
 # --- History ---

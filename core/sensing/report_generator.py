@@ -262,6 +262,7 @@ async def generate_report(
             classified_articles_json=articles_json,
             domain=domain,
             custom_requirements=custom_requirements,
+            org_context=org_context,
         )
 
         logger.info(

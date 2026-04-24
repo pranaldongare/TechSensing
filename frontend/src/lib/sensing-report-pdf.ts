@@ -822,6 +822,111 @@ export async function downloadSensingReportPdf(data: SensingReportData, filename
 }
 
 
+// ── Board-Ready One-Pager PDF ─────────────────────────────────────────────
+
+function buildBoardPdf(data: SensingReportData): TDocumentDefinitions {
+    const { report, meta } = data;
+    const content: Content[] = [];
+
+    // Compact title banner
+    content.push(banner(
+        report.report_title || 'Tech Sensing Report',
+        `${report.domain} | ${report.date_range} | Board Summary`,
+    ));
+
+    // Bottom Line
+    if (report.bottom_line) {
+        content.push(card([
+            { text: 'BOTTOM LINE', fontSize: 9, bold: true, color: colors.bottomLine.text, margin: [0, 0, 0, 3] },
+            { text: sanitize(report.bottom_line), fontSize: 10, color: colors.slate800, lineHeight: 1.4 },
+        ], '#FDA4AF'));
+    }
+
+    // Executive Summary (truncated)
+    if (report.executive_summary) {
+        const summary = report.executive_summary.length > 800
+            ? report.executive_summary.slice(0, 800) + '...'
+            : report.executive_summary;
+        content.push(sectionHeader('Executive Summary', colors.executive));
+        content.push(card(
+            markdownToContent(summary, 9, colors.slate800),
+            '#BFDBFE',
+        ));
+    }
+
+    // Top 5 Events (headline + actor only)
+    if (report.top_events && report.top_events.length > 0) {
+        const events = report.top_events.slice(0, 5);
+        content.push(sectionHeader(`Top Events (${events.length})`, colors.topEvents));
+        for (const event of events) {
+            content.push(card([
+                { text: sanitize((event as SensingTopEvent).headline), fontSize: 9, color: colors.slate800 },
+                pill((event as SensingTopEvent).actor, { bg: '#DBEAFE', text: '#1E40AF' }),
+            ]));
+        }
+    }
+
+    // Key Trends (name + impact badge only)
+    if (report.key_trends && report.key_trends.length > 0) {
+        content.push(sectionHeader(`Key Trends (${report.key_trends.length})`, colors.trends));
+        const trendRows: Content[][] = report.key_trends.map((t: any) => [
+            { text: sanitize(t.trend_name || t.name), fontSize: 9, color: colors.slate800 },
+            pill(t.impact_level || 'Medium', impactTone(t.impact_level || 'Medium')),
+        ]);
+        content.push({
+            table: { widths: ['*', 'auto'], body: trendRows },
+            layout: {
+                hLineWidth: (_i: number, _node: any) => 0.5,
+                vLineWidth: () => 0,
+                hLineColor: () => colors.border,
+                paddingLeft: () => 6, paddingRight: () => 6,
+                paddingTop: () => 4, paddingBottom: () => 4,
+            },
+            margin: [0, 0, 0, 6],
+        });
+    }
+
+    // Top 5 Recommendations (title + priority only)
+    if (report.recommendations && report.recommendations.length > 0) {
+        const recs = report.recommendations.slice(0, 5);
+        content.push(sectionHeader(`Top Recommendations (${recs.length})`, colors.recommendations));
+        for (const rec of recs) {
+            const r = rec as any;
+            content.push(card([
+                {
+                    columns: [
+                        { text: sanitize(r.title || r.recommendation), fontSize: 9, color: colors.slate800, width: '*' },
+                        ...(r.priority ? [pill(r.priority, impactTone(r.priority === 'High' ? 'High' : r.priority === 'Medium' ? 'Medium' : 'Low'))] : []),
+                    ],
+                    columnGap: 6,
+                },
+            ]));
+        }
+    }
+
+    // Footer
+    content.push({
+        text: `Generated ${meta.generated_at ? new Date(meta.generated_at).toLocaleDateString() : 'N/A'} | ${report.total_articles_analyzed || 0} articles analyzed`,
+        fontSize: 7, color: colors.slate500, alignment: 'right', margin: [0, 12, 0, 0],
+    });
+
+    return {
+        pageSize: 'A4',
+        pageMargins: [36, 36, 36, 36],
+        content,
+        defaultStyle: { font: 'Roboto' },
+    };
+}
+
+export async function downloadSensingBoardPdf(data: SensingReportData, filename?: string) {
+    const doc = buildBoardPdf(data);
+    const safe = (data.report.report_title || 'Board Summary')
+        .replace(/[^a-z0-9\-\s]/gi, '').trim() || 'Board Summary';
+    const name = filename || `${safe} - Board.pdf`;
+    pdfMake.createPdf(doc).download(name);
+}
+
+
 // ── Company Analysis PDF ──────────────────────────────────────────────────
 
 const companyColors = {

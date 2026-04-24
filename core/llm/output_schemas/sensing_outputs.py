@@ -274,6 +274,14 @@ class RadarItemDetail(BaseModel):
         default_factory=list,
         description="URLs of articles informing this technology write-up.",
     )
+    hiring_indicators: str = Field(
+        default="",
+        description=(
+            "Brief summary of hiring trends related to this technology "
+            "(e.g. growing demand, notable job postings, skill requirements). "
+            "Leave empty if no hiring signals found in articles."
+        ),
+    )
 
 
 class TrendingVideoItem(BaseModel):

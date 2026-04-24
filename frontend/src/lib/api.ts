@@ -81,6 +81,7 @@ export interface SensingRadarItemDetail {
   key_players: string[];
   practical_applications: string[];
   source_urls?: string[];
+  hiring_indicators?: string;
 }
 
 export interface SensingHeadlineMove {
@@ -312,6 +313,20 @@ export interface SensingHistoryItem {
   status?: string; // "generating" for in-progress reports
   progress_message?: string; // live stage message from WebSocket
   progress_pct?: number; // live progress percentage from WebSocket
+}
+
+export interface ReportSearchResult {
+  tracking_id: string;
+  report_title: string;
+  domain: string;
+  generated_at: string;
+  bottom_line_snippet: string;
+  match_count: number;
+}
+
+export interface Annotation {
+  note: string;
+  item_type: string;
 }
 
 export interface SensingSchedule {
@@ -1071,6 +1086,79 @@ export const api = {
       const data = await response.json();
       throw new Error(data.detail || 'Failed to delete sensing report');
     }
+  },
+
+  async sensingSearch(params: { q: string; domain?: string; date_from?: string; date_to?: string; limit?: number }): Promise<{ results: ReportSearchResult[] }> {
+    const token = getAuthToken();
+    const qs = new URLSearchParams();
+    qs.set('q', params.q);
+    if (params.domain) qs.set('domain', params.domain);
+    if (params.date_from) qs.set('date_from', params.date_from);
+    if (params.date_to) qs.set('date_to', params.date_to);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const response = await fetch(`${API_URL}/sensing/search?${qs}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Search failed');
+    }
+    return data;
+  },
+
+  async sensingGenerateCompany(body: {
+    company_name: string;
+    domain?: string;
+    lookback_days?: number;
+    custom_requirements?: string;
+  }): Promise<{ status: string; tracking_id: string; message: string }> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/generate-company`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to start company report');
+    }
+    return data;
+  },
+
+  async sensingGetAnnotations(trackingId: string): Promise<{ annotations: Record<string, Annotation> }> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/annotations/${trackingId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load annotations');
+    return data;
+  },
+
+  async sensingUpsertAnnotation(key: string, note: string, itemType = 'radar'): Promise<{ annotations: Record<string, Annotation> }> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/annotations`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ key, note, item_type: itemType }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to save annotation');
+    return data;
+  },
+
+  async sensingDeleteAnnotation(key: string): Promise<{ annotations: Record<string, Annotation> }> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/annotations?key=${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to delete annotation');
+    return data;
   },
 
   async sensingCompare(tidA: string, tidB: string): Promise<ReportComparison> {

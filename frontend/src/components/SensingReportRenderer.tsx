@@ -7,14 +7,15 @@ import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
-  ArrowDown, Minus, Info, Zap,
+  ArrowDown, Minus, Info, Zap, Network, Database, Edit3,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
-  TopicPreferences, ModelRelease,
+  TopicPreferences, ModelRelease, WeakSignal, Annotation,
 } from '@/lib/api';
+import SensingRelationshipGraph from '@/components/SensingRelationshipGraph';
 
 interface Meta {
   tracking_id: string;
@@ -34,6 +35,8 @@ interface SensingReportRendererProps {
   topicPreferences?: TopicPreferences | null;
   onTopicInterest?: (techName: string, interest: 'interested' | 'not_interested' | 'neutral') => void;
   onSourceFeedback?: (sourceName: string, vote: 'up' | 'down') => void;
+  annotations?: Record<string, Annotation>;
+  onAnnotate?: (key: string, note: string) => void;
 }
 
 const impactColors: Record<string, string> = {
@@ -115,11 +118,16 @@ const SourceLinks: React.FC<{ urls?: string[] }> = ({ urls }) => {
   );
 };
 
-const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, meta, highlightTechnology, onDeepDive, topicPreferences, onTopicInterest, onSourceFeedback }) => {
+const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, meta, highlightTechnology, onDeepDive, topicPreferences, onTopicInterest, onSourceFeedback, annotations, onAnnotate }) => {
   const [expandedTrends, setExpandedTrends] = useState<Set<number>>(new Set());
   const [expandedRadarDetails, setExpandedRadarDetails] = useState<Set<number>>(new Set());
   const [expandedSignals, setExpandedSignals] = useState<Set<number>>(new Set());
   const [expandedEvents, setExpandedEvents] = useState<Set<number>>(new Set());
+  const [editingAnnotation, setEditingAnnotation] = useState<string | null>(null);
+  const [annotationDraft, setAnnotationDraft] = useState('');
+  const [showEarlySignals, setShowEarlySignals] = useState(false);
+  const [showRelationships, setShowRelationships] = useState(false);
+  const [showProvenance, setShowProvenance] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-expand and scroll to highlighted technology
@@ -662,6 +670,67 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                           </ul>
                         </div>
                       )}
+                      {item.hiring_indicators && (
+                        <div className="flex items-start gap-2 p-2 rounded bg-blue-50/50 dark:bg-blue-950/20">
+                          <Building2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                          <div>
+                            <h5 className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-0.5">
+                              Hiring Indicators
+                            </h5>
+                            <p className="text-xs text-muted-foreground">{item.hiring_indicators}</p>
+                          </div>
+                        </div>
+                      )}
+                      {/* Annotation */}
+                      {(() => {
+                        const aKey = `${meta.tracking_id}:radar:${item.technology_name}`;
+                        const existing = annotations?.[aKey];
+                        const isEditing = editingAnnotation === aKey;
+                        return (
+                          <div className="mt-1">
+                            {existing && !isEditing && (
+                              <div className="flex items-start gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800">
+                                <Edit3 className="w-3.5 h-3.5 text-yellow-600 shrink-0 mt-0.5" />
+                                <p className="text-xs text-yellow-800 dark:text-yellow-200 flex-1">{existing.note}</p>
+                                {onAnnotate && (
+                                  <button
+                                    className="text-xs text-yellow-600 hover:underline shrink-0"
+                                    onClick={(e) => { e.stopPropagation(); setEditingAnnotation(aKey); setAnnotationDraft(existing.note); }}
+                                  >Edit</button>
+                                )}
+                              </div>
+                            )}
+                            {isEditing && onAnnotate && (
+                              <div className="flex gap-2 mt-1" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  className="flex-1 text-xs border rounded px-2 py-1"
+                                  value={annotationDraft}
+                                  onChange={(e) => setAnnotationDraft(e.target.value)}
+                                  placeholder="Add a note..."
+                                  autoFocus
+                                  onKeyDown={(e) => { if (e.key === 'Enter') { onAnnotate(aKey, annotationDraft); setEditingAnnotation(null); } if (e.key === 'Escape') setEditingAnnotation(null); }}
+                                />
+                                <button
+                                  className="text-xs text-primary hover:underline"
+                                  onClick={() => { onAnnotate(aKey, annotationDraft); setEditingAnnotation(null); }}
+                                >Save</button>
+                                <button
+                                  className="text-xs text-muted-foreground hover:underline"
+                                  onClick={() => setEditingAnnotation(null)}
+                                >Cancel</button>
+                              </div>
+                            )}
+                            {!existing && !isEditing && onAnnotate && (
+                              <button
+                                className="text-xs text-muted-foreground/60 hover:text-muted-foreground flex items-center gap-1 mt-1"
+                                onClick={(e) => { e.stopPropagation(); setEditingAnnotation(aKey); setAnnotationDraft(''); }}
+                              >
+                                <Edit3 className="w-3 h-3" /> Add note
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <SourceLinks urls={item.source_urls} />
                       {(() => {
                         const videos = report.trending_videos?.filter(
@@ -874,6 +943,82 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </Card>
         )}
 
+        {/* Early Signals (Weak Signals) */}
+        {report.weak_signals && report.weak_signals.length > 0 && (
+          <Card className="border-l-4 border-l-violet-500 bg-violet-50/50 dark:bg-violet-950/20">
+            <CardHeader className="pb-2">
+              <button
+                onClick={() => setShowEarlySignals(!showEarlySignals)}
+                className="flex items-center gap-2 w-full text-left"
+              >
+                {showEarlySignals ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-violet-600" />
+                  Early Signals ({report.weak_signals.length})
+                </CardTitle>
+              </button>
+              <p className="text-xs text-muted-foreground ml-6">
+                Technologies showing emerging momentum but not yet on the radar.
+              </p>
+            </CardHeader>
+            {showEarlySignals && (
+              <CardContent className="space-y-2">
+                {report.weak_signals.map((ws: WeakSignal, idx: number) => (
+                  <div key={idx} className="flex items-center gap-3 p-3 rounded-lg bg-violet-100/50 dark:bg-violet-900/20">
+                    <div className="flex-1 min-w-0">
+                      <h5 className="text-sm font-medium">{ws.technology_name}</h5>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        <Badge variant="secondary" className="text-[10px]">
+                          DVI: {ws.dvi_score.toFixed(1)}
+                        </Badge>
+                        <Badge variant="secondary" className="text-[10px]">
+                          Strength: {ws.current_strength.toFixed(2)}
+                        </Badge>
+                        {ws.acceleration_rate > 2 && (
+                          <Badge className="text-[10px] bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">
+                            {ws.acceleration_rate.toFixed(1)}x accelerating
+                          </Badge>
+                        )}
+                        <span className="text-[10px] text-muted-foreground">
+                          First seen: {new Date(ws.first_seen).toLocaleDateString()} · {ws.run_count} runs
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            )}
+          </Card>
+        )}
+
+        {/* Technology Relationships */}
+        {report.relationships && report.relationships.relationships?.length > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <button
+                onClick={() => setShowRelationships(!showRelationships)}
+                className="flex items-center gap-2 w-full text-left"
+              >
+                {showRelationships ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Network className="w-5 h-5 text-indigo-600" />
+                  Technology Relationships
+                </CardTitle>
+              </button>
+            </CardHeader>
+            {showRelationships && (
+              <CardContent>
+                <div className="h-[500px]">
+                  <SensingRelationshipGraph
+                    relationships={report.relationships}
+                    radarItems={report.radar_items || []}
+                  />
+                </div>
+              </CardContent>
+            )}
+          </Card>
+        )}
+
         {/* Notable Articles */}
         {report.notable_articles?.length > 0 && (
           <div className="space-y-3">
@@ -929,6 +1074,57 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
             </div>
           </div>
         )}
+
+        {/* Data Provenance */}
+        <Card className="bg-muted/30">
+          <CardHeader className="pb-2">
+            <button
+              onClick={() => setShowProvenance(!showProvenance)}
+              className="flex items-center gap-2 w-full text-left"
+            >
+              {showProvenance ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              <CardTitle className="text-sm flex items-center gap-2 text-muted-foreground">
+                <Database className="w-4 h-4" />
+                Data Provenance
+              </CardTitle>
+            </button>
+          </CardHeader>
+          {showProvenance && (
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                <div>
+                  <span className="text-muted-foreground block">Raw Articles</span>
+                  <span className="font-medium">{meta.raw_article_count}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block">After Dedup</span>
+                  <span className="font-medium">{meta.deduped_article_count}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block">Classified</span>
+                  <span className="font-medium">{meta.classified_article_count}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block">Generation Time</span>
+                  <span className="font-medium">{meta.execution_time_seconds}s</span>
+                </div>
+              </div>
+              {report.confidence_factors && (
+                <div className="mt-3 pt-3 border-t">
+                  <span className="text-xs text-muted-foreground block mb-2">Confidence Factors</span>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                    {Object.entries(report.confidence_factors).map(([key, val]) => (
+                      <div key={key}>
+                        <span className="text-muted-foreground block capitalize">{key.replace(/_/g, ' ')}</span>
+                        <span className="font-medium">{typeof val === 'number' ? val.toFixed(2) : String(val)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          )}
+        </Card>
       </div>
     </ScrollArea>
   );
