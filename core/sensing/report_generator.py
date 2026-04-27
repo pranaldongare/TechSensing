@@ -462,6 +462,16 @@ _DOMAIN_GENERIC: dict[str, set[str]] = {
         "neural network", "neural networks", "large language model",
         "large language models", "llm", "llms", "generative ai", "gen ai",
         "ai", "ml",
+        # Established patterns/techniques — too broad for a radar item
+        "rag", "retrieval-augmented generation", "retrieval augmented generation",
+        "agentic rag", "self-rag", "advanced rag", "graph rag",
+        "prompt engineering", "chain of thought", "few-shot learning",
+        "fine-tuning", "fine tuning", "rlhf",
+        "ai agents", "ai agent", "llm agents", "llm agent",
+        "ai agent frameworks", "agent frameworks",
+        "vibe coding", "vibe-coding",
+        # Hardware platforms — not AI technologies
+        "mac mini", "mac studio", "mac pro",
     },
     "cloud": {
         "aws", "azure", "gcp", "google cloud", "cloud computing", "cloud",
@@ -504,8 +514,16 @@ _DOMAIN_LEGACY: dict[str, set[str]] = {
         "claude 2", "claude 2.1", "claude instant",
         "claude sonnet 3.5", "claude sonnet 4", "claude sonnet 4.5",
         "gemini 1.0", "gemini 1.5",
-        "gpt-4", "gpt4",
+        "gpt-4", "gpt4", "gpt-4o", "gpt4o",
+        "gpt-4o realtime audio api", "gpt-4o realtime api",
         "whisper",
+        # Superseded open-weight models
+        "qwen2", "qwen2.5", "qwen 2", "qwen 2.5",
+        "qwen3", "qwen 3", "qwen3.5", "qwen 3.5",
+        "llama 3", "llama3", "llama 3.1", "llama 3.2", "llama 3.3",
+        "mistral 7b", "mixtral", "mixtral 8x7b",
+        "deepseek v2", "deepseek v3", "deepseek-v2", "deepseek-v3",
+        "phi-3", "phi-3.5", "phi 3", "phi 3.5",
     },
     "cloud": {
         "mapreduce", "hadoop", "mesos",
