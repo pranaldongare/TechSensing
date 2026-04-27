@@ -205,7 +205,8 @@ class RadarItem(BaseModel):
     )
     description: str = Field(description="One-sentence description for tooltip.")
     is_new: bool = Field(
-        description="Whether this is a new entry (appeared this week)."
+        description="Whether this technology FIRST APPEARED or was FIRST RELEASED within the lookback window. "
+        "False for established technologies that are merely buzzing or trending."
     )
     moved_in: Optional[str] = Field(
         default=None,

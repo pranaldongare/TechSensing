@@ -231,8 +231,13 @@ async def generate_report(
     )
 
     # ── Phase 4: Radar item details (batched to avoid output truncation) ─
+    # Only deep-dive genuinely new technologies (is_new=True).
+    # Established-but-buzzing items remain on the radar but don't get deep dives.
     DETAILS_BATCH_SIZE = 5
-    all_radar_items = list(radar.radar_items)
+    all_radar_items = [item for item in radar.radar_items if item.is_new]
+    if not all_radar_items:
+        logger.info("[Phase 4/4] No is_new=True radar items — skipping deep dives")
+        all_radar_items = []
     batches = [
         all_radar_items[i : i + DETAILS_BATCH_SIZE]
         for i in range(0, len(all_radar_items), DETAILS_BATCH_SIZE)
