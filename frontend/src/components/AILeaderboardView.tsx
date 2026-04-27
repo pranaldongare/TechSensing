@@ -3,9 +3,30 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BarChart3, RefreshCw, ExternalLink, Loader2, ArrowUpDown } from 'lucide-react';
+import { BarChart3, RefreshCw, ExternalLink, Loader2, ArrowUpDown, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { AILeaderboardData, LeaderboardLLMEntry, LeaderboardMediaEntry } from '@/lib/api';
+
+function downloadCsv(filename: string, rows: Record<string, unknown>[], columns: string[]) {
+  const header = columns.join(',');
+  const lines = rows.map((r) =>
+    columns.map((c) => {
+      const v = String(r[c] ?? '').replace(/"/g, '""');
+      return `"${v}"`;
+    }).join(',')
+  );
+  const blob = new Blob([header + '\n' + lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const LLM_COLS = ['rank', 'model_name', 'organization', 'slug', 'intelligence_index', 'mmlu_pro', 'gpqa',
+  'speed', 'tokens_per_second', 'price'];
+const MEDIA_COLS = ['rank', 'model_name', 'organization', 'slug', 'elo', 'release_date'];
 
 const AILeaderboardView: React.FC = () => {
   const [data, setData] = useState<AILeaderboardData | null>(null);
@@ -32,6 +53,15 @@ const AILeaderboardView: React.FC = () => {
     fetchLeaderboard();
   }, [fetchLeaderboard]);
 
+  const handleExportCsv = useCallback(() => {
+    if (!data) return;
+    const isMedia = ['image_generation', 'video_generation', 'speech'].includes(activeCategory);
+    const cols = isMedia ? MEDIA_COLS : LLM_COLS;
+    const rows = data[activeCategory as keyof typeof data] as Record<string, unknown>[];
+    if (!rows?.length) return;
+    downloadCsv(`ai-leaderboard-${activeCategory}-${new Date().toISOString().slice(0, 10)}.csv`, rows, cols);
+  }, [data, activeCategory]);
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -48,6 +78,12 @@ const AILeaderboardView: React.FC = () => {
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             {loading ? 'Loading...' : 'Refresh'}
           </Button>
+          {data && (
+            <Button size="sm" variant="outline" onClick={handleExportCsv} className="gap-1.5">
+              <Download className="w-3.5 h-3.5" />
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 

@@ -1,11 +1,28 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Cpu, RefreshCw, ExternalLink, Loader2 } from 'lucide-react';
+import { Cpu, RefreshCw, ExternalLink, Loader2, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ModelRelease } from '@/lib/api';
+
+function downloadCsv(filename: string, rows: Record<string, unknown>[], columns: string[]) {
+  const header = columns.join(',');
+  const lines = rows.map((r) =>
+    columns.map((c) => {
+      const v = String(r[c] ?? '').replace(/"/g, '""');
+      return `"${v}"`;
+    }).join(',')
+  );
+  const blob = new Blob([header + '\n' + lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 interface ModelReleasesViewProps {
   /** If provided, show these releases initially (from report) */
@@ -37,12 +54,30 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
     }
   }, [lookbackDays, trackingId]);
 
+  const handleExportCsv = useCallback(() => {
+    if (!releases.length) return;
+    const cols = ['model_name', 'organization', 'release_date', 'data_source', 'release_status',
+      'modality', 'model_type', 'parameters', 'is_open_source', 'license', 'notable_features', 'source_url'];
+    downloadCsv(`model-releases-${new Date().toISOString().slice(0, 10)}.csv`, releases as Record<string, unknown>[], cols);
+  }, [releases]);
+
+  // Auto-fetch on mount when no initial data provided
+  useEffect(() => {
+    if (!initialReleases?.length) {
+      fetchReleases();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sortByDate = (a: ModelRelease, b: ModelRelease) =>
+    (b.release_date || '').localeCompare(a.release_date || '');
+
   const aaReleases = useMemo(
-    () => releases.filter((r) => r.data_source === 'Artificial Analysis'),
+    () => releases.filter((r) => r.data_source === 'Artificial Analysis').sort(sortByDate),
     [releases]
   );
   const hfReleases = useMemo(
-    () => releases.filter((r) => r.data_source !== 'Artificial Analysis'),
+    () => releases.filter((r) => r.data_source !== 'Artificial Analysis').sort(sortByDate),
     [releases]
   );
 
@@ -82,6 +117,12 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
             {loading ? 'Fetching...' : 'Fetch Releases'}
           </Button>
+          {releases.length > 0 && (
+            <Button size="sm" variant="outline" onClick={handleExportCsv} className="gap-1.5">
+              <Download className="w-3.5 h-3.5" />
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
