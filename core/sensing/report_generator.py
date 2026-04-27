@@ -38,6 +38,7 @@ from core.llm.prompts.sensing_prompts import (
     sensing_report_radar_prompt,
 )
 from core.sensing.config import get_preset_for_domain
+from core.sensing.novelty_validator import validate_novelty
 
 logger = logging.getLogger("sensing.report")
 
@@ -230,8 +231,22 @@ async def generate_report(
         f"blind_spots={len(insights.blind_spots)}"
     )
 
+    # ── Novelty validation: LLM-based check before deep dives ──────────
+    # Uses a lightweight classify LLM to determine which radar items are
+    # genuinely novel vs established/generic/superseded. This replaces
+    # brittle keyword blocklists with intelligent per-item assessment.
+    novel_items = await validate_novelty(
+        radar_items=radar.radar_items,
+        classified_articles=classified_articles,
+        domain=domain,
+    )
+    # Update is_new flags based on validator verdict
+    for item in radar.radar_items:
+        if item.name not in novel_items:
+            item.is_new = False
+
     # ── Phase 4: Radar item details (batched to avoid output truncation) ─
-    # Only deep-dive genuinely new technologies (is_new=True).
+    # Only deep-dive genuinely new technologies (validated above).
     # Established-but-buzzing items remain on the radar but don't get deep dives.
     DETAILS_BATCH_SIZE = 5
     all_radar_items = [item for item in radar.radar_items if item.is_new]
@@ -462,16 +477,6 @@ _DOMAIN_GENERIC: dict[str, set[str]] = {
         "neural network", "neural networks", "large language model",
         "large language models", "llm", "llms", "generative ai", "gen ai",
         "ai", "ml",
-        # Established patterns/techniques — too broad for a radar item
-        "rag", "retrieval-augmented generation", "retrieval augmented generation",
-        "agentic rag", "self-rag", "advanced rag", "graph rag",
-        "prompt engineering", "chain of thought", "few-shot learning",
-        "fine-tuning", "fine tuning", "rlhf",
-        "ai agents", "ai agent", "llm agents", "llm agent",
-        "ai agent frameworks", "agent frameworks",
-        "vibe coding", "vibe-coding",
-        # Hardware platforms — not AI technologies
-        "mac mini", "mac studio", "mac pro",
     },
     "cloud": {
         "aws", "azure", "gcp", "google cloud", "cloud computing", "cloud",
@@ -514,16 +519,8 @@ _DOMAIN_LEGACY: dict[str, set[str]] = {
         "claude 2", "claude 2.1", "claude instant",
         "claude sonnet 3.5", "claude sonnet 4", "claude sonnet 4.5",
         "gemini 1.0", "gemini 1.5",
-        "gpt-4", "gpt4", "gpt-4o", "gpt4o",
-        "gpt-4o realtime audio api", "gpt-4o realtime api",
+        "gpt-4", "gpt4",
         "whisper",
-        # Superseded open-weight models
-        "qwen2", "qwen2.5", "qwen 2", "qwen 2.5",
-        "qwen3", "qwen 3", "qwen3.5", "qwen 3.5",
-        "llama 3", "llama3", "llama 3.1", "llama 3.2", "llama 3.3",
-        "mistral 7b", "mixtral", "mixtral 8x7b",
-        "deepseek v2", "deepseek v3", "deepseek-v2", "deepseek-v3",
-        "phi-3", "phi-3.5", "phi 3", "phi 3.5",
     },
     "cloud": {
         "mapreduce", "hadoop", "mesos",
