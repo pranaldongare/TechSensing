@@ -1,6 +1,26 @@
 from datetime import datetime, timezone
+from typing import Optional
 
 from core.llm.prompts.shared import tense_rules_block
+
+
+def _experience_memory_block(
+    experience_block: str = "",
+    prompt_patch: str = "",
+    feedback_block: str = "",
+) -> str:
+    """Combine experience memory, prompt patches, and feedback into a prompt block.
+
+    Returns empty string if no learning data is available.
+    """
+    parts = []
+    if experience_block:
+        parts.append(experience_block)
+    if prompt_patch:
+        parts.append(f"LEARNED GUIDANCE (from past runs):\n{prompt_patch}")
+    if feedback_block:
+        parts.append(feedback_block)
+    return "\n\n".join(parts) + "\n\n" if parts else ""
 
 
 def _custom_requirements_block(custom_requirements: str) -> str:
@@ -232,6 +252,9 @@ def sensing_report_core_prompt(
     org_context: str = "",
     key_people: list[str] | None = None,
     industry_segments_text: str = "",
+    experience_block: str = "",
+    prompt_patch: str = "",
+    feedback_block: str = "",
 ) -> list[dict]:
     """
     Phase 1 prompt: executive summary, headline moves, and key trends.
@@ -262,6 +285,7 @@ def sensing_report_core_prompt(
                 f"'{domain}' technologies. When an article covers multiple domains, only "
                 f"discuss the aspects relevant to '{domain}'.\n\n"
                 + _custom_requirements_block(custom_requirements)
+                + _experience_memory_block(experience_block, prompt_patch, feedback_block)
                 + industry_segments_text + "\n"
                 + people_block
                 + "SECTION GUIDELINES:\n"
@@ -324,6 +348,9 @@ def sensing_report_radar_prompt(
     date_range: str = "",
     custom_quadrant_names: list[str] | None = None,
     custom_requirements: str = "",
+    experience_block: str = "",
+    prompt_patch: str = "",
+    feedback_block: str = "",
 ) -> list[dict]:
     """
     Phase 2 prompt: technology radar items only.
@@ -345,6 +372,7 @@ def sensing_report_radar_prompt(
                 "cloud platforms, cryptocurrency tools) unless they are specifically designed "
                 f"for or significantly adapted to '{domain}' use cases.\n\n"
                 + _custom_requirements_block(custom_requirements)
+                + _experience_memory_block(experience_block, prompt_patch, feedback_block)
                 + "RADAR GUIDELINES:\n"
                 "- 10-20 distinct technologies/techniques — STRICTLY consolidate duplicates.\n"
                 "- Each entry: name, quadrant ("

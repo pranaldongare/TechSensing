@@ -81,6 +81,9 @@ async def generate_report(
     dynamic_generic_blocklist: set[str] | None = None,
     dynamic_legacy_blocklist: set[str] | None = None,
     stakeholder_role: str = "general",
+    experience_block: str = "",
+    prompt_patches: dict | None = None,
+    feedback_block: str = "",
 ) -> TechSensingReport:
     """
     Generate the complete Tech Sensing Report from classified articles.
@@ -125,6 +128,11 @@ async def generate_report(
         preset = get_preset_for_domain(domain)
 
     # ── Phase 1: Core (executive summary, headline moves, key trends) ──
+    # Resolve prompt patches for each phase
+    _patches = prompt_patches or {}
+    _core_patch = _patches.get("classification_guidance", "")  # general guidance applies to core
+    _radar_patch = _patches.get("radar_guidance", "")
+
     core_prompt = sensing_report_core_prompt(
         classified_articles_json=articles_json,
         domain=domain,
@@ -133,6 +141,9 @@ async def generate_report(
         org_context=org_context,
         key_people=key_people,
         industry_segments_text=preset.industry_segments,
+        experience_block=experience_block,
+        prompt_patch=_core_patch,
+        feedback_block=feedback_block,
     )
 
     phase1_start = time.time()
@@ -173,6 +184,9 @@ async def generate_report(
         date_range=date_range,
         custom_quadrant_names=custom_quadrant_names,
         custom_requirements=custom_requirements,
+        experience_block=experience_block,
+        prompt_patch=_radar_patch,
+        feedback_block=feedback_block,
     )
 
     phase2_start = time.time()

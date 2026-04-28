@@ -652,6 +652,75 @@ class EnhancerOutput(LLMOutputBase):
     )
 
 
+class SelfEvalOutput(LLMOutputBase):
+    """LLM-as-judge evaluation of a completed tech sensing report."""
+
+    coverage_score: int = Field(
+        description="1-5: Did the report cover all major developments in the domain?"
+    )
+    specificity_score: int = Field(
+        description="1-5: Are radar items specific technologies vs generic categories?"
+    )
+    novelty_accuracy_score: int = Field(
+        description="1-5: Are items marked 'new' genuinely new, not established tech?"
+    )
+    actionability_score: int = Field(
+        description="1-5: Are recommendations concrete and actionable?"
+    )
+    coherence_score: int = Field(
+        description="1-5: Is the report well-structured, non-repetitive, and logically organized?"
+    )
+    overall_score: float = Field(
+        description="Weighted average of all scores (1.0-5.0)."
+    )
+    strengths: List[str] = Field(
+        description="2-3 specific things the report did well."
+    )
+    weaknesses: List[str] = Field(
+        description="2-3 specific things to improve in the next report for this domain."
+    )
+    missed_topics: List[str] = Field(
+        default_factory=list,
+        description="Topics or technologies that should have been covered but weren't.",
+    )
+    reflection: str = Field(
+        description=(
+            "2-3 sentence self-reflection for the next run. Write as direct "
+            "instructions to your future self, e.g., 'Next time, pay more "
+            "attention to edge computing developments.'"
+        ),
+    )
+
+
+class PromptPatchOutput(LLMOutputBase):
+    """LLM-generated prompt improvements based on experience patterns."""
+
+    classification_guidance: str = Field(
+        default="",
+        description=(
+            "Extra guidance to inject into the article classifier prompt. "
+            "Leave empty if no changes needed. Write as direct instructions."
+        ),
+    )
+    radar_guidance: str = Field(
+        default="",
+        description=(
+            "Extra guidance to inject into the radar generation prompt. "
+            "Leave empty if no changes needed. Write as direct instructions."
+        ),
+    )
+    verification_guidance: str = Field(
+        default="",
+        description=(
+            "Extra guidance to inject into the verifier prompt. "
+            "Leave empty if no changes needed. Write as direct instructions."
+        ),
+    )
+    rationale: str = Field(
+        description="Brief explanation of why these prompt changes were suggested."
+    )
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
