@@ -502,6 +502,40 @@ def _repair_truncated_json(text: str) -> str | None:
     return repaired
 
 
+def _wrap_bare_array(parsed: list, schema: type) -> list | dict:
+    """
+    If the LLM returned a bare JSON array but the schema expects a dict
+    with a list field, wrap it automatically.
+
+    Handles three common LLM patterns:
+    1. [{...}, {...}]  ->  {"articles": [{...}, {...}]}   (bare array)
+    2. []              ->  {"articles": []}                (empty array)
+    3. [{"articles": [...]}]  ->  {"articles": [...]}      (array-wrapped dict)
+    """
+    if not isinstance(parsed, list):
+        return parsed
+
+    # Pattern 3: [{"field": [...]}] — unwrap single-element outer array
+    if len(parsed) == 1 and isinstance(parsed[0], dict):
+        model_fields = set(getattr(schema, "model_fields", {}).keys())
+        if model_fields & set(parsed[0].keys()):
+            return parsed[0]
+
+    # Pattern 1 & 2: bare array — find the single list field in the schema
+    model_fields = getattr(schema, "model_fields", {})
+    list_fields = []
+    for name, info in model_fields.items():
+        annotation = info.annotation
+        origin = getattr(annotation, "__origin__", None)
+        if origin is list:
+            list_fields.append(name)
+
+    if len(list_fields) == 1:
+        return {list_fields[0]: parsed}
+
+    return parsed
+
+
 def parse_llm_json(raw: str, schema: Type[T]) -> T:
     """
     Parse and validate LLM output against a Pydantic schema with
@@ -527,6 +561,8 @@ def parse_llm_json(raw: str, schema: Type[T]) -> T:
     # Strategy 1: Standard json.loads after sanitization
     try:
         parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            parsed = _wrap_bare_array(parsed, schema)
         if isinstance(parsed, dict):
             parsed = _strip_schema_metadata(parsed, schema)
         return schema.model_validate(parsed)
@@ -537,6 +573,8 @@ def parse_llm_json(raw: str, schema: Type[T]) -> T:
     if json_repair is not None:
         try:
             repaired = json_repair.loads(cleaned)
+            if isinstance(repaired, list):
+                repaired = _wrap_bare_array(repaired, schema)
             if isinstance(repaired, dict):
                 repaired = _strip_schema_metadata(repaired, schema)
             if isinstance(repaired, (dict, list)):
@@ -548,6 +586,8 @@ def parse_llm_json(raw: str, schema: Type[T]) -> T:
         # extraction mangled something)
         try:
             repaired = json_repair.loads(sanitize_llm_json(raw))
+            if isinstance(repaired, list):
+                repaired = _wrap_bare_array(repaired, schema)
             if isinstance(repaired, dict):
                 repaired = _strip_schema_metadata(repaired, schema)
             if isinstance(repaired, (dict, list)):

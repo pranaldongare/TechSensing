@@ -14,7 +14,11 @@ from openai import AsyncOpenAI
 
 from core.config import settings
 from core.constants import FALLBACK_GEMINI_MODEL, FALLBACK_OPENAI_MODEL, SWITCHES
-from core.utils.llm_output_sanitizer import parse_llm_json, sanitize_llm_json
+from core.utils.llm_output_sanitizer import (
+    _wrap_bare_array,
+    parse_llm_json,
+    sanitize_llm_json,
+)
 
 # ── Logging with tracking_id correlation ──────────────────────────
 tracking_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -165,9 +169,11 @@ def _try_parse(raw_output: str, parser, response_schema):
     except Exception:
         pass
 
-    # Strategy 2: Direct parse with schema metadata stripping
+    # Strategy 2: Direct parse with schema metadata stripping + bare array wrapping
     try:
         parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            parsed = _wrap_bare_array(parsed, response_schema)
         if isinstance(parsed, dict):
             from core.utils.llm_output_sanitizer import _strip_schema_metadata
             parsed = _strip_schema_metadata(parsed, response_schema)
