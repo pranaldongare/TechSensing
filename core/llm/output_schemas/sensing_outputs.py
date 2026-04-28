@@ -618,6 +618,40 @@ class ModelReleasesOutput(LLMOutputBase):
     )
 
 
+class EnhancerOutput(LLMOutputBase):
+    """LLM output: additional report entries from orphan articles missed in the first pass."""
+
+    additional_events: List[TopEvent] = Field(
+        default_factory=list,
+        description=(
+            "0-3 significant events from orphan articles that were missed in the report. "
+            "Only include events that are genuinely important and distinct from existing coverage."
+        ),
+    )
+    additional_radar_items: List[RadarItem] = Field(
+        default_factory=list,
+        description=(
+            "0-5 technology radar entries from orphan articles not covered in the report. "
+            "Only include technologies with clear evidence from the provided articles."
+        ),
+    )
+    additional_recommendations: List[Recommendation] = Field(
+        default_factory=list,
+        description=(
+            "0-2 actionable recommendations based on gaps found in orphan articles. "
+            "Only include if the gap reveals a meaningful strategic consideration."
+        ),
+    )
+    skipped_articles: List[str] = Field(
+        default_factory=list,
+        description="Titles of orphan articles that were correctly omitted (not important enough to add).",
+    )
+    enhancement_summary: str = Field(
+        default="",
+        description="1-2 sentence summary of what was added, or 'No enhancements needed' if nothing was added.",
+    )
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 

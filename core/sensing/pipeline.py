@@ -33,6 +33,7 @@ from core.sensing.sources.google_patent_search import search_google_patents
 from core.sensing.sources.reddit_search import search_reddit
 from core.sensing.sources.semantic_scholar import fetch_semantic_scholar
 from core.sensing.sources.youtube_videos import fetch_youtube_videos
+from core.sensing.enhancer import enhance_report
 from core.sensing.verifier import verify_report
 
 logger = logging.getLogger("sensing.pipeline")
@@ -394,6 +395,17 @@ async def run_sensing_pipeline(
     )
     await _emit("verify", 92, "Verification complete")
     logger.info(f"[Stage 6/7] VERIFY COMPLETE [{_elapsed()}]")
+
+    # --- Enhancement (second-pass gap filling) ---
+    logger.info(f"[Enhancement] Checking for missed developments... [{_elapsed()}]")
+    await _emit("enhance", 93, "Checking for missed developments...")
+    report = await enhance_report(
+        report=report,
+        classified=classified,
+        domain=domain,
+        url_content_map=url_content_map,
+    )
+    await _emit("enhance", 94, "Enhancement complete")
 
     # --- Stage 7: Movement detection ---
     if user_id:
@@ -1370,6 +1382,16 @@ async def run_sensing_pipeline_from_document(
         custom_requirements=full_requirements,
     )
     logger.info(f"[Stage 9/9] VERIFY COMPLETE [{_elapsed()}]")
+
+    # --- Enhancement (second-pass gap filling) ---
+    logger.info(f"[Enhancement] Checking for missed developments... [{_elapsed()}]")
+    await _emit("enhance", 90, "Checking for missed developments...")
+    report = await enhance_report(
+        report=report,
+        classified=classified,
+        domain=domain,
+        url_content_map=url_content_map,
+    )
 
     # Movement detection
     if user_id:
