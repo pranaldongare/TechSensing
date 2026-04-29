@@ -668,52 +668,62 @@ def sensing_details_prompt(
 
 
 def sensing_relationship_prompt(
+    cooccurrence_text: str,
     radar_items_json: str,
-    classified_articles_json: str,
     domain: str = "Technology",
 ) -> list[dict]:
     """
-    Build a prompt to extract technology relationships and clusters
-    from the radar items and supporting articles.
+    Build an evidence-based prompt to classify technology relationships.
+
+    Instead of asking the LLM to invent relationships, we provide pre-computed
+    co-occurrence pairs (technologies that appear together in the same articles)
+    and ask the LLM to classify and interpret each pair.
     """
     contents = [
         {
             "role": "system",
             "parts": (
-                "You are a senior technology strategist analyzing the relationships "
-                f"between technologies in the {domain} domain.\n\n"
-                "Given a list of RADAR ITEMS and CLASSIFIED ARTICLES, identify:\n\n"
-                "1. RELATIONSHIPS between technologies (10-30):\n"
-                "   For each relationship, provide:\n"
-                "   - source_tech: Name of the source technology (must match a radar item)\n"
-                "   - target_tech: Name of the target technology (must match a radar item)\n"
-                "   - relationship_type: One of:\n"
-                "     * 'builds_on' — source extends or is built upon target\n"
-                "     * 'competes_with' — source and target serve similar purpose\n"
-                "     * 'enables' — source enables or powers target\n"
-                "     * 'integrates_with' — source and target commonly used together\n"
-                "     * 'alternative_to' — source is an alternative to target\n"
-                "   - strength: 0.0-1.0 (how strong the relationship is)\n"
-                "   - evidence: 1-2 sentence justification from the articles\n\n"
-                "2. CLUSTERS of related technologies (3-6):\n"
-                "   - cluster_name: Descriptive cluster name\n"
-                "   - technologies: List of technology names in the cluster\n"
-                "   - theme: Brief theme description\n\n"
+                "You are a senior technology strategist. You are given EVIDENCE of "
+                "technology co-occurrences — pairs of technologies that appear together "
+                f"in articles about {domain}.\n\n"
+                "Your task:\n\n"
+                "1. CLASSIFY each co-occurrence pair into a relationship:\n"
+                "   - source_tech / target_tech: MUST exactly match the names given\n"
+                "   - relationship_type — one of:\n"
+                "     * 'enables' — source powers, underpins, or is a foundation for target\n"
+                "     * 'competes_with' — source and target serve a similar purpose or are alternatives\n"
+                "     * 'integrates_with' — commonly used together, combined, or complementary\n"
+                "     * 'evolves_from' — source is a successor, evolution, or next-generation version of target\n"
+                "   - confidence: 'high', 'medium', or 'low'\n"
+                "     * 'high' = the articles clearly describe this relationship\n"
+                "     * 'medium' = the relationship is implied or likely from context\n"
+                "     * 'low' = the co-occurrence seems coincidental or the relationship is weak\n"
+                "   - evidence: 1-3 sentences explaining WHY these technologies are related, "
+                "citing specific findings from the articles listed\n\n"
+                "2. SKIP pairs where the co-occurrence is coincidental — they just happen to be "
+                "in the same article but have no real technological relationship. "
+                "Quality matters more than quantity. It is better to return 5 strong, well-evidenced "
+                "relationships than 20 weak ones.\n\n"
+                "3. GROUP technologies into 3-6 CLUSTERS:\n"
+                "   - cluster_name: Descriptive name\n"
+                "   - technologies: List of technology names in this cluster\n"
+                "   - theme: Brief theme description\n"
+                "   - rationale: Why these belong together — what connects them\n\n"
                 "RULES:\n"
-                "- Technology names MUST exactly match radar item names.\n"
-                "- Every relationship must be grounded in article evidence.\n"
-                "- Do NOT create self-referencing relationships.\n"
-                "- Avoid duplicate pairs (if A→B exists, don't add B→A with same type).\n"
-                "- Do NOT fabricate relationships not supported by the articles.\n"
+                "- Technology names MUST exactly match the names provided.\n"
+                "- Do NOT invent relationships not supported by the co-occurrence evidence.\n"
+                "- Do NOT add relationships between technologies that don't appear in the pairs.\n"
+                "- Direction matters: choose source and target so the relationship reads naturally "
+                "(e.g., 'LangChain integrates_with GPT-4', not the reverse).\n"
             ),
         },
         {
             "role": "user",
             "parts": (
                 f"DOMAIN: {domain}\n\n"
-                f"RADAR ITEMS:\n{radar_items_json}\n\n"
-                f"CLASSIFIED ARTICLES:\n{classified_articles_json}\n\n"
-                "Extract technology relationships and clusters. "
+                f"RADAR ITEMS (for reference):\n{radar_items_json}\n\n"
+                f"CO-OCCURRENCE EVIDENCE:\n{cooccurrence_text}\n\n"
+                "Classify the relationships and create clusters. "
                 "Return ONLY valid JSON with 'relationships' and 'clusters' arrays."
             ),
         },

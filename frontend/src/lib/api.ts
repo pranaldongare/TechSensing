@@ -228,14 +228,17 @@ export interface TechRelationship {
   source_tech: string;
   target_tech: string;
   relationship_type: string;
-  strength: number;
+  confidence: string;
   evidence: string;
+  article_count: number;
+  strength: number;
 }
 
 export interface TechCluster {
   cluster_name: string;
   technologies: string[];
   theme: string;
+  rationale: string;
 }
 
 export interface TechRelationshipMap {

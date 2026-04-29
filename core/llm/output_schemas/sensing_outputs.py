@@ -843,21 +843,30 @@ class WeakSignal(BaseModel):
 
 
 class TechRelationship(BaseModel):
-    """A relationship between two radar technologies."""
+    """A relationship between two radar technologies, grounded in article evidence."""
 
-    source_tech: str = Field(description="Source technology name.")
-    target_tech: str = Field(description="Target technology name.")
+    source_tech: str = Field(description="Source technology name (must match a radar item).")
+    target_tech: str = Field(description="Target technology name (must match a radar item).")
     relationship_type: str = Field(
         description=(
-            "Type of relationship: 'builds_on', 'competes_with', "
-            "'enables', 'integrates_with', or 'alternative_to'."
+            "Type of relationship: 'enables' (source powers/is foundation for target), "
+            "'competes_with' (serve similar purpose or are alternatives), "
+            "'integrates_with' (commonly used together), or "
+            "'evolves_from' (source is successor/evolution of target)."
         )
     )
-    strength: float = Field(
-        default=0.5, description="Relationship strength 0.0-1.0."
+    confidence: str = Field(
+        description="How confident is this relationship: 'high', 'medium', or 'low'."
     )
     evidence: str = Field(
-        default="", description="1-2 sentence evidence from articles."
+        description="1-3 sentence explanation of WHY these technologies are related, citing specific article findings."
+    )
+    # Filled post-LLM from co-occurrence data, not by the LLM itself
+    article_count: int = Field(
+        default=0, description="Number of articles where both technologies co-occur."
+    )
+    strength: float = Field(
+        default=0.0, description="Data-grounded relationship strength 0.0-1.0 (computed post-LLM)."
     )
 
 
@@ -867,6 +876,10 @@ class TechCluster(BaseModel):
     cluster_name: str = Field(description="Name of the technology cluster.")
     technologies: List[str] = Field(description="Technology names in this cluster.")
     theme: str = Field(description="Brief theme description for the cluster.")
+    rationale: str = Field(
+        default="",
+        description="Why these technologies belong together — what connects them beyond surface similarity.",
+    )
 
 
 class TechRelationshipMap(LLMOutputBase):
@@ -874,11 +887,11 @@ class TechRelationshipMap(LLMOutputBase):
 
     relationships: List[TechRelationship] = Field(
         default_factory=list,
-        description="10-30 relationships between radar technologies.",
+        description="Relationships between radar technologies, grounded in article co-occurrence evidence.",
     )
     clusters: List[TechCluster] = Field(
         default_factory=list,
-        description="3-6 technology clusters.",
+        description="3-6 technology clusters with rationale.",
     )
 
 

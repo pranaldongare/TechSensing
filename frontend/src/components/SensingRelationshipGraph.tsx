@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -11,7 +11,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import dagre from 'dagre';
-import type { TechRelationshipMap, SensingRadarItem } from '@/lib/api';
+import type { TechRelationshipMap, SensingRadarItem, TechRelationship } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 
 interface Props {
@@ -28,19 +28,17 @@ const QUADRANT_COLORS: Record<string, string> = {
 };
 
 const RELATIONSHIP_COLORS: Record<string, string> = {
-  'builds_on': '#3b82f6',
-  'competes_with': '#ef4444',
   'enables': '#22c55e',
+  'competes_with': '#ef4444',
   'integrates_with': '#a855f7',
-  'alternative_to': '#f97316',
+  'evolves_from': '#3b82f6',
 };
 
 const RELATIONSHIP_LABELS: Record<string, string> = {
-  'builds_on': 'Builds on',
-  'competes_with': 'Competes',
   'enables': 'Enables',
+  'competes_with': 'Competes',
   'integrates_with': 'Integrates',
-  'alternative_to': 'Alternative',
+  'evolves_from': 'Evolves from',
 };
 
 function getLayoutedElements(
@@ -81,11 +79,19 @@ const SensingRelationshipGraph: React.FC<Props> = ({
   radarItems,
   onTechClick,
 }) => {
-  const { initialNodes, initialEdges, clusterInfo } = useMemo(() => {
+  const [selectedEdge, setSelectedEdge] = useState<TechRelationship | null>(null);
+
+  const { initialNodes, initialEdges, clusterInfo, relLookup } = useMemo(() => {
     // Build lookup for radar items
     const radarLookup = new Map<string, SensingRadarItem>();
     radarItems.forEach((item) => {
       radarLookup.set(item.name.toLowerCase().trim(), item);
+    });
+
+    // Build edge -> relationship lookup for tooltip
+    const lookup = new Map<string, TechRelationship>();
+    relationships.relationships.forEach((rel, idx) => {
+      lookup.set(`e-${idx}`, rel);
     });
 
     // Create nodes for technologies that appear in relationships
@@ -129,13 +135,15 @@ const SensingRelationshipGraph: React.FC<Props> = ({
     // Create edges
     const edges: Edge[] = relationships.relationships.map((rel, idx) => {
       const color = RELATIONSHIP_COLORS[rel.relationship_type] || '#888';
+      const label = RELATIONSHIP_LABELS[rel.relationship_type] || rel.relationship_type;
+      const articleSuffix = rel.article_count ? ` (${rel.article_count})` : '';
       return {
         id: `e-${idx}`,
         source: rel.source_tech,
         target: rel.target_tech,
-        label: RELATIONSHIP_LABELS[rel.relationship_type] || rel.relationship_type,
+        label: `${label}${articleSuffix}`,
         type: 'default',
-        animated: rel.strength > 0.7,
+        animated: rel.confidence === 'high',
         style: {
           stroke: color,
           strokeWidth: Math.max(1, rel.strength * 3),
@@ -168,6 +176,7 @@ const SensingRelationshipGraph: React.FC<Props> = ({
       initialNodes: layoutedNodes,
       initialEdges: layoutedEdges,
       clusterInfo: relationships.clusters || [],
+      relLookup: lookup,
     };
   }, [relationships, radarItems]);
 
@@ -176,10 +185,23 @@ const SensingRelationshipGraph: React.FC<Props> = ({
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
+      setSelectedEdge(null);
       onTechClick?.(node.id);
     },
     [onTechClick],
   );
+
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      const rel = relLookup.get(edge.id);
+      setSelectedEdge(rel || null);
+    },
+    [relLookup],
+  );
+
+  const onPaneClick = useCallback(() => {
+    setSelectedEdge(null);
+  }, []);
 
   if (!relationships.relationships.length) {
     return (
@@ -210,10 +232,39 @@ const SensingRelationshipGraph: React.FC<Props> = ({
         <div className="flex flex-wrap gap-2 px-2">
           <span className="text-xs font-medium text-muted-foreground">Clusters:</span>
           {clusterInfo.map((cluster) => (
-            <Badge key={cluster.cluster_name} variant="outline" className="text-xs" title={cluster.theme}>
+            <Badge
+              key={cluster.cluster_name}
+              variant="outline"
+              className="text-xs"
+              title={`${cluster.theme}${cluster.rationale ? '\n' + cluster.rationale : ''}`}
+            >
               {cluster.cluster_name} ({cluster.technologies.length})
             </Badge>
           ))}
+        </div>
+      )}
+
+      {/* Evidence tooltip */}
+      {selectedEdge && (
+        <div className="mx-2 p-3 rounded-lg border bg-muted/50 text-xs space-y-1">
+          <div className="flex items-center gap-2 font-medium">
+            <span>{selectedEdge.source_tech}</span>
+            <span className="text-muted-foreground">
+              {RELATIONSHIP_LABELS[selectedEdge.relationship_type] || selectedEdge.relationship_type}
+            </span>
+            <span>{selectedEdge.target_tech}</span>
+            <Badge variant="outline" className="ml-auto text-[10px]">
+              {selectedEdge.confidence} confidence
+            </Badge>
+            {selectedEdge.article_count > 0 && (
+              <Badge variant="secondary" className="text-[10px]">
+                {selectedEdge.article_count} article{selectedEdge.article_count !== 1 ? 's' : ''}
+              </Badge>
+            )}
+          </div>
+          {selectedEdge.evidence && (
+            <p className="text-muted-foreground leading-relaxed">{selectedEdge.evidence}</p>
+          )}
         </div>
       )}
 
@@ -225,6 +276,8 @@ const SensingRelationshipGraph: React.FC<Props> = ({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={onNodeClick}
+          onEdgeClick={onEdgeClick}
+          onPaneClick={onPaneClick}
           fitView
           fitViewOptions={{ padding: 0.2 }}
           minZoom={0.3}
@@ -247,6 +300,9 @@ const SensingRelationshipGraph: React.FC<Props> = ({
         <span>{relationships.relationships.length} relationships</span>
         <span>{new Set([...relationships.relationships.map(r => r.source_tech), ...relationships.relationships.map(r => r.target_tech)]).size} technologies</span>
         <span>{clusterInfo.length} clusters</span>
+        {!selectedEdge && (
+          <span className="ml-auto italic">Click an edge to see evidence</span>
+        )}
       </div>
     </div>
   );
