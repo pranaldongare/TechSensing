@@ -670,6 +670,21 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                           </ul>
                         </div>
                       )}
+                      {item.quantitative_highlights && item.quantitative_highlights.length > 0 && (
+                        <div className="p-2.5 rounded bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-800/30">
+                          <h5 className="text-xs font-semibold text-amber-700 dark:text-amber-300 mb-1.5">
+                            Key Numbers & Metrics
+                          </h5>
+                          <ul className="space-y-1">
+                            {item.quantitative_highlights.map((q, i) => (
+                              <li key={i} className="text-xs text-muted-foreground flex items-start gap-1.5">
+                                <span className="text-amber-600 font-bold mt-px shrink-0">#</span>
+                                <span>{q}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                       {item.hiring_indicators && (
                         <div className="flex items-start gap-2 p-2 rounded bg-blue-50/50 dark:bg-blue-950/20">
                           <Building2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />

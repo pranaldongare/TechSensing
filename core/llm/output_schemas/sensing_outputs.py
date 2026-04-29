@@ -271,6 +271,18 @@ class RadarItemDetail(BaseModel):
     practical_applications: List[str] = Field(
         description="Real-world use cases and applications (2-4 items)."
     )
+    quantitative_highlights: List[str] = Field(
+        default_factory=list,
+        description=(
+            "2-5 specific quantitative facts extracted from the articles — "
+            "benchmark scores, performance metrics, adoption numbers, speed/cost comparisons, "
+            "accuracy percentages, latency figures, parameter counts, etc. "
+            "Each item must cite the number and its context, e.g. "
+            "'Achieves 92.3% accuracy on MMLU, up from 86.4% in the previous version' or "
+            "'Reduces inference cost by 40% compared to GPT-4 Turbo'. "
+            "Only include numbers explicitly stated in the articles — do NOT fabricate metrics."
+        ),
+    )
     source_urls: List[str] = Field(
         default_factory=list,
         description="URLs of articles informing this technology write-up.",

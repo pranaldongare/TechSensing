@@ -80,6 +80,7 @@ export interface SensingRadarItemDetail {
   current_state: string;
   key_players: string[];
   practical_applications: string[];
+  quantitative_highlights?: string[];
   source_urls?: string[];
   hiring_indicators?: string;
 }

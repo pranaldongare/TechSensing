@@ -640,6 +640,10 @@ function buildSensingPdf(data: SensingReportData): TDocumentDefinitions {
                     { text: 'Practical Applications', fontSize: 9, bold: true, color: colors.slate800, margin: [0, 2, 0, 1] as any },
                     { ul: item.practical_applications.map((a: string) => ({ text: sanitize(a), fontSize: 8, color: colors.slate600 })), margin: [0, 0, 0, 0] as any },
                 ] : []),
+                ...((item as any).quantitative_highlights?.length > 0 ? [
+                    { text: 'Key Numbers & Metrics', fontSize: 9, bold: true, color: '#92400E', margin: [0, 4, 0, 1] as any },
+                    { ul: (item as any).quantitative_highlights.map((q: string) => ({ text: sanitize(q), fontSize: 8, color: colors.slate600 })), margin: [0, 0, 0, 0] as any },
+                ] : []),
                 ...sourceUrlsBlock(item.source_urls),
             ], '#A7F3D0'));
         }
