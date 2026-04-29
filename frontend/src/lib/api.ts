@@ -115,6 +115,15 @@ export interface SensingTopEvent {
   recommendation?: string;
 }
 
+export interface OnepagerCard {
+  card_title: string;
+  category_tag: string;
+  bullets: string[];
+  source_label: string;
+  source_url?: string;   // Attached client-side from the original event
+  actor?: string;         // Attached client-side for the icon
+}
+
 export interface SensingBlindSpot {
   area: string;
   why_it_matters: string;
@@ -1306,6 +1315,27 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to update org context');
+    return data;
+  },
+
+  async sensingOnepager(
+    trackingId: string,
+    selectedIndices: number[],
+  ): Promise<{ status: string; cards: OnepagerCard[]; domain: string; date_range: string }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/onepager`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          tracking_id: trackingId,
+          selected_indices: selectedIndices,
+        }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to generate one-pager');
     return data;
   },
 

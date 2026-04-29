@@ -946,5 +946,45 @@ class TechRelationshipMap(LLMOutputBase):
     )
 
 
+# --- One-Pager Export ---
+
+
+class OnepagerCard(BaseModel):
+    """A single card on the weekly tech sensing one-pager."""
+
+    card_title: str = Field(
+        description="Punchy headline for the card, ≤80 chars. Include actor name."
+    )
+    category_tag: str = Field(
+        description=(
+            "Short uppercase tag grouping this event by technology domain "
+            "(2-8 chars), e.g. 'GENAI', 'AUDIO', 'AGENTS', 'CHIPS', "
+            "'CLOUD', 'SECURITY', 'ROBOTICS', 'BIOTECH', 'QUANTUM'."
+        )
+    )
+    bullets: List[str] = Field(
+        description=(
+            "3-5 concise one-line key facts. Prioritize quantitative data, "
+            "benchmarks, technical specs, license info, architecture details. "
+            "Each bullet ≤150 chars."
+        )
+    )
+    source_label: str = Field(
+        default="See Full Article",
+        description=(
+            "Short label for the source link, e.g. 'See Benchmark Scores', "
+            "'See Full Article', 'View Details'."
+        ),
+    )
+
+
+class OnepagerOutput(LLMOutputBase):
+    """LLM output for the weekly tech sensing one-pager."""
+
+    cards: List[OnepagerCard] = Field(
+        description="One card per selected event, in input order."
+    )
+
+
 # Resolve forward references
 TechSensingReport.model_rebuild()

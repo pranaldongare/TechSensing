@@ -1,20 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '@/components/ui/dialog';
 import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
-  ArrowDown, Minus, Info, Zap, Network, Database, Edit3,
+  ArrowDown, Minus, Info, Zap, Network, Database, Edit3, LayoutGrid, Download,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
-  TopicPreferences, ModelRelease, Annotation,
+  TopicPreferences, ModelRelease, Annotation, OnepagerCard,
 } from '@/lib/api';
+import { downloadOnepagerPptx } from '@/lib/sensing-onepager-pptx';
+import { downloadOnepagerPdf } from '@/lib/sensing-onepager-pdf';
 import SensingRelationshipGraph from '@/components/SensingRelationshipGraph';
 
 interface Meta {
@@ -130,6 +137,11 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
   const [showProvenance, setShowProvenance] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // One-pager state
+  const [onepagerOpen, setOnepagerOpen] = useState(false);
+  const [onepagerSelected, setOnepagerSelected] = useState<Set<number>>(new Set());
+  const [onepagerLoading, setOnepagerLoading] = useState(false);
+
   // Auto-expand and scroll to highlighted technology
   useEffect(() => {
     if (!highlightTechnology || !report.radar_item_details) return;
@@ -153,6 +165,50 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
       else next.add(idx);
       return next;
     });
+  };
+
+  // ── One-pager helpers ──
+  const toggleOnepagerSelection = (idx: number) => {
+    setOnepagerSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else if (next.size < 8) {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
+  const handleOnepagerGenerate = async (format: 'pptx' | 'pdf') => {
+    if (onepagerSelected.size === 0 || !report.top_events) return;
+    setOnepagerLoading(true);
+    try {
+      const indices = Array.from(onepagerSelected).sort((a, b) => a - b);
+      const result = await api.sensingOnepager(meta.tracking_id, indices);
+
+      // Enrich cards with source_url and actor from original events
+      const enrichedCards: OnepagerCard[] = result.cards.map((card, i) => {
+        const origIdx = indices[i];
+        const orig = report.top_events![origIdx];
+        return {
+          ...card,
+          source_url: orig?.source_urls?.[0] || '',
+          actor: orig?.actor || '',
+        };
+      });
+
+      if (format === 'pptx') {
+        await downloadOnepagerPptx(enrichedCards, result.domain, result.date_range);
+      } else {
+        await downloadOnepagerPdf(enrichedCards, result.domain, result.date_range);
+      }
+      setOnepagerOpen(false);
+    } catch (e) {
+      console.error('One-pager generation failed:', e);
+    } finally {
+      setOnepagerLoading(false);
+    }
   };
 
   return (
@@ -226,10 +282,20 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
         {/* Top Events (v2.0) or Headline Moves (legacy) */}
         {report.top_events && report.top_events.length > 0 ? (
           <div className="space-y-3">
-            <h3 className="text-lg font-semibold flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-orange-500" />
-              Top {report.top_events.length} Events
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-orange-500" />
+                Top {report.top_events.length} Events
+              </h3>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setOnepagerSelected(new Set()); setOnepagerOpen(true); }}
+              >
+                <LayoutGrid className="w-4 h-4 mr-1.5" />
+                One-Pager
+              </Button>
+            </div>
             {report.top_events.map((event: SensingTopEvent, idx: number) => (
               <Card key={idx} className="overflow-hidden border-l-4 border-l-orange-400">
                 <button
@@ -1126,6 +1192,80 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           )}
         </Card>
       </div>
+
+      {/* One-Pager Topic Selection Dialog */}
+      <Dialog open={onepagerOpen} onOpenChange={setOnepagerOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <LayoutGrid className="w-5 h-5" />
+              Select Topics for One-Pager
+            </DialogTitle>
+            <DialogDescription>
+              Choose up to 8 top events to include in the one-pager export. Selected: {onepagerSelected.size}/8
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-1 pr-2">
+            {report.top_events?.map((event: SensingTopEvent, idx: number) => {
+              const isSelected = onepagerSelected.has(idx);
+              const isDisabled = !isSelected && onepagerSelected.size >= 8;
+              return (
+                <label
+                  key={idx}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                    isSelected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'
+                  } ${isDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Checkbox
+                    checked={isSelected}
+                    disabled={isDisabled}
+                    onCheckedChange={() => toggleOnepagerSelection(idx)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="flex-shrink-0 w-5 h-5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-[10px] font-bold flex items-center justify-center">
+                        {idx + 1}
+                      </span>
+                      <span className="font-medium text-sm truncate">{event.headline}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      <Badge variant="outline" className="text-[10px] h-5">{event.actor}</Badge>
+                      <Badge variant="secondary" className="text-[10px] h-5">
+                        {event.event_type?.replace('_', ' ')}
+                      </Badge>
+                      {event.segment && (
+                        <Badge variant="secondary" className="text-[10px] h-5">{event.segment}</Badge>
+                      )}
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          <DialogFooter className="flex items-center gap-2 pt-3 border-t">
+            <Button variant="ghost" onClick={() => setOnepagerOpen(false)} disabled={onepagerLoading}>
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => handleOnepagerGenerate('pdf')}
+              disabled={onepagerSelected.size === 0 || onepagerLoading}
+            >
+              {onepagerLoading ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
+              PDF
+            </Button>
+            <Button
+              onClick={() => handleOnepagerGenerate('pptx')}
+              disabled={onepagerSelected.size === 0 || onepagerLoading}
+            >
+              {onepagerLoading ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
+              PPTX
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </ScrollArea>
   );
 };

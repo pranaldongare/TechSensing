@@ -1074,6 +1074,86 @@ async def update_org_context(
     return JSONResponse(content=context.model_dump())
 
 
+# --- One-Pager Export ---
+
+
+class OnepagerRequest(BaseModel):
+    tracking_id: str = Field(description="Report tracking ID to pull events from.")
+    selected_indices: List[int] = Field(
+        description="0-based indices into top_events (max 8)."
+    )
+
+
+@router.post("/onepager")
+async def generate_onepager(
+    request: Request,
+    body: OnepagerRequest = Body(...),
+):
+    """Generate one-pager card data for selected top events via LLM."""
+    from core.constants import GPU_SENSING_REPORT_LLM
+    from core.llm.client import invoke_llm
+    from core.llm.output_schemas.sensing_outputs import OnepagerOutput
+    from core.llm.prompts.sensing_prompts import onepager_bullets_prompt
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    sensing_dir = _get_sensing_dir(user_id)
+
+    # Load the saved report
+    report_path = os.path.join(sensing_dir, f"report_{body.tracking_id}.json")
+    if not os.path.exists(report_path):
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    async with aiofiles.open(report_path, "r", encoding="utf-8") as f:
+        report_data = json.loads(await f.read())
+
+    report = report_data.get("report", report_data)
+    top_events = report.get("top_events", [])
+
+    if not top_events:
+        raise HTTPException(status_code=400, detail="Report has no top events")
+
+    # Validate indices
+    indices = [i for i in body.selected_indices if 0 <= i < len(top_events)]
+    if not indices:
+        raise HTTPException(status_code=400, detail="No valid event indices")
+    indices = indices[:8]  # Cap at 8
+
+    selected_events = [top_events[i] for i in indices]
+    domain = report.get("domain", "Technology")
+    date_range = report.get("date_range", "")
+
+    # Build prompt and call LLM
+    prompt = onepager_bullets_prompt(selected_events, domain)
+
+    try:
+        result = await invoke_llm(
+            gpu_model=GPU_SENSING_REPORT_LLM.model,
+            response_schema=OnepagerOutput,
+            contents=prompt,
+            port=GPU_SENSING_REPORT_LLM.port,
+        )
+        output = OnepagerOutput.model_validate(result)
+    except Exception as e:
+        logger.error("One-pager LLM call failed: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"One-pager generation failed: {e}",
+        )
+
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "cards": [c.model_dump() for c in output.cards],
+            "domain": domain,
+            "date_range": date_range,
+        }
+    )
+
+
 # --- Deep Dive ---
 
 

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -882,3 +883,89 @@ def sensing_domain_intelligence_prompt(
         },
     ]
     return contents
+
+
+def onepager_bullets_prompt(
+    events: list[dict],
+    domain: str,
+) -> list[dict]:
+    """Build a prompt to distill selected top events into one-pager card data.
+
+    Each event dict should have: headline, actor, event_type, impact_summary,
+    strategic_intent, recommendation, segment, related_technologies.
+    """
+    from core.llm.output_schemas.sensing_outputs import OnepagerOutput
+
+    schema_json = json.dumps(OnepagerOutput.model_json_schema(), indent=2)
+
+    events_block = ""
+    for i, ev in enumerate(events):
+        events_block += (
+            f"EVENT {i + 1}:\n"
+            f"  Headline: {ev.get('headline', '')}\n"
+            f"  Actor: {ev.get('actor', '')}\n"
+            f"  Event Type: {ev.get('event_type', '')}\n"
+            f"  Impact Summary: {ev.get('impact_summary', '')}\n"
+            f"  Strategic Intent: {ev.get('strategic_intent', '')}\n"
+            f"  Recommendation: {ev.get('recommendation', '')}\n"
+            f"  Segment: {ev.get('segment', '')}\n"
+            f"  Related Technologies: {', '.join(ev.get('related_technologies', []))}\n\n"
+        )
+
+    return [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology analyst producing a single-page "
+                "infographic summary of the week's top technology events.\n\n"
+                f"DOMAIN: {domain}\n\n"
+                "You will receive up to 8 top events. For each event, produce "
+                "a card with:\n\n"
+                "1. card_title: A punchy headline (<=80 chars). Include the "
+                "actor name (company/org). Example: 'OpenAI Releases GPT-5.5' "
+                "or 'Google Introduces ReasoningBank Memory Fwk'.\n\n"
+                "2. category_tag: A short UPPERCASE tag (2-8 chars) grouping "
+                "the event by technology domain. Examples: 'GENAI', 'AUDIO', "
+                "'AGENTS', 'CHIPS', 'CLOUD', 'SECURITY', 'ROBOTICS', "
+                "'BIOTECH', 'QUANTUM', 'DATA', 'INFRA', 'ENTERPRISE'. "
+                "Use the SAME tag for events in the same domain so they "
+                "group together on the infographic.\n\n"
+                "3. bullets: 3-5 one-line key facts (each <=150 chars). "
+                "These must be CONCISE, FACTUAL, and INFORMATION-DENSE:\n"
+                "   - Prioritize: quantitative data, benchmark scores, "
+                "technical specs, license type, architecture details, "
+                "funding amounts, user/customer counts.\n"
+                "   - Each bullet is ONE fact, not a sentence summary.\n"
+                "   - Example good bullets:\n"
+                "     * 'Apache 2.0 license, 262K native context, hybrid "
+                "thinking/non-thinking architecture'\n"
+                "     * 'SWE-bench Verified: 65.4% (vs Claude 3.5 Sonnet: "
+                "49.0%)'\n"
+                "     * 'First fully retrained base model since GPT-4.5, "
+                "designed for agentic workflows'\n"
+                "   - NO filler, no generic statements, no 'this is "
+                "significant because...' phrasing.\n"
+                "   - Every bullet must be grounded in the provided event "
+                "data. Do NOT fabricate numbers or specs.\n\n"
+                "4. source_label: A short label for the source link. "
+                "Choose contextually, e.g. 'See Benchmark Scores', "
+                "'See Full Article', 'View Funding Details', "
+                "'View Technical Specs'.\n\n"
+                "OUTPUT RULES:\n"
+                "- Return ONLY valid JSON matching the schema below.\n"
+                "- Maintain the SAME order as the input events.\n"
+                "- No markdown fencing, no commentary outside JSON.\n"
+                "- Newlines inside string values MUST be written as \\n.\n"
+                '- Double quotes inside string values MUST be escaped as \\".\n\n'
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"DOMAIN: {domain}\n\n"
+                f"EVENTS:\n\n{events_block}\n"
+                "Produce the one-pager cards. Return ONLY valid JSON."
+            ),
+        },
+    ]
