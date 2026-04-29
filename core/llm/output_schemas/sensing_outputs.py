@@ -295,6 +295,14 @@ class RadarItemDetail(BaseModel):
             "Leave empty if no hiring signals found in articles."
         ),
     )
+    recommendation: str = Field(
+        default="",
+        description=(
+            "1-2 sentence actionable recommendation for technology leaders "
+            "regarding this technology. What should they evaluate, adopt, "
+            "pilot, or monitor? Be specific and grounded in the evidence."
+        ),
+    )
 
 
 class TrendingVideoItem(BaseModel):
@@ -392,6 +400,14 @@ class TopEvent(BaseModel):
     source_urls: List[str] = Field(
         default_factory=list,
         description="URLs of articles reporting this event.",
+    )
+    recommendation: str = Field(
+        default="",
+        description=(
+            "1-2 sentence actionable recommendation for technology leaders "
+            "based on this event. What should they do, evaluate, or watch? "
+            "Leave empty only if no actionable takeaway is possible."
+        ),
     )
 
 

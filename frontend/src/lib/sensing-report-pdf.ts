@@ -530,6 +530,10 @@ function buildSensingPdf(data: SensingReportData): TDocumentDefinitions {
                     { text: 'Strategic Intent:', fontSize: 8, bold: true, color: colors.slate600, margin: [18, 3, 0, 1] as any },
                     { text: sanitize(event.strategic_intent), fontSize: 8, color: colors.slate600, margin: [18, 0, 0, 0] as any },
                 ] : []),
+                ...((event as any).recommendation ? [
+                    { text: 'Recommendation:', fontSize: 8, bold: true, color: '#4338CA', margin: [18, 3, 0, 1] as any },
+                    { text: sanitize((event as any).recommendation), fontSize: 8, color: '#4338CA', italics: true, margin: [18, 0, 0, 0] as any },
+                ] : []),
                 ...sourceUrlsBlock(event.source_urls),
             ]));
         }
@@ -659,6 +663,10 @@ function buildSensingPdf(data: SensingReportData): TDocumentDefinitions {
                 ...((item as any).quantitative_highlights?.length > 0 ? [
                     { text: 'Key Numbers & Metrics', fontSize: 9, bold: true, color: '#92400E', margin: [0, 4, 0, 1] as any },
                     { ul: (item as any).quantitative_highlights.map((q: string) => ({ text: sanitize(q), fontSize: 8, color: colors.slate600 })), margin: [0, 0, 0, 0] as any },
+                ] : []),
+                ...((item as any).recommendation ? [
+                    { text: 'Recommendation', fontSize: 9, bold: true, color: '#4338CA', margin: [0, 4, 0, 1] as any },
+                    { text: sanitize((item as any).recommendation), fontSize: 9, color: '#4338CA', italics: true, margin: [0, 0, 0, 0] as any },
                 ] : []),
                 ...sourceUrlsBlock(item.source_urls),
             ], '#A7F3D0'));
@@ -896,6 +904,9 @@ function buildBoardPdf(data: SensingReportData): TDocumentDefinitions {
             content.push(card([
                 { text: sanitize((event as SensingTopEvent).headline), fontSize: 9, color: colors.slate800 },
                 pill((event as SensingTopEvent).actor, { bg: '#DBEAFE', text: '#1E40AF' }),
+                ...((event as any).recommendation ? [
+                    { text: sanitize((event as any).recommendation), fontSize: 8, color: '#4338CA', italics: true, margin: [0, 2, 0, 0] as any },
+                ] : []),
             ]));
         }
     }

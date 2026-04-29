@@ -273,6 +273,15 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                         <p className="text-sm text-muted-foreground">{event.strategic_intent}</p>
                       </div>
                     )}
+                    {event.recommendation && (
+                      <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-3 flex items-start gap-2">
+                        <Lightbulb className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                        <div>
+                          <h5 className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 mb-0.5">Recommendation</h5>
+                          <p className="text-sm text-muted-foreground">{event.recommendation}</p>
+                        </div>
+                      </div>
+                    )}
                     {event.related_technologies?.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         <span className="text-xs font-medium text-muted-foreground">Related:</span>
@@ -706,6 +715,17 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                               Hiring Indicators
                             </h5>
                             <p className="text-xs text-muted-foreground">{item.hiring_indicators}</p>
+                          </div>
+                        </div>
+                      )}
+                      {item.recommendation && (
+                        <div className="flex items-start gap-2 p-2.5 rounded bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/50 dark:border-indigo-800/30">
+                          <Lightbulb className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                          <div>
+                            <h5 className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 mb-0.5">
+                              Recommendation
+                            </h5>
+                            <p className="text-xs text-muted-foreground">{item.recommendation}</p>
                           </div>
                         </div>
                       )}

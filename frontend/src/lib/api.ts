@@ -83,6 +83,7 @@ export interface SensingRadarItemDetail {
   quantitative_highlights?: string[];
   source_urls?: string[];
   hiring_indicators?: string;
+  recommendation?: string;
 }
 
 export interface SensingHeadlineMove {
@@ -111,6 +112,7 @@ export interface SensingTopEvent {
   segment: string;
   related_technologies: string[];
   source_urls: string[];
+  recommendation?: string;
 }
 
 export interface SensingBlindSpot {
