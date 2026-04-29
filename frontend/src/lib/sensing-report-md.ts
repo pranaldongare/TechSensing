@@ -90,6 +90,8 @@ function renderUpdate(u: KeyCompanyUpdate, idx: number): string {
   if (u.date) pills.push(u.date);
   if (u.domain) pills.push(u.domain);
   if (u.diff?.status) pills.push(`_${u.diff.status}_`);
+  if (u.impact) pills.push(`${u.impact} impact`);
+  if (u.strategic_intent) pills.push(u.strategic_intent.replace('_', ' '));
   if (u.sentiment && u.sentiment !== 'neutral') pills.push(u.sentiment);
   const meta = pills.length ? ` _(${pills.join(' · ')})_` : '';
   const headline = u.source_url
@@ -179,6 +181,54 @@ export function renderKeyCompaniesMarkdown(
           blockquote(report.cross_company_summary),
       ),
     );
+  }
+
+  if ((report as any).topic_highlights?.length) {
+    const ths = (report as any).topic_highlights as { topic: string; update: string }[];
+    out.push(
+      section(
+        heading(3, 'At a Glance') +
+          '\n\n' +
+          ths.map((th) => bullet(`**${th.topic}** — ${th.update}`)).join('\n'),
+      ),
+    );
+  }
+
+  const cm = (report as any).competitive_matrix;
+  if (cm?.domain_grid?.length || cm?.head_to_head?.length) {
+    out.push(heading(2, 'Competitive Landscape') + '\n\n');
+    if (cm.domain_grid?.length) {
+      out.push(
+        section(
+          heading(3, 'Domain Activity Grid') +
+            '\n\n' +
+            table(
+              ['Domain', 'Active Companies', 'Leader', 'Summary'],
+              cm.domain_grid.map((d: any) => [
+                d.domain,
+                (d.active_companies || []).join(', '),
+                d.leader || '',
+                d.summary || '',
+              ]),
+            ),
+        ),
+      );
+    }
+    if (cm.head_to_head?.length) {
+      out.push(
+        section(
+          heading(3, 'Head-to-Head') +
+            '\n\n' +
+            cm.head_to_head
+              .map(
+                (p: any) =>
+                  `**${p.company_a} vs ${p.company_b}** _(${p.domain})_\n\n${p.comparison}` +
+                  (p.edge ? `\n\n_Edge: ${p.edge}_` : ''),
+              )
+              .join('\n\n---\n\n'),
+        ),
+      );
+    }
   }
 
   if (report.domain_rollup?.length) {

@@ -21,6 +21,7 @@ import type {
   KeyCompaniesHistoryItem,
   KeyCompanyBriefing,
   KeyCompanyUpdate,
+  CompetitiveMatrix,
 } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
@@ -48,7 +49,7 @@ import {
   downloadKeyCompaniesXls,
 } from '@/lib/sensing-report-csv';
 import { downloadKeyCompaniesMarkdown } from '@/lib/sensing-report-md';
-import { FileCode, Globe, Search } from 'lucide-react';
+import { FileCode, Globe, Search, Target, TrendingUp, Swords, Shield, Zap } from 'lucide-react';
 import FollowUpDialog from '@/components/FollowUpDialog';
 import HiringSignalsPanel from '@/components/HiringSignalsPanel';
 
@@ -578,6 +579,19 @@ const KeyCompaniesView: React.FC = () => {
                   No cross-company summary generated.
                 </p>
               )}
+              {report.topic_highlights && report.topic_highlights.length > 0 && (
+                <div className="not-prose mt-4 pt-3 border-t">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">At a Glance</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {report.topic_highlights.map((th, idx) => (
+                      <div key={idx} className="flex items-start gap-2 p-2 rounded-md bg-blue-50/50 dark:bg-blue-950/20">
+                        <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{th.topic}</Badge>
+                        <span className="text-xs text-muted-foreground leading-relaxed">{th.update}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -586,6 +600,11 @@ const KeyCompaniesView: React.FC = () => {
 
           {/* Cross-domain rollup (#29) */}
           <CrossDomainRollup rollup={report.domain_rollup} />
+
+          {/* Competitive matrix */}
+          {report.competitive_matrix && (
+            <CompetitiveMatrixView matrix={report.competitive_matrix} />
+          )}
 
           {/* Per-company briefings */}
           <div className="space-y-3">
@@ -736,6 +755,25 @@ const UpdateRow: React.FC<{ update: KeyCompanyUpdate; company?: string }> = ({
           </Badge>
         )}
         <SentimentBadge sentiment={update.sentiment} compact />
+        {update.impact && (
+          <Badge
+            variant="outline"
+            className={`text-[10px] ${
+              update.impact === 'high'
+                ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-800/40'
+                : update.impact === 'medium'
+                  ? 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-300 dark:border-yellow-800/40'
+                  : 'bg-slate-50 text-slate-600 border-slate-200 dark:bg-slate-900/30 dark:text-slate-400 dark:border-slate-700/40'
+            }`}
+          >
+            {update.impact === 'high' ? 'High Impact' : update.impact === 'medium' ? 'Med Impact' : 'Low Impact'}
+          </Badge>
+        )}
+        {update.strategic_intent && (
+          <Badge variant="outline" className="text-[10px] bg-violet-50/50 text-violet-700 border-violet-200 dark:bg-violet-950/20 dark:text-violet-300 dark:border-violet-800/30">
+            {update.strategic_intent.replace('_', ' ')}
+          </Badge>
+        )}
         <DiffChip diff={update.diff} />
 
         <DropdownMenu>
@@ -802,6 +840,94 @@ const UpdateRow: React.FC<{ update: KeyCompanyUpdate; company?: string }> = ({
         />
       </div>
     </div>
+  );
+};
+
+const INTENT_ICONS: Record<string, React.ReactNode> = {
+  offensive: <Swords className="w-3 h-3" />,
+  defensive: <Shield className="w-3 h-3" />,
+  expansion: <TrendingUp className="w-3 h-3" />,
+  ecosystem_building: <Zap className="w-3 h-3" />,
+};
+
+const CompetitiveMatrixView: React.FC<{ matrix: CompetitiveMatrix }> = ({ matrix }) => {
+  const hasDomainGrid = matrix.domain_grid && matrix.domain_grid.length > 0;
+  const hasH2H = matrix.head_to_head && matrix.head_to_head.length > 0;
+
+  if (!hasDomainGrid && !hasH2H) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Target className="w-4 h-4 text-primary" />
+          Competitive Landscape
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {hasDomainGrid && (
+          <div>
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Domain Activity Grid</h4>
+            <div className="border rounded-md overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-muted/50 border-b">
+                    <th className="text-left p-2 font-semibold">Domain</th>
+                    <th className="text-left p-2 font-semibold">Active Companies</th>
+                    <th className="text-left p-2 font-semibold">Leader</th>
+                    <th className="text-left p-2 font-semibold">Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {matrix.domain_grid.map((entry, idx) => (
+                    <tr key={idx} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="p-2 font-medium whitespace-nowrap">{entry.domain}</td>
+                      <td className="p-2">
+                        <div className="flex flex-wrap gap-1">
+                          {entry.active_companies.map((c) => (
+                            <Badge key={c} variant="outline" className="text-[10px] py-0">{c}</Badge>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="p-2">
+                        {entry.leader && (
+                          <Badge variant="secondary" className="text-[10px]">{entry.leader}</Badge>
+                        )}
+                      </td>
+                      <td className="p-2 text-muted-foreground">{entry.summary}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {hasH2H && (
+          <div>
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Head-to-Head Comparisons</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {matrix.head_to_head.map((pair, idx) => (
+                <div key={idx} className="border rounded-md p-3 space-y-1.5">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="font-semibold">{pair.company_a}</span>
+                    <span className="text-muted-foreground text-xs">vs</span>
+                    <span className="font-semibold">{pair.company_b}</span>
+                    <Badge variant="outline" className="text-[10px] ml-auto">{pair.domain}</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{pair.comparison}</p>
+                  {pair.edge && (
+                    <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                      Edge: {pair.edge}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 };
 

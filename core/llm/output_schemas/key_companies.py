@@ -82,6 +82,22 @@ class CompanyUpdate(BaseModel):
             "the articles — do NOT fabricate."
         ),
     )
+    strategic_intent: str = Field(
+        default="",
+        description=(
+            "The company's likely strategic intent behind this move. "
+            "One of: 'defensive', 'offensive', 'expansion', 'cost_optimization', "
+            "'ecosystem_building', 'talent', or empty if unclear."
+        ),
+    )
+    impact: str = Field(
+        default="",
+        description=(
+            "Estimated business impact: 'high', 'medium', or 'low'. "
+            "High = market-shifting or >$1B scale. Medium = meaningful "
+            "competitive move. Low = incremental or niche."
+        ),
+    )
     source_url: str = Field(
         default="",
         description="URL of the article supporting this update.",
@@ -156,6 +172,74 @@ class CompanyBriefing(LLMOutputBase):
     )
 
 
+class KeyCompanyTopicHighlight(BaseModel):
+    """A single at-a-glance topic highlight for the cross-company summary."""
+
+    topic: str = Field(
+        description="Short topic label (2-4 words), e.g. 'Agentic AI', 'Chip Wars'."
+    )
+    update: str = Field(
+        description=(
+            "1-2 sentence summary of the key development across companies "
+            "for this topic during the briefing period."
+        ),
+    )
+
+
+class CompetitiveDomainEntry(BaseModel):
+    """One row in the domain-centric competitive grid."""
+
+    domain: str = Field(
+        description="Technology domain, e.g. 'Generative AI', 'Cloud Infrastructure'."
+    )
+    active_companies: List[str] = Field(
+        default_factory=list,
+        description="Companies active in this domain during the briefing period.",
+    )
+    leader: str = Field(
+        default="",
+        description="Company with the strongest position or most impactful move in this domain.",
+    )
+    summary: str = Field(
+        default="",
+        description="1-sentence summary of competitive dynamics in this domain.",
+    )
+
+
+class HeadToHeadPair(BaseModel):
+    """Direct competitive comparison between two companies in an overlapping domain."""
+
+    company_a: str = Field(description="First company.")
+    company_b: str = Field(description="Second company.")
+    domain: str = Field(description="The overlapping domain where they compete.")
+    comparison: str = Field(
+        description=(
+            "2-3 sentence comparison of how these companies are competing "
+            "or differentiating in this domain."
+        ),
+    )
+    edge: str = Field(
+        default="",
+        description="Which company has the edge, if any. Empty if too close to call.",
+    )
+
+
+class CompetitiveMatrix(BaseModel):
+    """Combined competitive intelligence: domain grid + head-to-head pairs."""
+
+    domain_grid: List[CompetitiveDomainEntry] = Field(
+        default_factory=list,
+        description="Domain-centric grid showing which companies are active where.",
+    )
+    head_to_head: List[HeadToHeadPair] = Field(
+        default_factory=list,
+        description=(
+            "Head-to-head comparisons for the most important overlapping "
+            "domains (2-5 pairs)."
+        ),
+    )
+
+
 class KeyCompaniesReport(LLMOutputBase):
     """Full weekly briefing across all requested companies."""
 
@@ -187,6 +271,20 @@ class KeyCompaniesReport(LLMOutputBase):
             "Markdown summary (4-6 sentences) highlighting the week's most "
             "important moves across all analyzed companies, divergent "
             "strategies, and any notable cross-company themes."
+        ),
+    )
+    topic_highlights: List[KeyCompanyTopicHighlight] = Field(
+        default_factory=list,
+        description=(
+            "4-8 at-a-glance topic highlights summarizing the most "
+            "important themes across all companies this week."
+        ),
+    )
+    competitive_matrix: CompetitiveMatrix = Field(
+        default_factory=CompetitiveMatrix,
+        description=(
+            "Competitive intelligence: domain grid showing which companies "
+            "are active in which domains, plus head-to-head comparisons."
         ),
     )
     briefings: List[CompanyBriefing] = Field(

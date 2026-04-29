@@ -271,6 +271,25 @@ function briefingBlock(b: KeyCompanyBriefing): Content {
                 }),
               ]
             : []),
+          ...((u as any).impact
+            ? [
+                pill(
+                  (u as any).impact === 'high'
+                    ? 'High Impact'
+                    : (u as any).impact === 'medium'
+                      ? 'Med Impact'
+                      : 'Low Impact',
+                  (u as any).impact === 'high'
+                    ? { bg: '#FEE2E2', text: '#991B1B' }
+                    : (u as any).impact === 'medium'
+                      ? { bg: '#FEF3C7', text: '#92400E' }
+                      : colors.meta,
+                ),
+              ]
+            : []),
+          ...((u as any).strategic_intent
+            ? [pill((u as any).strategic_intent.replace('_', ' '), { bg: '#EDE9FE', text: '#6D28D9' })]
+            : []),
         ],
         columnGap: 4,
         margin: [0, 2, 0, 2],
@@ -355,6 +374,41 @@ function buildKeyCompaniesPdf(
     });
   }
 
+  // Topic highlights (at a glance)
+  if (report.topic_highlights && report.topic_highlights.length > 0) {
+    content.push({
+      text: 'AT A GLANCE',
+      fontSize: 9,
+      bold: true,
+      color: colors.slate600,
+      margin: [0, 0, 0, 4],
+    });
+    const hlRows = report.topic_highlights.map((th) => [
+      {
+        text: sanitize(th.topic),
+        fontSize: 9,
+        bold: true,
+        color: colors.summary.text,
+        fillColor: colors.summary.bg,
+        margin: [4, 3, 4, 3],
+      },
+      {
+        text: sanitize(th.update),
+        fontSize: 9,
+        color: colors.slate600,
+        margin: [4, 3, 4, 3],
+      },
+    ]);
+    content.push({
+      table: {
+        widths: [100, '*'],
+        body: hlRows,
+      },
+      layout: 'lightHorizontalLines',
+      margin: [0, 0, 0, 10],
+    });
+  }
+
   if (report.domain_rollup && report.domain_rollup.length > 0) {
     content.push(sectionHeader('Domain rollup', colors.rollup));
     const total =
@@ -415,6 +469,65 @@ function buildKeyCompaniesPdf(
       layout: 'lightHorizontalLines',
       margin: [0, 0, 0, 10],
     });
+  }
+
+  // Competitive matrix
+  const cm = report.competitive_matrix;
+  if (cm) {
+    const hasDG = cm.domain_grid && cm.domain_grid.length > 0;
+    const hasH2H = cm.head_to_head && cm.head_to_head.length > 0;
+    if (hasDG || hasH2H) {
+      content.push(sectionHeader('Competitive landscape', { bg: '#FEF3C7', text: '#92400E' }));
+    }
+    if (hasDG) {
+      content.push({
+        table: {
+          widths: ['*', '*', 70, '*'],
+          body: [
+            [
+              { text: 'Domain', bold: true, fontSize: 9, color: colors.slate600 },
+              { text: 'Active Companies', bold: true, fontSize: 9, color: colors.slate600 },
+              { text: 'Leader', bold: true, fontSize: 9, color: colors.slate600 },
+              { text: 'Summary', bold: true, fontSize: 9, color: colors.slate600 },
+            ],
+            ...cm.domain_grid.map((d) => [
+              { text: sanitize(d.domain), fontSize: 9, bold: true },
+              { text: (d.active_companies || []).join(', '), fontSize: 8 },
+              { text: sanitize(d.leader), fontSize: 8, bold: true, color: colors.summary.text },
+              { text: sanitize(d.summary), fontSize: 8, color: colors.slate600 },
+            ]),
+          ],
+        },
+        layout: 'lightHorizontalLines',
+        margin: [0, 0, 0, 8],
+      });
+    }
+    if (hasH2H) {
+      content.push({
+        text: 'Head-to-head comparisons',
+        fontSize: 10,
+        bold: true,
+        color: colors.slate600,
+        margin: [0, 4, 0, 4],
+      });
+      cm.head_to_head.forEach((p) => {
+        content.push({
+          columns: [
+            pill(`${p.company_a} vs ${p.company_b}`, colors.header),
+            pill(p.domain, colors.meta),
+            ...(p.edge ? [pill(`Edge: ${p.edge}`, colors.productLaunch)] : []),
+          ],
+          columnGap: 4,
+          margin: [0, 2, 0, 2],
+        });
+        content.push({
+          text: sanitize(p.comparison),
+          fontSize: 9,
+          color: colors.slate600,
+          margin: [0, 0, 0, 6],
+        });
+      });
+    }
   }
 
   content.push(sectionHeader('Per-company briefings', colors.company));

@@ -588,6 +588,8 @@ export interface KeyCompanyUpdate {
   date: string;
   domain: string;
   quantitative_highlights?: string[];
+  strategic_intent?: string;
+  impact?: string;
   source_url: string;
   sentiment?: SentimentLabel;
   evidence?: ClaimEvidence[];
@@ -612,6 +614,31 @@ export interface KeyCompanyBriefing {
   hiring_signals?: HiringSnapshot;
 }
 
+export interface KeyCompanyTopicHighlight {
+  topic: string;
+  update: string;
+}
+
+export interface CompetitiveDomainEntry {
+  domain: string;
+  active_companies: string[];
+  leader: string;
+  summary: string;
+}
+
+export interface HeadToHeadPair {
+  company_a: string;
+  company_b: string;
+  domain: string;
+  comparison: string;
+  edge: string;
+}
+
+export interface CompetitiveMatrix {
+  domain_grid: CompetitiveDomainEntry[];
+  head_to_head: HeadToHeadPair[];
+}
+
 export interface KeyCompaniesReport {
   companies_analyzed: string[];
   highlight_domain: string;
@@ -619,6 +646,8 @@ export interface KeyCompaniesReport {
   period_start: string;
   period_end: string;
   cross_company_summary: string;
+  topic_highlights?: KeyCompanyTopicHighlight[];
+  competitive_matrix?: CompetitiveMatrix;
   briefings: KeyCompanyBriefing[];
   domain_rollup?: DomainRollupEntry[];
   watchlist_id?: string;
