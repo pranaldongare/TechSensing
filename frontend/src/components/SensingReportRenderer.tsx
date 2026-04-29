@@ -207,6 +207,19 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </CardHeader>
           <CardContent className="prose prose-sm dark:prose-invert max-w-none">
             <SafeMarkdownRenderer content={report.executive_summary} />
+            {report.topic_highlights && report.topic_highlights.length > 0 && (
+              <div className="not-prose mt-4 pt-3 border-t">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">At a Glance</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {report.topic_highlights.map((th, idx) => (
+                    <div key={idx} className="flex items-start gap-2 p-2 rounded-md bg-blue-50/50 dark:bg-blue-950/20">
+                      <Badge variant="secondary" className="text-[10px] shrink-0 mt-0.5">{th.topic}</Badge>
+                      <span className="text-xs text-muted-foreground leading-relaxed">{th.update}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

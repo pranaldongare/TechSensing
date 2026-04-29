@@ -469,6 +469,17 @@ class DeepDiveReport(LLMOutputBase):
     )
 
 
+class TopicHighlight(BaseModel):
+    """A brief topic-level update for the executive summary."""
+
+    topic: str = Field(
+        description="Short topic label (2-4 words), e.g. 'Video Generation', 'Agentic AI', 'LLM Efficiency'."
+    )
+    update: str = Field(
+        description="1-2 sentence summary of the most important development in this topic area this week."
+    )
+
+
 class ReportCore(LLMOutputBase):
     """Phase 1 output: executive overview, top events, and key trends."""
 
@@ -483,6 +494,14 @@ class ReportCore(LLMOutputBase):
             "**What Happened** (key facts), **Why It Matters** (strategic implications), "
             "**What To Do** (recommended actions). Use bold, bullets, and separate paragraphs."
         )
+    )
+    topic_highlights: List[TopicHighlight] = Field(
+        default_factory=list,
+        description=(
+            "4-8 quick topic-level updates summarizing the key development in each major "
+            "area covered by the report. Each entry has a short topic label and a 1-2 sentence "
+            "update. These provide a scannable at-a-glance view of what moved this week."
+        ),
     )
     domain: str = Field(description="The domain analyzed.")
     date_range: str = Field(
@@ -747,6 +766,10 @@ class TechSensingReport(LLMOutputBase):
     )
     executive_summary: str = Field(
         description="Executive summary in markdown (200-350 words)."
+    )
+    topic_highlights: List[TopicHighlight] = Field(
+        default_factory=list,
+        description="4-8 quick topic-level updates for at-a-glance scanning.",
     )
     domain: str = Field(description="The domain analyzed (e.g., 'Generative AI').")
     date_range: str = Field(

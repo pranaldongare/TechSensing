@@ -477,10 +477,26 @@ function buildSensingPdf(data: SensingReportData): TDocumentDefinitions {
 
     // Executive Summary — parse markdown for bold, headings, bullets
     content.push(sectionHeader('Executive Summary', colors.executive));
-    content.push(card(
-        markdownToContent(report.executive_summary || '', 10, colors.slate800),
-        '#BFDBFE',
-    ));
+    const execContent = markdownToContent(report.executive_summary || '', 10, colors.slate800);
+    // Append topic highlights if present
+    if ((report as any).topic_highlights?.length > 0) {
+        execContent.push(
+            { text: '', margin: [0, 6, 0, 0] as any },
+            { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 500, y2: 0, lineWidth: 0.5, lineColor: '#93C5FD' }], margin: [0, 0, 0, 6] as any },
+            { text: 'AT A GLANCE', fontSize: 8, bold: true, color: '#6B7280', margin: [0, 0, 0, 4] as any },
+        );
+        for (const th of (report as any).topic_highlights) {
+            execContent.push({
+                columns: [
+                    { text: sanitize(th.topic), fontSize: 8, bold: true, color: colors.executive.text, width: 'auto' },
+                    { text: '  ' + sanitize(th.update), fontSize: 8, color: colors.slate600, width: '*' },
+                ],
+                columnGap: 4,
+                margin: [0, 0, 0, 3],
+            } as any);
+        }
+    }
+    content.push(card(execContent, '#BFDBFE'));
 
     // Top Events (v2) or Headline Moves (legacy)
     if (report.top_events && report.top_events.length > 0) {
@@ -852,10 +868,24 @@ function buildBoardPdf(data: SensingReportData): TDocumentDefinitions {
             ? report.executive_summary.slice(0, 800) + '...'
             : report.executive_summary;
         content.push(sectionHeader('Executive Summary', colors.executive));
-        content.push(card(
-            markdownToContent(summary, 9, colors.slate800),
-            '#BFDBFE',
-        ));
+        const boardExecContent = markdownToContent(summary, 9, colors.slate800);
+        if ((report as any).topic_highlights?.length > 0) {
+            boardExecContent.push(
+                { text: '', margin: [0, 4, 0, 0] as any },
+                { text: 'AT A GLANCE', fontSize: 7, bold: true, color: '#6B7280', margin: [0, 0, 0, 3] as any },
+            );
+            for (const th of (report as any).topic_highlights) {
+                boardExecContent.push({
+                    columns: [
+                        { text: sanitize(th.topic), fontSize: 7, bold: true, color: colors.executive.text, width: 'auto' },
+                        { text: '  ' + sanitize(th.update), fontSize: 7, color: colors.slate600, width: '*' },
+                    ],
+                    columnGap: 4,
+                    margin: [0, 0, 0, 2],
+                } as any);
+            }
+        }
+        content.push(card(boardExecContent, '#BFDBFE'));
     }
 
     // Top 5 Events (headline + actor only)

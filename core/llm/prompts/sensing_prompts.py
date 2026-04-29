@@ -310,6 +310,11 @@ def sensing_report_core_prompt(
                 "Use markdown formatting: bold (**term**) for key technologies, "
                 "bullet points for highlights, and separate paragraphs. "
                 "Do NOT write it as a single wall of text.\n\n"
+                "- Topic highlights: 4-8 quick at-a-glance updates, one per major topic area covered. "
+                "Each has a short topic label (2-4 words like 'Video Generation', 'Agentic AI', "
+                "'LLM Efficiency', 'AI Safety') and a 1-2 sentence summary of the key development. "
+                "These should be scannable — a reader should understand what moved this week "
+                "just from the topic highlights alone.\n\n"
                 "- Key trends: identify 5-10 major trends with supporting evidence from the articles. "
                 "Each trend should have a clear description of WHY it matters.\n\n"
                 "GROUNDING AND CITATION RULES:\n"
@@ -332,9 +337,9 @@ def sensing_report_core_prompt(
                 f"DATE RANGE: {date_range}\n"
                 f"DOMAIN: {domain}\n\n"
                 f"CLASSIFIED ARTICLES:\n\n{classified_articles_json}\n\n"
-                "Generate the report core: report_title, bottom_line, executive_summary, domain, "
-                "date_range, total_articles_analyzed, top_events, key_trends. "
-                "Return ONLY valid JSON."
+                "Generate the report core: report_title, bottom_line, executive_summary, "
+                "topic_highlights, domain, date_range, total_articles_analyzed, top_events, "
+                "key_trends. Return ONLY valid JSON."
             ),
         },
     ]

@@ -203,6 +203,7 @@ export interface SensingReport {
   report_title: string;
   bottom_line?: string;
   executive_summary: string;
+  topic_highlights?: { topic: string; update: string }[];
   domain: string;
   date_range: string;
   total_articles_analyzed: number;
