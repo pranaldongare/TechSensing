@@ -13,7 +13,7 @@ import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
-  TopicPreferences, ModelRelease, WeakSignal, Annotation,
+  TopicPreferences, ModelRelease, Annotation,
 } from '@/lib/api';
 import SensingRelationshipGraph from '@/components/SensingRelationshipGraph';
 
@@ -125,7 +125,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
   const [expandedEvents, setExpandedEvents] = useState<Set<number>>(new Set());
   const [editingAnnotation, setEditingAnnotation] = useState<string | null>(null);
   const [annotationDraft, setAnnotationDraft] = useState('');
-  const [showEarlySignals, setShowEarlySignals] = useState(false);
+
   const [showRelationships, setShowRelationships] = useState(false);
   const [showProvenance, setShowProvenance] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -940,54 +940,6 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                 </div>
               ))}
             </CardContent>
-          </Card>
-        )}
-
-        {/* Early Signals (Weak Signals) */}
-        {report.weak_signals && report.weak_signals.length > 0 && (
-          <Card className="border-l-4 border-l-violet-500 bg-violet-50/50 dark:bg-violet-950/20">
-            <CardHeader className="pb-2">
-              <button
-                onClick={() => setShowEarlySignals(!showEarlySignals)}
-                className="flex items-center gap-2 w-full text-left"
-              >
-                {showEarlySignals ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Zap className="w-5 h-5 text-violet-600" />
-                  Early Signals ({report.weak_signals.length})
-                </CardTitle>
-              </button>
-              <p className="text-xs text-muted-foreground ml-6">
-                Technologies showing emerging momentum but not yet on the radar.
-              </p>
-            </CardHeader>
-            {showEarlySignals && (
-              <CardContent className="space-y-2">
-                {report.weak_signals.map((ws: WeakSignal, idx: number) => (
-                  <div key={idx} className="flex items-center gap-3 p-3 rounded-lg bg-violet-100/50 dark:bg-violet-900/20">
-                    <div className="flex-1 min-w-0">
-                      <h5 className="text-sm font-medium">{ws.technology_name}</h5>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        <Badge variant="secondary" className="text-[10px]">
-                          DVI: {ws.dvi_score.toFixed(1)}
-                        </Badge>
-                        <Badge variant="secondary" className="text-[10px]">
-                          Strength: {ws.current_strength.toFixed(2)}
-                        </Badge>
-                        {ws.acceleration_rate > 2 && (
-                          <Badge className="text-[10px] bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">
-                            {ws.acceleration_rate.toFixed(1)}x accelerating
-                          </Badge>
-                        )}
-                        <span className="text-[10px] text-muted-foreground">
-                          First seen: {new Date(ws.first_seen).toLocaleDateString()} · {ws.run_count} runs
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            )}
           </Card>
         )}
 
