@@ -72,6 +72,16 @@ class CompanyUpdate(BaseModel):
             "if not applicable."
         ),
     )
+    quantitative_highlights: List[str] = Field(
+        default_factory=list,
+        description=(
+            "1-3 specific quantitative facts from the article — revenue figures, "
+            "funding amounts, benchmark scores, user/customer counts, performance "
+            "metrics, market share numbers, growth percentages. Each item must cite "
+            "the number and its context. Only include numbers explicitly stated in "
+            "the articles — do NOT fabricate."
+        ),
+    )
     source_url: str = Field(
         default="",
         description="URL of the article supporting this update.",

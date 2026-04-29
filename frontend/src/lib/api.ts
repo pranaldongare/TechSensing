@@ -587,6 +587,7 @@ export interface KeyCompanyUpdate {
   summary: string;
   date: string;
   domain: string;
+  quantitative_highlights?: string[];
   source_url: string;
   sentiment?: SentimentLabel;
   evidence?: ClaimEvidence[];

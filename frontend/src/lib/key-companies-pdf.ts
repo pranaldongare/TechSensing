@@ -287,7 +287,17 @@ function briefingBlock(b: KeyCompanyBriefing): Content {
           text: sanitize(u.summary),
           fontSize: 9,
           color: colors.slate600,
-          margin: [0, 0, 0, 4],
+          margin: [0, 0, 0, (u as any).quantitative_highlights?.length > 0 ? 2 : 4],
+        });
+      }
+      if ((u as any).quantitative_highlights?.length > 0) {
+        stack.push({
+          ul: (u as any).quantitative_highlights.map((q: string) => ({
+            text: sanitize(q),
+            fontSize: 8,
+            color: '#92400E',
+          })),
+          margin: [6, 0, 0, 4],
         });
       }
     });

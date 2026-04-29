@@ -779,6 +779,16 @@ const UpdateRow: React.FC<{ update: KeyCompanyUpdate; company?: string }> = ({
           <SafeMarkdownRenderer content={update.summary} />
         </div>
       )}
+      {update.quantitative_highlights && update.quantitative_highlights.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {update.quantitative_highlights.map((q, i) => (
+            <span key={i} className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/20 text-amber-800 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/30">
+              <span className="font-bold">#</span>
+              {q}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-3 pt-1">
         <SourceEvidencePanel
           evidence={update.evidence}
