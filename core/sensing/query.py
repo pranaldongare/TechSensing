@@ -31,10 +31,10 @@ _OLLAMA_TIMEOUT = 120.0  # seconds
 class QueryAnswer(LLMOutputBase):
     """LLM-generated answer to a natural language query."""
 
-    answer: str  # markdown answer
-    sources: List[str]  # report IDs used
-    technologies_mentioned: List[str]  # radar item names referenced
-    confidence: str  # "high", "medium", "low"
+    answer: str = ""                          # markdown answer
+    sources: List[str] = []                   # report IDs used
+    technologies_mentioned: List[str] = []    # radar item names referenced
+    confidence: str = "low"                   # "high", "medium", "low"
 
 
 async def _call_ollama_raw(prompt: str, model: str, port: int) -> str:
@@ -243,41 +243,28 @@ async def query_reports(
 
     prompt = (
         "You are a technology intelligence analyst. Answer the user's question "
-        "using ONLY the report data provided below. Be specific, cite report dates "
-        "and generation timestamps, and mention specific technologies by name. "
-        "Include details from radar items, key trends, market signals, and "
-        "recommendations where relevant. If the data contains relevant information, "
-        "provide a thorough answer.\n\n"
-        "ANSWER FORMATTING — the 'answer' field MUST be Markdown:\n"
-        "- Open with a 1-2 sentence direct response (no heading), citing the "
-        "report date range and generation timestamp.\n"
-        "- Then use short ## section headings to organize the body when there "
-        "are multiple distinct points (e.g., ## Key Alternatives, ## Trade-offs, "
-        "## Recommendations). Skip headings if the answer is short.\n"
-        "- Use bullet lists ('- ') when listing 3+ items (technologies, "
-        "alternatives, recommendations).\n"
-        "- For each technology mentioned in a list item, lead with the name in "
-        "**bold** followed by an em-dash and the key facts/metrics. Example: "
-        "'- **FastDMS** — learned token eviction, 6.4x compression, "
-        "outperforms BF16/FP8 baselines'.\n"
-        "- Use Markdown newlines (\\n\\n between paragraphs/lists, \\n inside "
-        "lists). Inside the JSON string, write them as the escaped sequences "
-        "\\n and \\n\\n — do not embed raw newlines.\n"
-        "- Keep prose tight. Prefer scannable structure over long paragraphs.\n\n"
+        "using ONLY the report data provided below. Be specific, cite report dates, "
+        "and mention specific technologies by name.\n\n"
+        "Format the 'answer' field as Markdown:\n"
+        "- Start with a 1-2 sentence direct response, citing the report date range.\n"
+        "- For lists of 3+ items, use bullet points starting with '- '.\n"
+        "- For each technology in a list, write the name in **bold** followed by "
+        "' — ' and the key facts. Example: '- **FastDMS** — learned token eviction, "
+        "6.4x compression'.\n"
+        "- Use ## headings only if the answer has multiple distinct sections.\n"
+        "- Keep prose tight and scannable.\n\n"
         f"REPORT DATA:\n{context_json}\n\n"
         f"USER QUESTION: {question}\n\n"
-        "Respond with ONLY a JSON object (no commentary, no markdown fences) "
-        "with exactly these four keys:\n"
-        '- "answer": your detailed Markdown answer as a string\n'
-        '- "sources": array of report_id strings you referenced\n'
-        '- "technologies_mentioned": array of technology name strings\n'
-        '- "confidence": one of "high", "medium", or "low"\n\n'
-        "OUTPUT ONLY THE JSON OBJECT. Example:\n"
-        '{"answer": "Based on the April 2026 report...\\n\\n## Key Alternatives\\n'
-        '- **TechA** — fact 1, metric 2\\n- **TechB** — fact 1, metric 2", '
-        '"sources": ["abc-123"], '
-        '"technologies_mentioned": ["TechA", "TechB"], '
-        '"confidence": "high"}\n\n'
+        "Output a single JSON object with these four keys:\n"
+        '  "answer" (Markdown string), "sources" (array of report_id strings), '
+        '"technologies_mentioned" (array of strings), "confidence" ("high"/"medium"/"low").\n'
+        "Inside the JSON string for 'answer', escape every newline as the two-character "
+        "sequence \\n. Do NOT include literal line breaks inside any string.\n"
+        "Output ONLY the JSON — no markdown fences, no commentary.\n\n"
+        "Example:\n"
+        '{"answer": "Based on the April 2026 report...\\n\\n- **TechA** — fact 1\\n'
+        '- **TechB** — fact 2", "sources": ["abc-123"], '
+        '"technologies_mentioned": ["TechA", "TechB"], "confidence": "high"}\n\n'
         "YOUR JSON RESPONSE:"
     )
 
@@ -285,28 +272,66 @@ async def query_reports(
     port = GPU_SENSING_CLASSIFY_LLM.port
     max_attempts = 3
 
+    last_error: Optional[str] = None
+    last_raw: str = ""
     for attempt in range(1, max_attempts + 1):
+        raw_output = ""
         try:
             raw_output = await _call_ollama_raw(prompt, model, port)
+            last_raw = raw_output
             logger.info(f"Query LLM attempt {attempt}: got {len(raw_output)} chars")
 
-            parsed = _parse_query_json(raw_output)
+            if not raw_output.strip():
+                last_error = "LLM returned empty response"
+                logger.error(f"Query attempt {attempt} failed: {last_error}")
+                continue
 
-            # Detect and reject schema echo
-            if _is_schema_echo(parsed):
-                logger.warning(
-                    f"Query attempt {attempt}: LLM echoed schema instead of data, retrying"
+            try:
+                parsed = _parse_query_json(raw_output)
+            except Exception as parse_err:
+                last_error = f"JSON parse failed: {parse_err}"
+                logger.error(
+                    f"Query attempt {attempt} parse failed: {parse_err}\n"
+                    f"  raw output (first 500 chars): {raw_output[:500]!r}"
                 )
                 continue
 
-            return QueryAnswer.model_validate(parsed)
+            # Detect and reject schema echo
+            if _is_schema_echo(parsed):
+                last_error = "LLM echoed schema instead of data"
+                logger.error(
+                    f"Query attempt {attempt}: schema echo detected\n"
+                    f"  parsed keys: {list(parsed.keys())}"
+                )
+                continue
+
+            try:
+                return QueryAnswer.model_validate(parsed)
+            except Exception as val_err:
+                last_error = f"Schema validation failed: {val_err}"
+                logger.error(
+                    f"Query attempt {attempt} validation failed: {val_err}\n"
+                    f"  parsed keys: {list(parsed.keys())}\n"
+                    f"  raw output (first 500 chars): {raw_output[:500]!r}"
+                )
+                continue
 
         except Exception as e:
-            logger.warning(f"Query attempt {attempt} failed: {e}")
+            last_error = f"{type(e).__name__}: {e}"
+            logger.error(
+                f"Query attempt {attempt} failed: {last_error}\n"
+                f"  raw output (first 500 chars): {raw_output[:500]!r}"
+            )
 
-    logger.error(f"All {max_attempts} query attempts failed")
+    logger.error(
+        f"All {max_attempts} query attempts failed. Last error: {last_error}\n"
+        f"  Final raw output (first 1000 chars): {last_raw[:1000]!r}"
+    )
     return QueryAnswer(
-        answer="Sorry, I encountered an error processing your question. Please try again.",
+        answer=(
+            "Sorry, I encountered an error processing your question. "
+            f"Last error: {last_error or 'unknown'}"
+        ),
         sources=[c["report_id"] for c in report_contexts],
         technologies_mentioned=[],
         confidence="low",
