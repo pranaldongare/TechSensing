@@ -44,6 +44,7 @@ import type { SensingReportData, SensingHistoryItem, SensingSchedule, OrgTechCon
 import { useAuth } from '@/lib/auth-context';
 import { API_URL } from '../../config';
 import SensingReportRenderer from '@/components/SensingReportRenderer';
+import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
 import SensingDeepDive from '@/components/SensingDeepDive';
 import CompanyAnalysisView from '@/components/CompanyAnalysisView';
 import CompanyWatchlistManager from '@/components/CompanyWatchlistManager';
@@ -771,12 +772,17 @@ const TechSensing: React.FC = () => {
               </span>
             </div>
             {queryAnswer && (
-              <Card className="border-l-4 border-l-blue-500 p-3">
-                <div className="text-sm prose prose-sm max-w-none dark:prose-invert">{queryAnswer.answer}</div>
-                <div className="flex gap-2 mt-2 flex-wrap">
+              <Card className="border-l-4 border-l-blue-500 p-4">
+                <div className="text-sm prose prose-sm max-w-none dark:prose-invert prose-headings:mt-3 prose-headings:mb-1.5 prose-h2:text-base prose-h2:font-semibold prose-h3:text-sm prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5">
+                  <SafeMarkdownRenderer content={queryAnswer.answer} />
+                </div>
+                <div className="flex gap-2 mt-3 pt-3 border-t flex-wrap items-center">
                   <Badge variant={queryAnswer.confidence === 'high' ? 'default' : queryAnswer.confidence === 'medium' ? 'secondary' : 'destructive'}>
                     {queryAnswer.confidence} confidence
                   </Badge>
+                  {queryAnswer.technologies_mentioned.length > 0 && (
+                    <span className="text-xs text-muted-foreground">Technologies:</span>
+                  )}
                   {queryAnswer.technologies_mentioned.map((t) => (
                     <Badge key={t} variant="outline" className="text-xs">{t}</Badge>
                   ))}

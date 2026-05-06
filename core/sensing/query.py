@@ -248,18 +248,35 @@ async def query_reports(
         "Include details from radar items, key trends, market signals, and "
         "recommendations where relevant. If the data contains relevant information, "
         "provide a thorough answer.\n\n"
+        "ANSWER FORMATTING — the 'answer' field MUST be Markdown:\n"
+        "- Open with a 1-2 sentence direct response (no heading), citing the "
+        "report date range and generation timestamp.\n"
+        "- Then use short ## section headings to organize the body when there "
+        "are multiple distinct points (e.g., ## Key Alternatives, ## Trade-offs, "
+        "## Recommendations). Skip headings if the answer is short.\n"
+        "- Use bullet lists ('- ') when listing 3+ items (technologies, "
+        "alternatives, recommendations).\n"
+        "- For each technology mentioned in a list item, lead with the name in "
+        "**bold** followed by an em-dash and the key facts/metrics. Example: "
+        "'- **FastDMS** — learned token eviction, 6.4x compression, "
+        "outperforms BF16/FP8 baselines'.\n"
+        "- Use Markdown newlines (\\n\\n between paragraphs/lists, \\n inside "
+        "lists). Inside the JSON string, write them as the escaped sequences "
+        "\\n and \\n\\n — do not embed raw newlines.\n"
+        "- Keep prose tight. Prefer scannable structure over long paragraphs.\n\n"
         f"REPORT DATA:\n{context_json}\n\n"
         f"USER QUESTION: {question}\n\n"
         "Respond with ONLY a JSON object (no commentary, no markdown fences) "
         "with exactly these four keys:\n"
-        '- "answer": your detailed answer as a string\n'
+        '- "answer": your detailed Markdown answer as a string\n'
         '- "sources": array of report_id strings you referenced\n'
         '- "technologies_mentioned": array of technology name strings\n'
         '- "confidence": one of "high", "medium", or "low"\n\n'
         "OUTPUT ONLY THE JSON OBJECT. Example:\n"
-        '{"answer": "Based on the report from April 2026...", '
+        '{"answer": "Based on the April 2026 report...\\n\\n## Key Alternatives\\n'
+        '- **TechA** — fact 1, metric 2\\n- **TechB** — fact 1, metric 2", '
         '"sources": ["abc-123"], '
-        '"technologies_mentioned": ["TechA"], '
+        '"technologies_mentioned": ["TechA", "TechB"], '
         '"confidence": "high"}\n\n'
         "YOUR JSON RESPONSE:"
     )
