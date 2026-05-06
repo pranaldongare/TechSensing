@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BarChart3, RefreshCw, ExternalLink, Loader2, ArrowUpDown, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { AILeaderboardData, LeaderboardLLMEntry, LeaderboardMediaEntry } from '@/lib/api';
+import { useStickyState } from '@/lib/useStickyState';
 
 function downloadCsv(filename: string, rows: Record<string, unknown>[], columns: string[]) {
   const header = columns.join(',');
@@ -29,10 +30,16 @@ const LLM_COLS = ['rank', 'model_name', 'organization', 'slug', 'intelligence_in
 const MEDIA_COLS = ['rank', 'model_name', 'organization', 'slug', 'elo', 'release_date'];
 
 const AILeaderboardView: React.FC = () => {
-  const [data, setData] = useState<AILeaderboardData | null>(null);
+  const [sticky, setSticky, stickyFetchedAt] = useStickyState<AILeaderboardData>(
+    'tech_sensing_ai_leaderboard_v1',
+  );
+
+  const [data, setData] = useState<AILeaderboardData | null>(sticky);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastFetched, setLastFetched] = useState<string | null>(null);
+  const [lastFetched, setLastFetched] = useState<string | null>(
+    stickyFetchedAt ? new Date(stickyFetchedAt).toLocaleString() : null,
+  );
   const [activeCategory, setActiveCategory] = useState('llm_quality');
 
   const fetchLeaderboard = useCallback(async () => {
@@ -41,17 +48,23 @@ const AILeaderboardView: React.FC = () => {
     try {
       const result = await api.sensingAILeaderboard();
       setData(result.categories);
-      setLastFetched(new Date().toLocaleTimeString());
+      setLastFetched(new Date().toLocaleString());
+      setSticky(result.categories);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to fetch leaderboard');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setSticky]);
 
+  // First-run auto-fetch: only if no cached data exists.
   useEffect(() => {
-    fetchLeaderboard();
-  }, [fetchLeaderboard]);
+    if (!sticky) {
+      fetchLeaderboard();
+    }
+    // Run once on mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleExportCsv = useCallback(() => {
     if (!data) return;

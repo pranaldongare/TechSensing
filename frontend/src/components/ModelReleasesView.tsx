@@ -6,6 +6,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Cpu, RefreshCw, ExternalLink, Loader2, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ModelRelease } from '@/lib/api';
+import { useStickyState } from '@/lib/useStickyState';
+
+interface StickyReleases {
+  releases: ModelRelease[];
+  lookbackDays: string;
+}
 
 function downloadCsv(filename: string, rows: Record<string, unknown>[], columns: string[]) {
   const header = columns.join(',');
@@ -32,13 +38,27 @@ interface ModelReleasesViewProps {
 }
 
 const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, trackingId }) => {
-  const [releases, setReleases] = useState<ModelRelease[]>(initialReleases || []);
+  // Sticky cache only applies in standalone mode (no report-provided initialReleases).
+  const useSticky = !initialReleases?.length;
+  const [sticky, setSticky, stickyFetchedAt] = useStickyState<StickyReleases>(
+    'tech_sensing_model_releases_v1',
+  );
+
+  // Initialize from initialReleases (report mode) OR sticky cache (standalone mode).
+  const initial: ModelRelease[] = initialReleases?.length
+    ? initialReleases
+    : (useSticky && sticky?.releases) ? sticky.releases : [];
+  const initialLookback = useSticky && sticky?.lookbackDays ? sticky.lookbackDays : '30';
+
+  const [releases, setReleases] = useState<ModelRelease[]>(initial);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lookbackDays, setLookbackDays] = useState('30');
-  const [lastFetched, setLastFetched] = useState<string | null>(
-    initialReleases?.length ? 'from report' : null
-  );
+  const [lookbackDays, setLookbackDays] = useState(initialLookback);
+  const [lastFetched, setLastFetched] = useState<string | null>(() => {
+    if (initialReleases?.length) return 'from report';
+    if (useSticky && stickyFetchedAt) return new Date(stickyFetchedAt).toLocaleString();
+    return null;
+  });
 
   const fetchReleases = useCallback(async () => {
     setLoading(true);
@@ -46,13 +66,16 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
     try {
       const result = await api.sensingModelReleases(parseInt(lookbackDays), trackingId);
       setReleases(result.model_releases);
-      setLastFetched(new Date().toLocaleTimeString());
+      setLastFetched(new Date().toLocaleString());
+      if (useSticky) {
+        setSticky({ releases: result.model_releases, lookbackDays });
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to fetch model releases');
     } finally {
       setLoading(false);
     }
-  }, [lookbackDays, trackingId]);
+  }, [lookbackDays, trackingId, useSticky, setSticky]);
 
   const handleExportCsv = useCallback(() => {
     if (!releases.length) return;
@@ -61,11 +84,12 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
     downloadCsv(`model-releases-${new Date().toISOString().slice(0, 10)}.csv`, releases as Record<string, unknown>[], cols);
   }, [releases]);
 
-  // Auto-fetch on mount when no initial data provided
+  // First-run auto-fetch: only if standalone AND no cached data exists.
   useEffect(() => {
-    if (!initialReleases?.length) {
+    if (useSticky && !sticky && releases.length === 0) {
       fetchReleases();
     }
+    // Run once on mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -115,7 +139,7 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
             className="gap-1.5"
           >
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            {loading ? 'Fetching...' : 'Fetch Releases'}
+            {loading ? 'Refreshing...' : 'Refresh'}
           </Button>
           {releases.length > 0 && (
             <Button size="sm" variant="outline" onClick={handleExportCsv} className="gap-1.5">
@@ -144,7 +168,7 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
           <CardContent className="py-12 text-center">
             <Cpu className="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
             <p className="text-sm text-muted-foreground">
-              Click "Fetch Releases" to get the latest model releases from Artificial Analysis and HuggingFace.
+              Click "Refresh" to get the latest model releases from Artificial Analysis and HuggingFace.
             </p>
           </CardContent>
         </Card>
