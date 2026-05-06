@@ -96,10 +96,24 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
   const sortByDate = (a: ModelRelease, b: ModelRelease) =>
     (b.release_date || '').localeCompare(a.release_date || '');
 
-  const aaReleases = useMemo(
+  const aaAll = useMemo(
     () => releases.filter((r) => r.data_source === 'Artificial Analysis').sort(sortByDate),
     [releases]
   );
+  const aaByModality = useMemo(() => {
+    const buckets: Record<string, ModelRelease[]> = {
+      Text: [],
+      Image: [],
+      Video: [],
+      Speech: [],
+    };
+    for (const r of aaAll) {
+      const m = r.modality || 'Text';
+      if (m in buckets) buckets[m].push(r);
+      else buckets.Text.push(r);
+    }
+    return buckets;
+  }, [aaAll]);
   const hfReleases = useMemo(
     () => releases.filter((r) => r.data_source !== 'Artificial Analysis').sort(sortByDate),
     [releases]
@@ -174,53 +188,54 @@ const ModelReleasesView: React.FC<ModelReleasesViewProps> = ({ initialReleases, 
         </Card>
       )}
 
-      {/* Artificial Analysis Table */}
-      {aaReleases.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              Artificial Analysis
-            </h3>
-            <Badge variant="secondary" className="text-xs">{aaReleases.length}</Badge>
-          </div>
-          <div className="overflow-x-auto border rounded-lg">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="border-b bg-muted/30 text-left">
-                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Model</th>
-                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Organization</th>
-                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Date</th>
-                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Status</th>
-                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Modality</th>
-                  <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Benchmarks & Pricing</th>
-                </tr>
-              </thead>
-              <tbody>
-                {aaReleases.map((mr, idx) => (
-                  <tr key={idx} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
-                    <td className="py-2 px-3 font-medium">
-                      <ModelLink name={mr.model_name} url={mr.source_url} />
-                    </td>
-                    <td className="py-2 px-3 text-muted-foreground">{mr.organization}</td>
-                    <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
-                    <td className="py-2 px-3">
-                      <StatusBadge status={mr.release_status} />
-                    </td>
-                    <td className="py-2 px-3">
-                      {mr.modality && (
-                        <Badge variant="secondary" className="text-xs">{mr.modality}</Badge>
-                      )}
-                    </td>
-                    <td className="py-2 px-3 text-xs text-muted-foreground max-w-md">
-                      {mr.notable_features}
-                    </td>
+      {/* Artificial Analysis — per-modality sections */}
+      {(['Text', 'Image', 'Video', 'Speech'] as const).map((modality) => {
+        const rows = aaByModality[modality];
+        if (!rows || rows.length === 0) return null;
+        const featureLabel = modality === 'Text'
+          ? 'Benchmarks & Pricing'
+          : 'ELO / Rank';
+        return (
+          <div key={modality} className="space-y-2">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                Artificial Analysis — {modality} Models
+              </h3>
+              <Badge variant="secondary" className="text-xs">{rows.length}</Badge>
+            </div>
+            <div className="overflow-x-auto border rounded-lg">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b bg-muted/30 text-left">
+                    <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Model</th>
+                    <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Organization</th>
+                    <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Date</th>
+                    <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">Status</th>
+                    <th className="py-2.5 px-3 font-semibold text-xs text-muted-foreground">{featureLabel}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((mr, idx) => (
+                    <tr key={idx} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                      <td className="py-2 px-3 font-medium">
+                        <ModelLink name={mr.model_name} url={mr.source_url} />
+                      </td>
+                      <td className="py-2 px-3 text-muted-foreground">{mr.organization}</td>
+                      <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{mr.release_date}</td>
+                      <td className="py-2 px-3">
+                        <StatusBadge status={mr.release_status} />
+                      </td>
+                      <td className="py-2 px-3 text-xs text-muted-foreground max-w-md">
+                        {mr.notable_features}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })}
 
       {/* HuggingFace Table */}
       {hfReleases.length > 0 && (

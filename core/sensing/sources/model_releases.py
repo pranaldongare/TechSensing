@@ -321,7 +321,14 @@ async def fetch_artificial_analysis_releases(
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         days=lookback_days
     )
-    releases: list = []
+
+    # Per-modality buckets so max_results applies per category — otherwise
+    # LLMs (typically the largest pool) saturate the cap and starve the
+    # Image/Video/Speech tiers.
+    text_releases: list = []
+    image_releases: list = []
+    video_releases: list = []
+    speech_releases: list = []
 
     # Per-invocation rate-limit flag (mutable list so it can be shared across
     # endpoints without leaking state between requests in a long-running server)
@@ -390,7 +397,7 @@ async def fetch_artificial_analysis_releases(
                     if blended is not None:
                         features_parts.append(f"${blended}/1M tokens")
 
-                releases.append(ModelRelease(
+                text_releases.append(ModelRelease(
                     model_name=name,
                     organization=org,
                     release_date=release_dt.strftime("%Y-%m-%d"),
@@ -407,7 +414,7 @@ async def fetch_artificial_analysis_releases(
 
             logger.info(
                 f"AA LLM filter: {len(models)} total, "
-                f"{len(releases)} passed, "
+                f"{len(text_releases)} passed, "
                 f"{no_date} no_date, {bad_date} bad_date, "
                 f"{old_date} older_than_{lookback_days}d, {no_name} no_name"
             )
@@ -472,7 +479,16 @@ async def fetch_artificial_analysis_releases(
                         if rank is not None:
                             feat_parts.append(f"Rank #{rank}")
 
-                        releases.append(ModelRelease(
+                        # Route to the right per-modality bucket
+                        if modality == "Image":
+                            bucket = image_releases
+                        elif modality == "Video":
+                            bucket = video_releases
+                        elif modality == "Speech":
+                            bucket = speech_releases
+                        else:
+                            bucket = text_releases
+                        bucket.append(ModelRelease(
                             model_name=mm_name,
                             organization=mm_org,
                             release_date=rdt.strftime("%Y-%m-%d"),
@@ -498,8 +514,14 @@ async def fetch_artificial_analysis_releases(
                     logger.warning(f"AA media endpoint {endpoint} failed: {e}")
                     continue
 
+        total = (
+            len(text_releases) + len(image_releases)
+            + len(video_releases) + len(speech_releases)
+        )
         logger.info(
-            f"Artificial Analysis: {len(releases)} models in last {lookback_days} days"
+            f"Artificial Analysis: {total} models in last {lookback_days} days "
+            f"(Text={len(text_releases)}, Image={len(image_releases)}, "
+            f"Video={len(video_releases)}, Speech={len(speech_releases)})"
         )
 
     except httpx.HTTPStatusError as e:
@@ -510,7 +532,22 @@ async def fetch_artificial_analysis_releases(
     except Exception as e:
         logger.warning(f"Artificial Analysis fetch failed: {e}")
 
-    return releases[:max_results]
+    # Sort each bucket by release date desc and cap per modality, so a single
+    # modality can never starve the others.
+    def _sort_key(r):
+        return r.release_date or ""
+
+    text_releases.sort(key=_sort_key, reverse=True)
+    image_releases.sort(key=_sort_key, reverse=True)
+    video_releases.sort(key=_sort_key, reverse=True)
+    speech_releases.sort(key=_sort_key, reverse=True)
+
+    return (
+        text_releases[:max_results]
+        + image_releases[:max_results]
+        + video_releases[:max_results]
+        + speech_releases[:max_results]
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
