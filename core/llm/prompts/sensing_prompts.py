@@ -969,3 +969,170 @@ def onepager_bullets_prompt(
             ),
         },
     ]
+
+
+def model_release_injection_prompt(
+    candidates: list[dict],
+    existing_radar_items: list[dict],
+    existing_top_events: list[dict],
+    existing_section_titles: list[str],
+    executive_summary: str,
+    domain: str,
+    date_range: str,
+) -> list[dict]:
+    """Build a prompt to decide which AA model releases to inject into the
+    report and produce the structured TopEvent/RadarItem/RadarItemDetail
+    payloads for accepted models.
+
+    Each candidate dict has: model_name, organization, release_date,
+    modality, parameters, license, is_open_source, notable_features,
+    source_url, and web_snippets (list of {title, url, snippet}).
+    """
+    from core.llm.output_schemas.sensing_outputs import ModelInjectionOutput
+
+    schema_json = json.dumps(ModelInjectionOutput.model_json_schema(), indent=2)
+
+    candidates_block = ""
+    for i, c in enumerate(candidates):
+        snippets = c.get("web_snippets", []) or []
+        snippets_str = ""
+        for j, s in enumerate(snippets[:5]):
+            snippets_str += (
+                f"    Snippet {j + 1}: {s.get('title', '')}\n"
+                f"      URL: {s.get('url', '')}\n"
+                f"      Excerpt: {s.get('snippet', '')[:300]}\n"
+            )
+        if not snippets_str:
+            snippets_str = "    (no web search results)\n"
+
+        candidates_block += (
+            f"CANDIDATE {i + 1}: {c.get('model_name', '')}\n"
+            f"  Organization: {c.get('organization', '')}\n"
+            f"  Release date: {c.get('release_date', '')}\n"
+            f"  Modality: {c.get('modality', '')}\n"
+            f"  Parameters: {c.get('parameters', '')}\n"
+            f"  License: {c.get('license', '')}\n"
+            f"  Open source: {c.get('is_open_source', '')}\n"
+            f"  Notable features: {c.get('notable_features', '')}\n"
+            f"  AA source URL: {c.get('source_url', '')}\n"
+            f"  Web snippets:\n{snippets_str}\n"
+        )
+
+    radar_block = "\n".join(
+        f"  - {r.get('name', '')} [{r.get('quadrant', '')}/{r.get('ring', '')}]"
+        for r in existing_radar_items
+    ) or "  (none)"
+    events_block = "\n".join(
+        f"  - {e.get('actor', '')}: {e.get('headline', '')}"
+        for e in existing_top_events
+    ) or "  (none)"
+    sections_block = "\n".join(f"  - {t}" for t in existing_section_titles) or "  (none)"
+
+    return [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology intelligence analyst integrating "
+                "fresh AI model release data (from the Artificial Analysis API "
+                "and web search) into an existing technology sensing report.\n\n"
+                f"DOMAIN: {domain}\n"
+                f"DATE RANGE: {date_range}\n\n"
+                "TASK: For each candidate model release below, decide whether "
+                "to INCLUDE or SKIP it, and — for included models — produce "
+                "fully-formed report content (top event, radar item, radar "
+                "item deep dive, and optional executive-summary mention).\n\n"
+                "DECISION RULES:\n"
+                "- BE LIBERAL with inclusion. If the release is a substantive "
+                "model from a credible org and would be informative for a "
+                "technology leader tracking the AI landscape, INCLUDE it.\n"
+                "- SKIP only when:\n"
+                "  (a) the model is already covered by an existing radar item "
+                "or top event below (use case-insensitive name match), OR\n"
+                "  (b) the entry is not a substantive product release (e.g. a "
+                "re-quantization or minor variant of an existing model with "
+                "no new capability).\n"
+                "- Set is_prominent=true ONLY for major foundation-model "
+                "releases from major labs (OpenAI, Anthropic, Google, Meta, "
+                "Mistral, DeepSeek, Alibaba/Qwen, xAI, Cohere, etc.) OR ones "
+                "with clearly headline-grade benchmarks (top-3 on major "
+                "leaderboards) or licensing news (e.g. notable open-weight "
+                "release at frontier scale). Cap prominent count at ~3.\n\n"
+                "FOR EACH INCLUDED MODEL, PRODUCE ALL FOUR OBJECTS:\n\n"
+                "1. top_event:\n"
+                "   - event_type = 'product_launch'\n"
+                "   - headline: 1-2 sentence event description (include model "
+                "name + key capability)\n"
+                "   - actor: the organization\n"
+                "   - impact_summary: 1-2 sentences on strategic implications\n"
+                "   - strategic_intent: 1-2 sentences on why the org released this\n"
+                "   - segment: industry segment (e.g., 'Foundation Models', "
+                "'Open-source AI', 'Multimodal AI')\n"
+                "   - related_technologies: relevant tech names (the model "
+                "name plus closely-related concepts)\n"
+                "   - source_urls: AA source URL + 1-2 best web snippet URLs\n"
+                "   - recommendation: 1-2 sentence actionable takeaway\n\n"
+                "2. radar_item:\n"
+                "   - name: the model name (use the most common form, e.g. "
+                "'GPT-5.5' not 'gpt-5.5-2026-04-29')\n"
+                "   - quadrant: choose from 'Techniques', 'Platforms', 'Tools', "
+                "'Languages & Frameworks' (most foundation models = 'Tools' "
+                "or 'Platforms')\n"
+                "   - ring: default to 'Trial' for new releases. Use 'Adopt' "
+                "only if there is overwhelming evidence of immediate "
+                "production-readiness; use 'Assess' for early/preview models\n"
+                "   - description: one-sentence tooltip\n"
+                "   - is_new: true (these are fresh releases by definition)\n"
+                "   - signal_strength: 0.85\n"
+                "   - source_count: 1 + number of web snippets you used\n"
+                "   - trl: 6-7 for released models, 4-5 for previews\n"
+                "   - lifecycle_stage: 'early_adoption' (default for new releases)\n\n"
+                "3. radar_detail:\n"
+                "   - technology_name: must match radar_item.name EXACTLY\n"
+                "   - what_it_is: 2-4 sentences explaining the model and its architecture\n"
+                "   - why_it_matters: 2-3 sentences on significance\n"
+                "   - current_state: 2-3 sentences on maturity, "
+                "availability, and recent benchmarks\n"
+                "   - key_players: just the releasing organization (and "
+                "co-developers if known)\n"
+                "   - practical_applications: 2-4 use cases\n"
+                "   - quantitative_highlights: 2-5 specific facts from "
+                "AA notable_features and web snippets — benchmark scores, "
+                "context lengths, parameter counts, pricing, release dates. "
+                "ONLY use numbers explicitly present in the input. Do not "
+                "fabricate.\n"
+                "   - source_urls: same as top_event\n"
+                "   - recommendation: 1-2 sentence specific guidance\n\n"
+                "4. exec_summary_mention (ONLY if is_prominent=true):\n"
+                "   - 1 sentence in the same tone as the existing executive "
+                "summary, naming the model and its headline significance.\n\n"
+                "ALSO PRODUCE section_intro: a 2-3 sentence Markdown intro "
+                "for a new 'Notable Model Releases' section that frames the "
+                "included releases as a group. Empty string if no models are "
+                "included.\n\n"
+                "OUTPUT RULES:\n"
+                "- Return ONLY valid JSON matching the schema below.\n"
+                "- One decision per candidate, in the same order.\n"
+                "- For SKIPPED candidates: leave top_event/radar_item/"
+                "radar_detail/exec_summary_mention as null/empty; fill "
+                "skip_reason briefly.\n"
+                "- No markdown fencing, no commentary outside JSON.\n"
+                "- Newlines inside string values MUST be written as \\n.\n"
+                '- Double quotes inside string values MUST be escaped as \\".\n'
+                "- Do not invent benchmarks or numbers not present in the "
+                "candidate data or web snippets.\n\n"
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"EXISTING RADAR ITEMS (for dedup):\n{radar_block}\n\n"
+                f"EXISTING TOP EVENTS (for dedup):\n{events_block}\n\n"
+                f"EXISTING REPORT SECTIONS (titles only):\n{sections_block}\n\n"
+                f"CURRENT EXECUTIVE SUMMARY (for tone matching):\n"
+                f"{executive_summary[:2000]}\n\n"
+                f"CANDIDATE MODEL RELEASES:\n\n{candidates_block}\n"
+                "Produce per-candidate decisions. Return ONLY valid JSON."
+            ),
+        },
+    ]

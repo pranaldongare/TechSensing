@@ -986,5 +986,68 @@ class OnepagerOutput(LLMOutputBase):
     )
 
 
+# --- Model Release Injection (GenAI domains only) ---
+
+
+class ModelInjectionDecision(BaseModel):
+    """Per-model decision from the model release injection LLM call."""
+
+    model_name: str = Field(description="Name of the model being judged.")
+    decision: str = Field(
+        description=(
+            "'include' if this model release should be added to the report, "
+            "or 'skip' if it should not."
+        )
+    )
+    is_prominent: bool = Field(
+        default=False,
+        description=(
+            "True for major foundation-model releases from major labs, or "
+            "ones with clearly headline-grade benchmarks/licensing. Cap at "
+            "~3 prominent models per report."
+        ),
+    )
+    skip_reason: str = Field(
+        default="",
+        description="Brief reason for skipping. Filled when decision == 'skip'.",
+    )
+
+    top_event: Optional[TopEvent] = Field(
+        default=None,
+        description="Top event entry. Fill when decision == 'include'.",
+    )
+    radar_item: Optional[RadarItem] = Field(
+        default=None,
+        description="Radar item entry. Fill when decision == 'include'.",
+    )
+    radar_detail: Optional[RadarItemDetail] = Field(
+        default=None,
+        description="Radar item deep dive. Fill when decision == 'include'.",
+    )
+    exec_summary_mention: str = Field(
+        default="",
+        description=(
+            "1-sentence mention of this model in the same tone as the "
+            "executive summary. Fill ONLY when is_prominent is true."
+        ),
+    )
+
+
+class ModelInjectionOutput(LLMOutputBase):
+    """LLM output for the model release injection stage."""
+
+    decisions: List[ModelInjectionDecision] = Field(
+        description="One decision per candidate model, in input order."
+    )
+    section_intro: str = Field(
+        default="",
+        description=(
+            "2-3 sentence Markdown intro for the new 'Notable Model "
+            "Releases' detailed analysis section. Frames the included "
+            "releases as a group."
+        ),
+    )
+
+
 # Resolve forward references
 TechSensingReport.model_rebuild()

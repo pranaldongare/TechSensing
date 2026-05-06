@@ -582,6 +582,26 @@ async def run_sensing_pipeline(
             logger.warning(f"Model releases extraction failed (non-fatal): {e}")
             report.model_releases = []
 
+        # Web-search + LLM-judged injection into top_events, radar_items,
+        # radar_item_details, executive_summary, and report_sections.
+        if report.model_releases:
+            try:
+                from core.sensing.model_release_injector import inject_model_releases
+
+                await _emit(
+                    "model_injection", 99,
+                    "Integrating model releases into report...",
+                )
+                await inject_model_releases(
+                    report,
+                    report.model_releases,
+                    domain,
+                    date_range,
+                )
+                logger.info(f"Model release injection complete [{_elapsed()}]")
+            except Exception as e:
+                logger.warning(f"Model release injection failed (non-fatal): {e}")
+
     # --- Self-learning: evaluate and remember ---
     if user_id:
         try:
@@ -1602,6 +1622,26 @@ async def run_sensing_pipeline_from_document(
         except Exception as e:
             logger.warning(f"Model releases extraction failed (non-fatal): {e}")
             report.model_releases = []
+
+        # Web-search + LLM-judged injection into top_events, radar_items,
+        # radar_item_details, executive_summary, and report_sections.
+        if report.model_releases:
+            try:
+                from core.sensing.model_release_injector import inject_model_releases
+
+                await _emit(
+                    "model_injection", 99,
+                    "Integrating model releases into report...",
+                )
+                await inject_model_releases(
+                    report,
+                    report.model_releases,
+                    domain,
+                    date_range,
+                )
+                logger.info(f"Model release injection complete [{_elapsed()}]")
+            except Exception as e:
+                logger.warning(f"Model release injection failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
     if user_id:
