@@ -449,9 +449,18 @@ async def fetch_artificial_analysis_releases(
                             m_no_date += 1
                             continue
                         try:
-                            # Media dates can be YYYY-MM (no day) or YYYY-MM-DD
-                            if len(rd) <= 7:  # "YYYY-MM" format
-                                rdt = datetime.strptime(rd, "%Y-%m")
+                            # Media dates can be YYYY-MM (no day) or YYYY-MM-DD.
+                            # For YYYY-MM, treat as the LAST day of that month
+                            # (the model was released sometime in that month —
+                            # parsing as the 1st would wrongly exclude releases
+                            # whose true date falls inside the lookback window).
+                            if len(rd) <= 7:
+                                base = datetime.strptime(rd, "%Y-%m")
+                                if base.month == 12:
+                                    next_month_start = datetime(base.year + 1, 1, 1)
+                                else:
+                                    next_month_start = datetime(base.year, base.month + 1, 1)
+                                rdt = next_month_start - timedelta(days=1)
                             else:
                                 rdt = datetime.fromisoformat(rd)
                             if rdt.tzinfo is not None:
