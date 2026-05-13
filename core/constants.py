@@ -14,6 +14,10 @@ SWITCHES = {
     "FALLBACK_TO_OPENAI": False,
     "DISABLE_THINKING": True,
     "TECH_SENSING": True,
+    # INTERNAL LLM API (opt-in). Activated only when settings.USE_INTERNAL=true
+    # AND the INTERNAL_* credentials are populated. See core/llm/client.py.
+    "USE_INTERNAL": settings.USE_INTERNAL,
+    "RATE_LIMIT_INTERNAL": True,
 }
 
 PORT1 = 11434

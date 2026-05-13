@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     MAIN_MODEL: str = "qwen3:14b"
     LOCAL_BASE_URL: str = "http://localhost"
 
+    # INTERNAL API (default disabled — set USE_INTERNAL=true to enable)
+    INTERNAL_BASE_URL: str = ""
+    INTERNAL_CLIENT_KEY: str = ""
+    INTERNAL_API_TOKEN: str = ""
+    INTERNAL_USER_EMAIL: str = ""
+    INTERNAL_MODEL_ID: str = ""
+    USE_INTERNAL: bool = False
+
     # YouTube Data API v3 (for tech sensing video enrichment)
     YOUTUBE_API_KEY: str = ""
 

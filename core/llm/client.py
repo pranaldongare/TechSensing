@@ -84,6 +84,14 @@ def _log_parse_failure(
 # Always use local Ollama LLM
 from core.llm.configurations.local_llm import MyServerLLM
 
+# Optional: INTERNAL API LLM wrapper. The USE_INTERNAL switch is read at call
+# time, so leaving this import None is fine when the feature is disabled.
+try:
+    from core.llm.configurations.internal_llm import INTERNALLLM
+except Exception as _exc:
+    logger.warning("INTERNALLLM unavailable — INTERNAL API disabled: %s", _exc)
+    INTERNALLLM = None
+
 # ── LRU cache for LLM client instances ───────────────────────────
 _LLM_CACHE_MAX = int(os.getenv("LLM_CACHE_MAX", "8"))
 _llm_cache: OrderedDict = OrderedDict()
@@ -123,6 +131,43 @@ async def _next_api_key():
     """Get the next API key in round-robin fashion, safely under concurrency."""
     async with _api_key_lock:
         return next(_api_key_cycle)
+
+
+# ── INTERNAL API: sticky-skip context var + rate limiter ──────────
+# After a transport-level INTERNAL failure, skip INTERNAL for the rest of
+# this async context (request). Parse failures do NOT trip the skip — those
+# get self-corrected within the existing retry loop.
+_skip_internal: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "skip_internal", default=False
+)
+
+
+class _RateLimiter:
+    """Async sliding-window rate limiter — 3 calls per 60 s by default."""
+
+    def __init__(self, max_calls: int, window_seconds: float):
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self._timestamps: list[float] = []
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.time()
+            self._timestamps = [t for t in self._timestamps if now - t < self.window]
+            if len(self._timestamps) >= self.max_calls:
+                wait = self.window - (now - self._timestamps[0])
+                if wait > 0:
+                    logger.info("INTERNAL rate-limited; sleeping %.1fs", wait)
+                    await asyncio.sleep(wait)
+                    now = time.time()
+                    self._timestamps = [
+                        t for t in self._timestamps if now - t < self.window
+                    ]
+            self._timestamps.append(now)
+
+
+_internal_rate_limiter = _RateLimiter(max_calls=3, window_seconds=60.0)
 
 
 def _check_empty_lists(result, response_schema) -> None:
@@ -289,6 +334,78 @@ CRITICAL OUTPUT RULES:
         logger.info("Attempt %d/%d for schema=%s", attempt, MAX_RETRIES, schema_name)
         effective_prompt = _build_prompt(prompt, last_failed_output, last_parse_error)
 
+        # ── Phase 0: INTERNAL API (opt-in, before GPU) ──────────
+        use_internal = (
+            SWITCHES.get("USE_INTERNAL", False)
+            and INTERNALLLM is not None
+            and not _skip_internal.get()
+            and settings.INTERNAL_BASE_URL
+            and settings.INTERNAL_API_TOKEN
+        )
+        if use_internal:
+            internal_output = None
+            internal_parse_error = False
+            for blank_retry in range(2):
+                try:
+                    if SWITCHES.get("RATE_LIMIT_INTERNAL", True):
+                        await _internal_rate_limiter.acquire()
+                    logger.info("Trying INTERNAL API (attempt=%d)...", attempt)
+                    internal_llm = INTERNALLLM(
+                        model=settings.INTERNAL_MODEL_ID,
+                        base_url=settings.INTERNAL_BASE_URL,
+                        client_key=settings.INTERNAL_CLIENT_KEY,
+                        api_token=settings.INTERNAL_API_TOKEN,
+                        user_email=settings.INTERNAL_USER_EMAIL,
+                    )
+                    s = time.time()
+                    internal_output = await asyncio.to_thread(
+                        internal_llm._call, effective_prompt
+                    )
+                    logger.info(
+                        "INTERNAL responded in %.2fs", time.time() - s
+                    )
+
+                    if not internal_output or not internal_output.strip():
+                        logger.warning(
+                            "INTERNAL returned empty output, retrying (%d/2)",
+                            blank_retry + 1,
+                        )
+                        internal_output = None
+                        continue
+
+                    structured = _try_parse(internal_output, parser, response_schema)
+                    return structured
+                except Exception as exc:
+                    err = str(exc)
+                    logger.warning("INTERNAL call failed: %s", err)
+                    if internal_output:
+                        # Parse error — feed back into the next attempt's prompt
+                        # so INTERNAL gets a self-correction shot before GPU.
+                        last_failed_output = internal_output
+                        last_parse_error = err
+                        internal_parse_error = True
+                        _log_parse_failure(
+                            source="internal",
+                            attempt=attempt,
+                            raw_output=internal_output,
+                            error=err,
+                            schema_name=schema_name,
+                            prompt_snippet=effective_prompt if isinstance(effective_prompt, str) else str(effective_prompt),
+                        )
+                    else:
+                        # Transport-level failure — set sticky skip so we
+                        # don't keep hammering INTERNAL, and fall through to
+                        # GPU on this same attempt.
+                        _skip_internal.set(True)
+                        logger.info(
+                            "INTERNAL marked skipped for remainder of this request"
+                        )
+                    break
+            # On a parse error, give INTERNAL the next attempt to self-correct
+            # before falling through to GPU. Transport errors fall through now.
+            if internal_parse_error:
+                continue
+
         if gpu_model:
             llm_output = None
             for blank_retry in range(2):
@@ -438,4 +555,6 @@ CRITICAL OUTPUT RULES:
 
         await asyncio.sleep(2)
 
-    raise RuntimeError(f"All fallback attempts failed (GPU + Gemini + OpenAI).")
+    raise RuntimeError(
+        "All fallback attempts failed (INTERNAL + GPU + Gemini + OpenAI)."
+    )
