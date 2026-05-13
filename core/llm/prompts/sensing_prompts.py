@@ -1,8 +1,11 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
 from core.llm.prompts.shared import tense_rules_block
+
+_em_logger = logging.getLogger("sensing.experience_memory")
 
 
 def _experience_memory_block(
@@ -13,6 +16,9 @@ def _experience_memory_block(
     """Combine experience memory, prompt patches, and feedback into a prompt block.
 
     Returns empty string if no learning data is available.
+
+    Emits an INFO log when at least one block is non-empty so we can verify
+    that learned content is reaching the LLM prompt during report generation.
     """
     parts = []
     if experience_block:
@@ -21,7 +27,28 @@ def _experience_memory_block(
         parts.append(f"LEARNED GUIDANCE (from past runs):\n{prompt_patch}")
     if feedback_block:
         parts.append(feedback_block)
-    return "\n\n".join(parts) + "\n\n" if parts else ""
+
+    if not parts:
+        return ""
+
+    combined = "\n\n".join(parts) + "\n\n"
+
+    # Preview what's actually being injected into the LLM prompt — first 600
+    # chars is enough to confirm content is reaching the model. Log to the
+    # experience_memory logger so it groups with the load/save lines.
+    _em_logger.info(
+        f"[ExperienceMemory] INJECTING into prompt — "
+        f"experience={len(experience_block)} chars, "
+        f"patch={len(prompt_patch)} chars, "
+        f"feedback={len(feedback_block)} chars, "
+        f"total={len(combined)} chars"
+    )
+    _em_logger.debug(
+        f"[ExperienceMemory] Injected block preview:\n{combined[:600]}"
+        + ("..." if len(combined) > 600 else "")
+    )
+
+    return combined
 
 
 def _custom_requirements_block(custom_requirements: str) -> str:

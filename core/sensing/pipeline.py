@@ -8,9 +8,10 @@ import asyncio
 import logging
 import re
 import time
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from core.llm.output_schemas.sensing_outputs import TechSensingReport, TrendingVideoItem
 from core.sensing.classify import classify_articles
@@ -49,6 +50,89 @@ class SensingPipelineResult:
     classified_article_count: int
     execution_time_seconds: float
     alerts: list = None  # List[SensingAlert], default None for compat
+
+
+async def _run_self_learning(
+    report: TechSensingReport,
+    classified: list,
+    domain: str,
+    user_id: Optional[str],
+    emit_fn: Callable[..., Any],
+    elapsed_fn: Callable[[], str],
+) -> None:
+    """Self-learning closure used by both ``run_sensing_pipeline`` and
+    ``run_sensing_pipeline_from_document``. Evaluates the report, persists
+    a run summary, and optionally evolves prompts.
+
+    Every failure path is logged at ERROR level with a full traceback so a
+    missing memory entry can never go unnoticed in the logs.
+    """
+    if not user_id:
+        logger.info("[SelfLearning] SKIPPED — no user_id provided (memory disabled)")
+        return
+
+    try:
+        from core.sensing.self_eval import evaluate_report
+        from core.sensing.experience_memory import (
+            save_run_summary,
+            load_recent_summaries,
+        )
+        from core.sensing.prompt_evolver import maybe_evolve_prompts
+
+        logger.info(
+            f"[SelfLearning] STARTING for user='{user_id}', "
+            f"domain='{domain}' [{elapsed_fn()}]"
+        )
+        await emit_fn("self_eval", 99, "Evaluating report quality...")
+
+        eval_result = await evaluate_report(report, classified, domain)
+
+        run_summary = {
+            "run_date": datetime.now(timezone.utc).isoformat(),
+            "domain": domain,
+            "radar_count": len(report.radar_items),
+            "event_count": len(report.top_events),
+            "trend_count": len(report.key_trends),
+            "articles_analyzed": len(classified),
+            "confidence_score": report.report_confidence,
+            "eval_scores": eval_result.get("scores", {}),
+            "strengths": eval_result.get("strengths", []),
+            "weaknesses": eval_result.get("weaknesses", []),
+            "missed_topics": eval_result.get("missed_topics", []),
+            "reflection": eval_result.get("reflection", ""),
+        }
+
+        # Save first — this is the load-bearing step. Even if anything below
+        # raises, the summary will already be on disk for the next run.
+        try:
+            await save_run_summary(user_id, domain, run_summary)
+        except Exception as save_err:
+            logger.error(
+                f"[SelfLearning] save_run_summary FAILED for user='{user_id}', "
+                f"domain='{domain}': {type(save_err).__name__}: {save_err}\n"
+                f"{traceback.format_exc()}"
+            )
+            # Continue — try to evolve from what's already on disk.
+
+        # Maybe evolve prompts (every 5th run or if quality drops).
+        try:
+            all_summaries = await load_recent_summaries(user_id, domain, max_runs=20)
+            await maybe_evolve_prompts(user_id, domain, all_summaries)
+        except Exception as evolve_err:
+            logger.error(
+                f"[SelfLearning] prompt evolution FAILED for user='{user_id}', "
+                f"domain='{domain}': {type(evolve_err).__name__}: {evolve_err}\n"
+                f"{traceback.format_exc()}"
+            )
+
+        logger.info(f"[SelfLearning] COMPLETE for '{domain}' [{elapsed_fn()}]")
+
+    except Exception as e:
+        logger.error(
+            f"[SelfLearning] UNEXPECTED FAILURE for user='{user_id}', "
+            f"domain='{domain}': {type(e).__name__}: {e}\n"
+            f"{traceback.format_exc()}"
+        )
 
 
 async def run_sensing_pipeline(
@@ -151,10 +235,23 @@ async def run_sensing_pipeline(
             prompt_patches = await load_prompt_patches(user_id, domain)
             feedback_block = await consolidate_feedback(user_id, domain)
 
-            if experience_block:
-                logger.info(f"[ExperienceMemory] Loaded {len(_summaries)} past run summaries for '{domain}'")
+            # Always log the outcome so an absent log line cleanly signals
+            # "the load step was never reached" rather than "loaded zero".
+            logger.info(
+                f"[ExperienceMemory] LOAD COMPLETE for user='{user_id}', domain='{domain}' — "
+                f"summaries={len(_summaries)}, "
+                f"experience_block={len(experience_block)} chars, "
+                f"patches={list(prompt_patches.keys()) if prompt_patches else []}, "
+                f"feedback_block={len(feedback_block)} chars"
+            )
         except Exception as e:
-            logger.warning(f"Experience memory load failed (non-fatal): {e}")
+            import traceback as _tb
+            logger.error(
+                f"[ExperienceMemory] LOAD FAILED for user='{user_id}', domain='{domain}': "
+                f"{type(e).__name__}: {e}\n{_tb.format_exc()}"
+            )
+    else:
+        logger.info("[ExperienceMemory] LOAD SKIPPED — no user_id provided")
 
     # Build keyword filter instructions for prompts
     keyword_instructions = _build_keyword_instructions(
@@ -603,41 +700,7 @@ async def run_sensing_pipeline(
                 logger.warning(f"Model release injection failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
-    if user_id:
-        try:
-            from core.sensing.self_eval import evaluate_report
-            from core.sensing.experience_memory import save_run_summary, load_recent_summaries
-            from core.sensing.prompt_evolver import maybe_evolve_prompts
-
-            logger.info(f"[SelfLearning] Evaluating report quality... [{_elapsed()}]")
-            await _emit("self_eval", 99, "Evaluating report quality...")
-
-            eval_result = await evaluate_report(report, classified, domain)
-
-            run_summary = {
-                "run_date": datetime.now(timezone.utc).isoformat(),
-                "domain": domain,
-                "radar_count": len(report.radar_items),
-                "event_count": len(report.top_events),
-                "trend_count": len(report.key_trends),
-                "articles_analyzed": len(classified),
-                "confidence_score": report.report_confidence,
-                "eval_scores": eval_result.get("scores", {}),
-                "strengths": eval_result.get("strengths", []),
-                "weaknesses": eval_result.get("weaknesses", []),
-                "missed_topics": eval_result.get("missed_topics", []),
-                "reflection": eval_result.get("reflection", ""),
-            }
-
-            await save_run_summary(user_id, domain, run_summary)
-
-            # Maybe evolve prompts (every 5th run or if quality drops)
-            all_summaries = await load_recent_summaries(user_id, domain, max_runs=20)
-            await maybe_evolve_prompts(user_id, domain, all_summaries)
-
-            logger.info(f"[SelfLearning] Complete [{_elapsed()}]")
-        except Exception as e:
-            logger.warning(f"[SelfLearning] Failed (non-fatal): {e}")
+    await _run_self_learning(report, classified, domain, user_id, _emit, _elapsed)
 
     logger.info(f"Report ready [{_elapsed()}]")
     await _emit("complete", 100, "Report ready")
@@ -1122,10 +1185,23 @@ async def run_sensing_pipeline_from_document(
             prompt_patches = await load_prompt_patches(user_id, domain)
             feedback_block = await consolidate_feedback(user_id, domain)
 
-            if experience_block:
-                logger.info(f"[ExperienceMemory] Loaded {len(_summaries)} past run summaries for '{domain}'")
+            # Always log the outcome so an absent log line cleanly signals
+            # "the load step was never reached" rather than "loaded zero".
+            logger.info(
+                f"[ExperienceMemory] LOAD COMPLETE for user='{user_id}', domain='{domain}' — "
+                f"summaries={len(_summaries)}, "
+                f"experience_block={len(experience_block)} chars, "
+                f"patches={list(prompt_patches.keys()) if prompt_patches else []}, "
+                f"feedback_block={len(feedback_block)} chars"
+            )
         except Exception as e:
-            logger.warning(f"Experience memory load failed (non-fatal): {e}")
+            import traceback as _tb
+            logger.error(
+                f"[ExperienceMemory] LOAD FAILED for user='{user_id}', domain='{domain}': "
+                f"{type(e).__name__}: {e}\n{_tb.format_exc()}"
+            )
+    else:
+        logger.info("[ExperienceMemory] LOAD SKIPPED — no user_id provided")
 
     # --- Stage 1: Parse Document ---
     logger.info(
@@ -1644,41 +1720,7 @@ async def run_sensing_pipeline_from_document(
                 logger.warning(f"Model release injection failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
-    if user_id:
-        try:
-            from core.sensing.self_eval import evaluate_report
-            from core.sensing.experience_memory import save_run_summary, load_recent_summaries
-            from core.sensing.prompt_evolver import maybe_evolve_prompts
-
-            logger.info(f"[SelfLearning] Evaluating report quality... [{_elapsed()}]")
-            await _emit("self_eval", 99, "Evaluating report quality...")
-
-            eval_result = await evaluate_report(report, classified, domain)
-
-            run_summary = {
-                "run_date": datetime.now(timezone.utc).isoformat(),
-                "domain": domain,
-                "radar_count": len(report.radar_items),
-                "event_count": len(report.top_events),
-                "trend_count": len(report.key_trends),
-                "articles_analyzed": len(classified),
-                "confidence_score": report.report_confidence,
-                "eval_scores": eval_result.get("scores", {}),
-                "strengths": eval_result.get("strengths", []),
-                "weaknesses": eval_result.get("weaknesses", []),
-                "missed_topics": eval_result.get("missed_topics", []),
-                "reflection": eval_result.get("reflection", ""),
-            }
-
-            await save_run_summary(user_id, domain, run_summary)
-
-            # Maybe evolve prompts (every 5th run or if quality drops)
-            all_summaries = await load_recent_summaries(user_id, domain, max_runs=20)
-            await maybe_evolve_prompts(user_id, domain, all_summaries)
-
-            logger.info(f"[SelfLearning] Complete [{_elapsed()}]")
-        except Exception as e:
-            logger.warning(f"[SelfLearning] Failed (non-fatal): {e}")
+    await _run_self_learning(report, classified, domain, user_id, _emit, _elapsed)
 
     logger.info(f"Report ready [{_elapsed()}]")
     await _emit("complete", 100, "Report ready")
