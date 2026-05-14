@@ -79,7 +79,7 @@ def _build_report_summary(report: TechSensingReport) -> str:
     if report.blind_spots:
         parts.append(f"\nBlind spots ({len(report.blind_spots)}):")
         for bs in report.blind_spots:
-            parts.append(f"  - {bs.area}: {bs.reason}")
+            parts.append(f"  - {bs.area}: {bs.why_it_matters}")
 
     # Bottom line
     if report.bottom_line:
