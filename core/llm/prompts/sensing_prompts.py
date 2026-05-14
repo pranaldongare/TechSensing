@@ -837,6 +837,72 @@ def sensing_document_topic_extraction_prompt(
     return contents
 
 
+def _recency_block_domain_intelligence(domain: str) -> str:
+    """Anti-bias rules for the domain-intelligence prompt.
+
+    The LLM's training data has a fixed cutoff. If we let it write
+    vendor- or product-pinned search queries, those queries will be
+    biased toward whatever was current at training time AND will MISS
+    new releases from vendors the LLM doesn't know about. Force all
+    search queries to be CATEGORY-driven — same shape as the static
+    defaults in core/sensing/config.py::get_search_queries_for_domain.
+
+    Computed from today's date so the block stays evergreen.
+    """
+    now = datetime.now(timezone.utc)
+    today_str = now.strftime("%B %d, %Y")
+    return (
+        "RULES TO AVOID TRAINING-DATA BIAS (CRITICAL — READ FIRST):\n"
+        f"- Today's date is: {today_str}. Your training data has a fixed "
+        f"cutoff that is almost certainly months or years before this date. "
+        f"You CANNOT reliably know which products, model versions, or "
+        f"company releases are currently leading.\n"
+        "\n"
+        "RULES FOR search_queries (STRICT):\n"
+        "- Every search query must be CATEGORY-driven, NOT vendor-driven.\n"
+        "- Do NOT include ANY company, product, model, or framework name "
+        "in any search query. No exceptions. (No 'Llama', 'Qwen', 'GPT', "
+        "'Mistral', 'Gemini', 'Claude', 'DeepSeek', 'OpenAI', 'Anthropic', "
+        "'Meta', 'Google', 'vLLM', 'LangChain', etc.)\n"
+        "- Reason: vendor-pinned queries will MISS new releases from "
+        "vendors you've never heard of, and will OVER-INDEX vendors that "
+        "were prominent at your training cutoff but may have been "
+        "overtaken since.\n"
+        "- Mirror the style of the always-on baseline queries (which ARE "
+        "appended automatically — do not duplicate them):\n"
+        f"  * '{domain} latest developments this week'\n"
+        f"  * '{domain} breakthrough news this week'\n"
+        f"  * '{domain} new technology announcements'\n"
+        f"  * '{domain} industry trends this week'\n"
+        f"  * '{domain} open source news this week'\n"
+        "- Your queries should EXTEND that pattern with category sub-topics "
+        f"specific to '{domain}' (e.g. capability areas, technique families, "
+        "use cases, benchmark types) — never with specific product names.\n"
+        "- Date words like 'this week', 'this month', or the current year "
+        "are encouraged. Vendor/model names are forbidden.\n"
+        "\n"
+        "RULES FOR technology_keywords:\n"
+        "- Prefer broad CATEGORY or technique terms over vendor/model names.\n"
+        "- It is fine to include unversioned vendor FAMILY names if they are "
+        "widely-known (e.g. an open-weight model family) — but NEVER include "
+        "version numbers (no 'Llama 3.2', 'DeepSeek-V3', 'Qwen 3.5'). The "
+        "actual current version will be discovered from the search results.\n"
+        "- If you are uncertain whether a specific name is still relevant, "
+        "OMIT IT. A shorter accurate list is better than a longer stale one.\n"
+        "\n"
+        "RULES FOR key_people:\n"
+        "- Include only 5-10 people you are confident are still actively "
+        "publishing or shipping in this domain RIGHT NOW. If uncertain, "
+        "omit. A shorter accurate list beats a longer list with inactive or "
+        "historically-famous-but-no-longer-relevant entries.\n"
+        "\n"
+        "RULES FOR rss_feed_urls:\n"
+        "- Prefer evergreen organizational feeds, arXiv categories, and "
+        "well-known subreddits that surface NEW content daily. Avoid feeds "
+        "tied to specific releases, campaigns, or historical events.\n\n"
+    )
+
+
 def sensing_domain_intelligence_prompt(
     domain: str,
     existing_reference: str = "",
@@ -851,18 +917,26 @@ def sensing_domain_intelligence_prompt(
     existing_block = ""
     if existing_reference:
         existing_block = (
-            "\nEXISTING DOMAIN REFERENCE (from previous runs):\n"
+            "\nEXISTING DOMAIN REFERENCE (from previous runs — TREAT AS DRAFT, NOT GROUND TRUTH):\n"
             f"{existing_reference}\n\n"
-            "INSTRUCTIONS FOR UPDATING:\n"
-            "- KEEP items that are still relevant and accurate.\n"
-            "- ADD new items that have emerged since the last update.\n"
-            "- REMOVE items that are outdated, superseded, or no longer relevant.\n"
-            "- UPDATE items where details have changed (e.g., new key people, "
-            "new technology versions).\n"
-            "- For RSS feeds and search queries, refresh to reflect current "
-            "developments and interests.\n"
-            "- For blocklists, add newly-generic or newly-legacy terms and remove "
-            "any that have regained specificity or relevance.\n\n"
+            "INSTRUCTIONS FOR UPDATING (default to REPLACE — do not preserve out of habit):\n"
+            "- Treat the existing reference as a DRAFT. It very likely "
+            "contains vendor- or version-pinned entries from a previous "
+            "training cutoff that are now stale. Do NOT preserve entries "
+            "just because they are present.\n"
+            "- search_queries: REMOVE every query that names a specific "
+            "vendor, product, model, or framework. REPLACE with the "
+            "category-driven queries described above.\n"
+            "- technology_keywords: REMOVE every entry pinned to a specific "
+            "version number. Replace with the unversioned family name (or "
+            "drop entirely if you are unsure whether the family is still "
+            "active).\n"
+            "- key_people: DROP anyone you are not confident is still "
+            "actively publishing/shipping in this domain.\n"
+            "- rss_feed_urls: KEEP stable evergreen feeds; DROP feeds tied "
+            "to expired campaigns or discontinued projects.\n"
+            "- blocklists: ADD newly-generic or newly-legacy terms; "
+            "REMOVE any that have regained specificity.\n\n"
         )
 
     contents = [
@@ -873,21 +947,18 @@ def sensing_domain_intelligence_prompt(
                 f"generate comprehensive domain intelligence for the '{domain}' domain "
                 "to configure a technology sensing pipeline.\n\n"
                 + _custom_requirements_block(custom_requirements)
+                + _recency_block_domain_intelligence(domain)
                 + "This intelligence will be used to:\n"
                 "1. Select RSS feeds and construct search queries for article discovery\n"
                 "2. Configure arXiv and patent searches\n"
                 "3. Define topic categories and industry segments for article classification\n"
                 "4. Identify key people to track\n"
                 "5. Build blocklists to filter out generic and legacy radar items\n\n"
-                "GUIDELINES:\n"
-                "- Be SPECIFIC and CURRENT. Prefer names, versions, and concrete terms "
-                "over vague descriptions.\n"
+                "GUIDELINES (the rules above take precedence if anything conflicts):\n"
                 "- For RSS feeds, only suggest URLs you are confident actually exist "
                 "(major tech news sites, arXiv categories as http://arxiv.org/rss/CATEGORY, "
                 "popular subreddits as https://www.reddit.com/r/SUBREDDIT/.rss, "
                 "official company/project blogs). Prefer well-known, stable feed URLs.\n"
-                "- For search queries, write natural DuckDuckGo search queries that "
-                "would find recent news articles, blog posts, and announcements.\n"
                 "- For patent keywords, use formal technical language that appears in "
                 "patent titles and abstracts.\n"
                 "- For blocklists, think about what terms are too broad to be "
