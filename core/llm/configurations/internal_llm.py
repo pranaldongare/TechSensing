@@ -102,37 +102,62 @@ class INTERNALLLM(LLM):
         if system_prompt:
             request_body["systemPrompt"] = system_prompt
 
+        url = f"{self.base_url}/openapi/chat/v1/messages"
         try:
             response = requests.post(
-                f"{self.base_url}/openapi/chat/v1/messages",
+                url,
                 headers=headers,
                 json=request_body,
                 timeout=600,
             )
-            response.raise_for_status()
-
-            data = response.json()
-
-            if data.get("status") != "SUCCESS":
-                error_code = data.get("responseCode", "UNKNOWN")
-                error_msg = data.get("message", f"API error: {error_code}")
-                raise RuntimeError(f"INTERNAL API failed: {error_code} - {error_msg}")
-
-            content = data.get("content", "")
-
-            # Strip reasoning tags (same pattern as remote_llm.py / local_llm.py)
-            cleaned = re.sub(
-                r"<thinking>.*?</thinking>", "", content, flags=re.DOTALL
-            )
-            cleaned = re.sub(
-                r"<reasoning>.*?</reasoning>", "", cleaned, flags=re.DOTALL
-            )
-
-            return cleaned.strip()
-
         except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Failed to call INTERNAL API: {e}") from e
-        except RuntimeError:
-            raise
+            # Pure transport failure — no response body to inspect.
+            raise RuntimeError(
+                f"Failed to call INTERNAL API ({url}): {type(e).__name__}: {e}"
+            ) from e
+
+        # Capture status + body BEFORE raise_for_status so HTTP errors carry
+        # the server's actual error payload instead of a generic HTTPError.
+        status_code = response.status_code
+        try:
+            body_text = response.text or ""
+        except Exception:
+            body_text = "<could not read response body>"
+
+        if status_code >= 400:
+            # Truncate massive bodies to keep error messages readable.
+            preview = body_text[:2000] + ("..." if len(body_text) > 2000 else "")
+            raise RuntimeError(
+                f"INTERNAL API HTTP {status_code} from {url}\n"
+                f"  response body: {preview}"
+            )
+
+        try:
+            data = response.json()
         except Exception as e:
-            raise RuntimeError(f"Unexpected error calling INTERNAL API: {e}") from e
+            preview = body_text[:1000] + ("..." if len(body_text) > 1000 else "")
+            raise RuntimeError(
+                f"INTERNAL API returned non-JSON response (HTTP {status_code}): "
+                f"{type(e).__name__}: {e}\n"
+                f"  body preview: {preview}"
+            ) from e
+
+        if data.get("status") != "SUCCESS":
+            error_code = data.get("responseCode", "UNKNOWN")
+            error_msg = data.get("message", f"API error: {error_code}")
+            raise RuntimeError(
+                f"INTERNAL API status != SUCCESS (HTTP {status_code}): "
+                f"code={error_code}, message={error_msg}"
+            )
+
+        content = data.get("content", "")
+
+        # Strip reasoning tags (same pattern as remote_llm.py / local_llm.py)
+        cleaned = re.sub(
+            r"<thinking>.*?</thinking>", "", content, flags=re.DOTALL
+        )
+        cleaned = re.sub(
+            r"<reasoning>.*?</reasoning>", "", cleaned, flags=re.DOTALL
+        )
+
+        return cleaned.strip()

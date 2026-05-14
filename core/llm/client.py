@@ -40,6 +40,15 @@ logger.addFilter(_TrackingFilter())
 _PARSE_ERRORS_DIR = "DEBUG/parse_errors"
 os.makedirs(_PARSE_ERRORS_DIR, exist_ok=True)
 
+# Per-call structured log of every LLM exchange (request + response + error).
+# Useful for debugging INTERNAL API failures where the underlying HTTP error
+# would otherwise be lost. Disable with LLM_CALL_LOG=false if disk usage is
+# a concern (default: enabled). One line per call, JSONL.
+_LLM_CALL_LOG_ENABLED = os.getenv("LLM_CALL_LOG", "true").lower() != "false"
+_LLM_CALL_LOG_DIR = "DEBUG/llm_calls"
+if _LLM_CALL_LOG_ENABLED:
+    os.makedirs(_LLM_CALL_LOG_DIR, exist_ok=True)
+
 # ── LLM concurrency semaphore ────────────────────────────────────
 # Limits concurrent LLM calls to avoid GPU thrashing.
 # Configurable via LLM_MAX_CONCURRENCY env var (default: 2).
@@ -75,6 +84,68 @@ def _log_parse_failure(
     }
     try:
         log_path = os.path.join(_PARSE_ERRORS_DIR, "failures.jsonl")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _log_llm_call(
+    source: str,
+    attempt: int,
+    model: str,
+    prompt: str,
+    output: str = "",
+    error: str = "",
+    elapsed_s: float = 0.0,
+    schema: str = "",
+    status: str = "ok",
+):
+    """Append one structured line per LLM exchange to DEBUG/llm_calls/calls.jsonl.
+
+    Captures the prompt tail, output preview, and any error so failures
+    (especially INTERNAL HTTP errors) are recoverable from disk after the
+    fact. Also emits an INFO log so the same data is visible in stdout.
+
+    `status` is one of: "ok", "blank", "transport_error", "parse_error",
+    "timeout", "http_error".
+    """
+    prompt_chars = len(prompt or "")
+    output_chars = len(output or "")
+    summary = (
+        f"[LLMCall] source={source} attempt={attempt} status={status} "
+        f"model={model} schema={schema} elapsed={elapsed_s:.2f}s "
+        f"prompt_chars={prompt_chars} output_chars={output_chars}"
+    )
+    if error:
+        summary += f" error={error[:200]!r}"
+    elif output:
+        summary += f" output_preview={output[:200]!r}"
+    if status == "ok":
+        logger.info(summary)
+    else:
+        logger.warning(summary)
+
+    if not _LLM_CALL_LOG_ENABLED:
+        return
+
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "tracking_id": tracking_id_var.get(""),
+        "source": source,
+        "attempt": attempt,
+        "status": status,
+        "model": model,
+        "schema": schema,
+        "elapsed_s": round(elapsed_s, 3),
+        "prompt_chars": prompt_chars,
+        "output_chars": output_chars,
+        "prompt_tail": (prompt or "")[-1500:],
+        "output_preview": (output or "")[:5000],
+        "error": (error or "")[:5000],
+    }
+    try:
+        log_path = os.path.join(_LLM_CALL_LOG_DIR, "calls.jsonl")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
@@ -346,6 +417,7 @@ CRITICAL OUTPUT RULES:
             internal_output = None
             internal_parse_error = False
             for blank_retry in range(2):
+                s = time.time()
                 try:
                     if SWITCHES.get("RATE_LIMIT_INTERNAL", True):
                         await _internal_rate_limiter.acquire()
@@ -361,23 +433,40 @@ CRITICAL OUTPUT RULES:
                     internal_output = await asyncio.to_thread(
                         internal_llm._call, effective_prompt
                     )
-                    logger.info(
-                        "INTERNAL responded in %.2fs", time.time() - s
-                    )
+                    elapsed = time.time() - s
 
                     if not internal_output or not internal_output.strip():
-                        logger.warning(
-                            "INTERNAL returned empty output, retrying (%d/2)",
-                            blank_retry + 1,
+                        _log_llm_call(
+                            source="internal", attempt=attempt,
+                            model=settings.INTERNAL_MODEL_ID,
+                            prompt=effective_prompt, output="",
+                            error="empty response", elapsed_s=elapsed,
+                            schema=schema_name, status="blank",
                         )
                         internal_output = None
                         continue
 
-                    structured = _try_parse(internal_output, parser, response_schema)
+                    try:
+                        structured = _try_parse(internal_output, parser, response_schema)
+                    except Exception as parse_exc:
+                        _log_llm_call(
+                            source="internal", attempt=attempt,
+                            model=settings.INTERNAL_MODEL_ID,
+                            prompt=effective_prompt, output=internal_output,
+                            error=str(parse_exc), elapsed_s=elapsed,
+                            schema=schema_name, status="parse_error",
+                        )
+                        raise
+                    _log_llm_call(
+                        source="internal", attempt=attempt,
+                        model=settings.INTERNAL_MODEL_ID,
+                        prompt=effective_prompt, output=internal_output,
+                        elapsed_s=elapsed, schema=schema_name, status="ok",
+                    )
                     return structured
                 except Exception as exc:
+                    elapsed = time.time() - s
                     err = str(exc)
-                    logger.warning("INTERNAL call failed: %s", err)
                     if internal_output:
                         # Parse error — feed back into the next attempt's prompt
                         # so INTERNAL gets a self-correction shot before GPU.
@@ -396,6 +485,13 @@ CRITICAL OUTPUT RULES:
                         # Transport-level failure — set sticky skip so we
                         # don't keep hammering INTERNAL, and fall through to
                         # GPU on this same attempt.
+                        _log_llm_call(
+                            source="internal", attempt=attempt,
+                            model=settings.INTERNAL_MODEL_ID,
+                            prompt=effective_prompt, output="",
+                            error=err, elapsed_s=elapsed,
+                            schema=schema_name, status="transport_error",
+                        )
                         _skip_internal.set(True)
                         logger.info(
                             "INTERNAL marked skipped for remainder of this request"
@@ -409,6 +505,7 @@ CRITICAL OUTPUT RULES:
         if gpu_model:
             llm_output = None
             for blank_retry in range(2):
+                s = time.time()
                 try:
                     logger.info("Trying GPU server (port=%d)...", port)
                     gpu_llm = _get_cached_llm(gpu_model, port)
@@ -418,27 +515,45 @@ CRITICAL OUTPUT RULES:
                         timeout=GPU_TIMEOUT,
                     )
                     elapsed = time.time() - s
-                    logger.info("GPU server responded in %.2fs", elapsed)
 
                     if not llm_output or not llm_output.strip():
-                        logger.warning(
-                            "GPU returned empty output, retrying (%d/2)",
-                            blank_retry + 1,
+                        _log_llm_call(
+                            source="gpu", attempt=attempt, model=gpu_model,
+                            prompt=effective_prompt, output="",
+                            error="empty response", elapsed_s=elapsed,
+                            schema=schema_name, status="blank",
                         )
                         llm_output = None
                         continue
 
-                    structured = _try_parse(llm_output, parser, response_schema)
+                    try:
+                        structured = _try_parse(llm_output, parser, response_schema)
+                    except Exception as parse_exc:
+                        _log_llm_call(
+                            source="gpu", attempt=attempt, model=gpu_model,
+                            prompt=effective_prompt, output=llm_output,
+                            error=str(parse_exc), elapsed_s=elapsed,
+                            schema=schema_name, status="parse_error",
+                        )
+                        raise
+                    _log_llm_call(
+                        source="gpu", attempt=attempt, model=gpu_model,
+                        prompt=effective_prompt, output=llm_output,
+                        elapsed_s=elapsed, schema=schema_name, status="ok",
+                    )
                     return structured
                 except asyncio.TimeoutError:
-                    logger.error(
-                        "GPU server timed out after %ds (port=%d)",
-                        GPU_TIMEOUT, port,
+                    elapsed = time.time() - s
+                    _log_llm_call(
+                        source="gpu", attempt=attempt, model=gpu_model,
+                        prompt=effective_prompt, output="",
+                        error=f"timeout after {GPU_TIMEOUT}s (port={port})",
+                        elapsed_s=elapsed, schema=schema_name, status="timeout",
                     )
                     break
                 except Exception as e:
+                    elapsed = time.time() - s
                     error_str = str(e)
-                    logger.warning("GPU server failed (port=%d): %s", port, error_str)
                     if llm_output:
                         last_failed_output = llm_output
                         last_parse_error = error_str
@@ -453,6 +568,13 @@ CRITICAL OUTPUT RULES:
                         logger.info(
                             "Self-correction: captured failed GPU output (%d chars)",
                             len(llm_output),
+                        )
+                    else:
+                        _log_llm_call(
+                            source="gpu", attempt=attempt, model=gpu_model,
+                            prompt=effective_prompt, output="",
+                            error=error_str, elapsed_s=elapsed,
+                            schema=schema_name, status="transport_error",
                         )
                     break
             else:
@@ -497,18 +619,37 @@ CRITICAL OUTPUT RULES:
                     except Exception:
                         raw_output = str(response)
 
-                    structured = _try_parse(raw_output, parser, response_schema)
                     elapsed = time.time() - s
-                    logger.info("Gemini responded in %.2fs", elapsed)
+                    try:
+                        structured = _try_parse(raw_output, parser, response_schema)
+                    except Exception as parse_exc:
+                        _log_llm_call(
+                            source="gemini", attempt=attempt,
+                            model=FALLBACK_GEMINI_MODEL,
+                            prompt=effective_prompt, output=raw_output or "",
+                            error=str(parse_exc), elapsed_s=elapsed,
+                            schema=schema_name, status="parse_error",
+                        )
+                        raise
+                    _log_llm_call(
+                        source="gemini", attempt=attempt,
+                        model=FALLBACK_GEMINI_MODEL,
+                        prompt=effective_prompt, output=raw_output or "",
+                        elapsed_s=elapsed, schema=schema_name, status="ok",
+                    )
                     return structured
 
                 except asyncio.TimeoutError:
-                    logger.warning(
-                        "Gemini timed out after %ds — switching key...",
-                        GEMINI_TIMEOUT,
+                    elapsed = time.time() - s
+                    _log_llm_call(
+                        source="gemini", attempt=attempt,
+                        model=FALLBACK_GEMINI_MODEL,
+                        prompt=effective_prompt, output="",
+                        error=f"timeout after {GEMINI_TIMEOUT}s",
+                        elapsed_s=elapsed, schema=schema_name, status="timeout",
                     )
                 except Exception as e:
-                    logger.warning("Gemini error: %s", e)
+                    elapsed = time.time() - s
                     if raw_output:
                         _log_parse_failure(
                             source="gemini",
@@ -517,11 +658,20 @@ CRITICAL OUTPUT RULES:
                             error=str(e),
                             schema_name=schema_name,
                         )
+                    else:
+                        _log_llm_call(
+                            source="gemini", attempt=attempt,
+                            model=FALLBACK_GEMINI_MODEL,
+                            prompt=effective_prompt, output="",
+                            error=str(e), elapsed_s=elapsed,
+                            schema=schema_name, status="transport_error",
+                        )
                     await asyncio.sleep(0.2)
 
         # === OPENAI FALLBACK ===
         if SWITCHES["FALLBACK_TO_OPENAI"]:
             openai_raw = None
+            s = time.time()
             try:
                 logger.info("Falling back to OpenAI...")
                 s = time.time()
@@ -535,15 +685,37 @@ CRITICAL OUTPUT RULES:
                 )
 
                 openai_raw = response.choices[0].message.content
-                structured = _try_parse(openai_raw, parser, response_schema)
                 elapsed = time.time() - s
-                logger.info("OpenAI responded in %.2fs", elapsed)
+                try:
+                    structured = _try_parse(openai_raw, parser, response_schema)
+                except Exception as parse_exc:
+                    _log_llm_call(
+                        source="openai", attempt=attempt,
+                        model=FALLBACK_OPENAI_MODEL,
+                        prompt=effective_prompt, output=openai_raw or "",
+                        error=str(parse_exc), elapsed_s=elapsed,
+                        schema=schema_name, status="parse_error",
+                    )
+                    raise
+                _log_llm_call(
+                    source="openai", attempt=attempt,
+                    model=FALLBACK_OPENAI_MODEL,
+                    prompt=effective_prompt, output=openai_raw or "",
+                    elapsed_s=elapsed, schema=schema_name, status="ok",
+                )
                 return structured
 
             except asyncio.TimeoutError:
-                logger.error("OpenAI timed out after %ds", OPENAI_TIMEOUT)
+                elapsed = time.time() - s
+                _log_llm_call(
+                    source="openai", attempt=attempt,
+                    model=FALLBACK_OPENAI_MODEL,
+                    prompt=effective_prompt, output="",
+                    error=f"timeout after {OPENAI_TIMEOUT}s",
+                    elapsed_s=elapsed, schema=schema_name, status="timeout",
+                )
             except Exception as e:
-                logger.warning("OpenAI fallback error: %s", e)
+                elapsed = time.time() - s
                 if openai_raw:
                     _log_parse_failure(
                         source="openai",
@@ -551,6 +723,14 @@ CRITICAL OUTPUT RULES:
                         raw_output=openai_raw,
                         error=str(e),
                         schema_name=schema_name,
+                    )
+                else:
+                    _log_llm_call(
+                        source="openai", attempt=attempt,
+                        model=FALLBACK_OPENAI_MODEL,
+                        prompt=effective_prompt, output="",
+                        error=str(e), elapsed_s=elapsed,
+                        schema=schema_name, status="transport_error",
                     )
 
         await asyncio.sleep(2)
