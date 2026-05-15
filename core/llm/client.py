@@ -416,6 +416,7 @@ CRITICAL OUTPUT RULES:
         if use_internal:
             internal_output = None
             internal_parse_error = False
+            err = ""
             for blank_retry in range(2):
                 s = time.time()
                 try:
@@ -497,6 +498,19 @@ CRITICAL OUTPUT RULES:
                             "INTERNAL marked skipped for remainder of this request"
                         )
                     break
+            # Debug aid: if the user has explicitly disabled fallback to GPU
+            # (INTERNAL_NO_FALLBACK=true), raise the INTERNAL error now so the
+            # user sees it instead of having it masked by a successful GPU
+            # call. This applies whether INTERNAL failed via transport or
+            # parse error.
+            if SWITCHES.get("INTERNAL_NO_FALLBACK", False) and (
+                internal_parse_error or _skip_internal.get()
+            ):
+                raise RuntimeError(
+                    f"INTERNAL API failed and INTERNAL_NO_FALLBACK=True "
+                    f"(no fallback to GPU/Gemini/OpenAI). "
+                    f"Last error: {last_parse_error or err}"
+                )
             # On a parse error, give INTERNAL the next attempt to self-correct
             # before falling through to GPU. Transport errors fall through now.
             if internal_parse_error:

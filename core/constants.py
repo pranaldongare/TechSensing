@@ -17,7 +17,13 @@ SWITCHES = {
     # INTERNAL LLM API (opt-in). Activated only when settings.USE_INTERNAL=true
     # AND the INTERNAL_* credentials are populated. See core/llm/client.py.
     "USE_INTERNAL": settings.USE_INTERNAL,
+    # RATE_LIMIT_INTERNAL controls whether we sleep between INTERNAL calls
+    # (3 calls / 60s sliding window). It does NOT control fallback.
     "RATE_LIMIT_INTERNAL": True,
+    # INTERNAL_NO_FALLBACK: when True, an INTERNAL failure raises immediately
+    # instead of falling through to GPU/Gemini/OpenAI. Debug aid only — leave
+    # False in production so the existing fallback chain protects requests.
+    "INTERNAL_NO_FALLBACK": settings.INTERNAL_NO_FALLBACK,
 }
 
 PORT1 = 11434

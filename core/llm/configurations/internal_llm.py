@@ -8,13 +8,85 @@ fallback chain. Activated via ``USE_INTERNAL=true`` in ``.env``.
 
 Mirror of PRISM's ``INTERNAL_llm.py`` — kept byte-equivalent so the corporate
 INTERNAL API contract is identical across projects.
+
+Every HTTP exchange (success OR failure) is appended to
+``DEBUG/llm_calls/internal_raw.jsonl`` with the full request body, request
+headers (auth token redacted), response status, response headers, and
+response body — no truncation. Disable via ``LLM_CALL_LOG=false`` if disk
+usage is a concern.
 """
 
+import json
+import logging
+import os
 import re
-from typing import List, Optional
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import requests
 from langchain_core.language_models import LLM
+
+logger = logging.getLogger("llm.internal")
+
+# ── Raw exchange log (full request + response per call) ──────────
+_RAW_LOG_ENABLED = os.getenv("LLM_CALL_LOG", "true").lower() != "false"
+_RAW_LOG_PATH = os.path.join("DEBUG", "llm_calls", "internal_raw.jsonl")
+if _RAW_LOG_ENABLED:
+    os.makedirs(os.path.dirname(_RAW_LOG_PATH), exist_ok=True)
+
+
+def _redact_token(value: str) -> str:
+    """Redact a Bearer token while preserving enough for correlation.
+
+    Returns the literal "Bearer " prefix (if present) followed by the first
+    6 and last 4 chars of the actual token, separated by ``...``. Tokens
+    shorter than 12 chars are fully masked.
+    """
+    if not value:
+        return ""
+    parts = value.split(" ", 1)
+    prefix = ""
+    actual = value
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        prefix = parts[0] + " "
+        actual = parts[1]
+    if len(actual) <= 12:
+        return f"{prefix}***"
+    return f"{prefix}{actual[:6]}...{actual[-4:]} (len={len(actual)})"
+
+
+def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Return a copy of headers with sensitive values masked."""
+    redacted = {}
+    for key, value in headers.items():
+        kl = key.lower()
+        if "token" in kl or "auth" in kl or "key" in kl:
+            redacted[key] = _redact_token(value)
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _try_get_tracking_id() -> str:
+    """Best-effort lookup of the per-request tracking_id ContextVar."""
+    try:
+        from core.llm.client import tracking_id_var
+        return tracking_id_var.get("")
+    except Exception:
+        return ""
+
+
+def _log_raw_exchange(entry: Dict[str, Any]) -> None:
+    """Append one full HTTP exchange to the raw log."""
+    if not _RAW_LOG_ENABLED:
+        return
+    try:
+        with open(_RAW_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:
+        # Never let logging failures break the actual call.
+        logger.warning("Failed to write internal_raw.jsonl: %s", exc)
 
 
 class INTERNALLLM(LLM):
@@ -103,6 +175,19 @@ class INTERNALLLM(LLM):
             request_body["systemPrompt"] = system_prompt
 
         url = f"{self.base_url}/openapi/chat/v1/messages"
+        tracking_id = _try_get_tracking_id()
+        started_at = time.time()
+
+        # Pre-build the part of the log entry that's known before the call.
+        log_entry: Dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tracking_id": tracking_id,
+            "method": "POST",
+            "url": url,
+            "request_headers": _redact_headers(headers),
+            "request_body": request_body,
+        }
+
         try:
             response = requests.post(
                 url,
@@ -111,10 +196,17 @@ class INTERNALLLM(LLM):
                 timeout=600,
             )
         except requests.exceptions.RequestException as e:
-            # Pure transport failure — no response body to inspect.
+            elapsed = time.time() - started_at
+            log_entry["elapsed_s"] = round(elapsed, 3)
+            log_entry["status"] = "transport_error"
+            log_entry["error"] = f"{type(e).__name__}: {e}"
+            _log_raw_exchange(log_entry)
             raise RuntimeError(
                 f"Failed to call INTERNAL API ({url}): {type(e).__name__}: {e}"
             ) from e
+
+        elapsed = time.time() - started_at
+        log_entry["elapsed_s"] = round(elapsed, 3)
 
         # Capture status + body BEFORE raise_for_status so HTTP errors carry
         # the server's actual error payload instead of a generic HTTPError.
@@ -124,8 +216,14 @@ class INTERNALLLM(LLM):
         except Exception:
             body_text = "<could not read response body>"
 
+        log_entry["response_status_code"] = status_code
+        log_entry["response_headers"] = dict(response.headers)
+        log_entry["response_body"] = body_text
+
         if status_code >= 400:
-            # Truncate massive bodies to keep error messages readable.
+            log_entry["status"] = "http_error"
+            log_entry["error"] = f"HTTP {status_code}"
+            _log_raw_exchange(log_entry)
             preview = body_text[:2000] + ("..." if len(body_text) > 2000 else "")
             raise RuntimeError(
                 f"INTERNAL API HTTP {status_code} from {url}\n"
@@ -135,6 +233,9 @@ class INTERNALLLM(LLM):
         try:
             data = response.json()
         except Exception as e:
+            log_entry["status"] = "non_json_response"
+            log_entry["error"] = f"{type(e).__name__}: {e}"
+            _log_raw_exchange(log_entry)
             preview = body_text[:1000] + ("..." if len(body_text) > 1000 else "")
             raise RuntimeError(
                 f"INTERNAL API returned non-JSON response (HTTP {status_code}): "
@@ -145,6 +246,9 @@ class INTERNALLLM(LLM):
         if data.get("status") != "SUCCESS":
             error_code = data.get("responseCode", "UNKNOWN")
             error_msg = data.get("message", f"API error: {error_code}")
+            log_entry["status"] = "api_error"
+            log_entry["error"] = f"code={error_code}, message={error_msg}"
+            _log_raw_exchange(log_entry)
             raise RuntimeError(
                 f"INTERNAL API status != SUCCESS (HTTP {status_code}): "
                 f"code={error_code}, message={error_msg}"
@@ -160,4 +264,7 @@ class INTERNALLLM(LLM):
             r"<reasoning>.*?</reasoning>", "", cleaned, flags=re.DOTALL
         )
 
+        log_entry["status"] = "ok"
+        log_entry["error"] = ""
+        _log_raw_exchange(log_entry)
         return cleaned.strip()

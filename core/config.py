@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     INTERNAL_USER_EMAIL: str = ""
     INTERNAL_MODEL_ID: str = ""
     USE_INTERNAL: bool = False
+    # Debug aid: when True, an INTERNAL failure raises immediately instead of
+    # falling through to GPU/Gemini/OpenAI. Useful for surfacing the actual
+    # INTERNAL error during debugging. Leave False in production.
+    INTERNAL_NO_FALLBACK: bool = False
 
     # YouTube Data API v3 (for tech sensing video enrichment)
     YOUTUBE_API_KEY: str = ""
