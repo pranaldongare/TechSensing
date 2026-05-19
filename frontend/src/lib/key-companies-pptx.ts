@@ -132,38 +132,37 @@ export async function downloadKeyCompaniesPptx(
     });
   }
 
-  // ── Domain rollup ──
-  if (report.domain_rollup && report.domain_rollup.length > 0) {
-    const slide = pres.addSlide();
-    titleBar(slide, 'Domain rollup');
-    const rows: PptxGenJS.TableRow[] = [
-      [
-        { text: 'Domain', options: { bold: true, fill: { color: 'EEF2FF' } } },
-        { text: 'Updates', options: { bold: true, fill: { color: 'EEF2FF' } } },
-        {
-          text: 'Companies',
-          options: { bold: true, fill: { color: 'EEF2FF' } },
-        },
-      ],
-      ...report.domain_rollup
-        .slice(0, 12)
-        .map(
-          (d) =>
-            [
-              { text: sanitize(d.domain) },
-              { text: String(d.update_count) },
-              { text: String(d.company_count) },
-            ] as PptxGenJS.TableRow,
-        ),
-    ];
-    slide.addTable(rows, {
-      x: 0.5,
-      y: 0.9,
-      w: 9,
-      fontSize: 12,
-      color: SLATE_TEXT,
-      border: { type: 'solid', pt: 0.5, color: 'E2E8F0' },
-    });
+  // ── Technology Deep Dives — 3 per slide ──
+  if (report.tech_deep_dives && report.tech_deep_dives.length > 0) {
+    const itemsPerSlide = 3;
+    for (let i = 0; i < report.tech_deep_dives.length; i += itemsPerSlide) {
+      const chunk = report.tech_deep_dives.slice(i, i + itemsPerSlide);
+      const slide = pres.addSlide();
+      titleBar(slide, 'Technology Deep Dives');
+
+      let y = 1.0;
+      for (const item of chunk) {
+        const isUserAdded = item.source === 'user_added';
+        slide.addText(
+          [
+            { text: sanitize(item.technology_name), options: { bold: true, fontSize: 12 } },
+            ...(isUserAdded
+              ? [{ text: '  (User-added)', options: { fontSize: 9, color: '7C3AED' } }]
+              : []),
+          ],
+          { x: 0.5, y, w: 9, h: 0.3, color: SLATE_TEXT },
+        );
+        slide.addText(sanitize((item.what_it_is || '').slice(0, 320)), {
+          x: 0.7, y: y + 0.3, w: 9, h: 0.6,
+          fontSize: 9, color: SLATE_TEXT, valign: 'top',
+        });
+        slide.addText(sanitize((item.why_it_matters || '').slice(0, 320)), {
+          x: 0.7, y: y + 0.9, w: 9, h: 0.6,
+          fontSize: 9, color: SLATE_TEXT, valign: 'top', italic: true,
+        });
+        y += 1.7;
+      }
+    }
   }
 
   // ── Per-company slides ──

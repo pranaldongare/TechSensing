@@ -34,7 +34,6 @@ from core.llm.prompts.key_company_prompts import (
     company_weekly_brief_prompt,
     key_companies_cross_prompt,
 )
-from core.sensing.cross_domain import compute_domain_rollup
 from core.sensing.date_filter import filter_articles_by_date
 from core.sensing.ingest import RawArticle, extract_full_text
 from core.sensing.momentum import compute_momentum
@@ -439,6 +438,158 @@ async def _build_cross_view(
         )
 
 
+def _gather_kc_tech_candidates(
+    briefings: List[CompanyBriefing],
+    topic_highlights: list,
+) -> str:
+    """Build a human-readable candidate block for the latest-tech selection
+    prompt, drawn from company briefing headlines + topic highlights.
+
+    Returns ``"(none)"`` when there are no candidates so the prompt parses
+    cleanly. Dedup is by normalized headline string (cheap; the selection
+    LLM filters by name semantics).
+    """
+    seen: set[str] = set()
+    lines: list[str] = []
+
+    for b in briefings or []:
+        company = getattr(b, "company", "") or "?"
+        for u in getattr(b, "updates", None) or []:
+            headline = (getattr(u, "headline", "") or "").strip()
+            if not headline:
+                continue
+            key = "".join(ch.lower() for ch in headline if ch.isalnum())
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            cat = (getattr(u, "category", "") or "").strip()
+            dom = (getattr(u, "domain", "") or "").strip()
+            date = (getattr(u, "date", "") or "").strip()
+            flags = []
+            if cat:
+                flags.append(f"category={cat}")
+            if dom:
+                flags.append(f"domain={dom}")
+            if date:
+                flags.append(f"date={date}")
+            lines.append(
+                f"- {headline}  [from=briefing/{company}; "
+                f"{', '.join(flags) or '—'}]"
+            )
+
+    for th in topic_highlights or []:
+        topic = (getattr(th, "topic", "") or "").strip()
+        update = (getattr(th, "update", "") or "").strip()
+        if not topic:
+            continue
+        composite = f"{topic} — {update}" if update else topic
+        key = "".join(ch.lower() for ch in composite if ch.isalnum())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"- {composite}  [from=topic_highlights]")
+
+    return "\n".join(lines) if lines else "(none)"
+
+
+def _flatten_briefing_articles(briefings: List[CompanyBriefing]) -> str:
+    """Serialize update headlines+summaries as a flat ``classified_articles``
+    list so ``sensing_details_prompt`` has article context to ground deep
+    dive write-ups. Each entry uses the update's source_url and summary
+    in place of full extracted article text (which is no longer in scope
+    by this stage of the pipeline)."""
+    entries: list[dict] = []
+    for b in briefings or []:
+        company = getattr(b, "company", "") or "?"
+        for u in getattr(b, "updates", None) or []:
+            headline = (getattr(u, "headline", "") or "").strip()
+            summary = (getattr(u, "summary", "") or "").strip()
+            url = (getattr(u, "source_url", "") or "").strip()
+            if not headline and not summary:
+                continue
+            entries.append({
+                "title": headline or company,
+                "source": company,
+                "url": url,
+                "snippet": summary,
+                "content": summary,
+            })
+    return json.dumps(entries, indent=2, ensure_ascii=False)
+
+
+async def _generate_kc_tech_deep_dives(report: KeyCompaniesReport) -> None:
+    """Phase 6: select up to 5 latest technologies from the briefings and
+    generate ``RadarItemDetail`` write-ups for each. Mirrors the TechSensing
+    Phase 4 pattern. Mutates ``report.tech_deep_dives`` in place."""
+    from core.llm.output_schemas.sensing_outputs import (
+        LatestTechSelection,
+        RadarDetailsOutput,
+    )
+    from core.llm.prompts.sensing_prompts import (
+        latest_tech_selection_prompt,
+        sensing_details_prompt,
+    )
+
+    candidates_block = _gather_kc_tech_candidates(
+        briefings=report.briefings,
+        topic_highlights=report.topic_highlights,
+    )
+    logger.info(
+        f"[KC Phase 6] Selecting up to 5 latest technologies from "
+        f"{len(report.briefings)} briefings..."
+    )
+
+    selection_prompt = latest_tech_selection_prompt(
+        domain=report.highlight_domain or "Technology",
+        date_range=f"{report.period_start} - {report.period_end}",
+        candidates_block=candidates_block,
+        max_picks=5,
+    )
+    selection_result = await invoke_llm(
+        gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        response_schema=LatestTechSelection,
+        contents=selection_prompt,
+        port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
+    )
+    selection = LatestTechSelection.model_validate(selection_result)
+    selected_names = [
+        s.technology_name for s in selection.selections
+        if s.technology_name and s.technology_name.strip()
+    ][:5]
+
+    if not selected_names:
+        logger.info("[KC Phase 6] LLM selected 0 technologies — skipping detail generation")
+        report.tech_deep_dives = []
+        return
+
+    logger.info(
+        f"[KC Phase 6] Generating deep dives for {len(selected_names)} "
+        f"selected technologies: {', '.join(selected_names)}"
+    )
+    selected_json = json.dumps(
+        [{"name": n} for n in selected_names], indent=2, ensure_ascii=False
+    )
+    articles_json = _flatten_briefing_articles(report.briefings)
+    details_prompt = sensing_details_prompt(
+        selected_technologies_json=selected_json,
+        classified_articles_json=articles_json,
+        domain=report.highlight_domain or "Technology",
+    )
+    details_result = await invoke_llm(
+        gpu_model=GPU_SENSING_COMPANY_ANALYSIS_LLM.model,
+        response_schema=RadarDetailsOutput,
+        contents=details_prompt,
+        port=GPU_SENSING_COMPANY_ANALYSIS_LLM.port,
+    )
+    details = RadarDetailsOutput.model_validate(details_result)
+    for d in details.radar_item_details:
+        d.source = "auto"
+    report.tech_deep_dives = details.radar_item_details
+    logger.info(
+        f"[KC Phase 6] Generated {len(details.radar_item_details)} tech deep dives"
+    )
+
+
 async def run_key_companies(
     user_id: str,
     company_names: List[str],
@@ -527,12 +678,13 @@ async def run_key_companies(
         highlight_domain=hd,
     )
 
-    # Cross-domain rollup (#29). Pure; no network.
-    if SENSING_FEATURES.get("cross_domain_rollup", True):
-        try:
-            report.domain_rollup = compute_domain_rollup(report.briefings)
-        except Exception as e:
-            logger.debug(f"domain rollup failed: {e}")
+    # Phase 6: Technology Deep Dives (decoupled — mirrors TechSensing).
+    # Wrapped in try/except so any failure here does NOT abort the briefing.
+    try:
+        await _generate_kc_tech_deep_dives(report)
+    except Exception as e:
+        logger.warning(f"Key Companies tech deep dives failed (non-fatal): {e}")
+        report.tech_deep_dives = []
 
     if watchlist_id:
         report.watchlist_id = watchlist_id

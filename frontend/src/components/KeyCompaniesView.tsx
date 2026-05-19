@@ -22,6 +22,7 @@ import type {
   KeyCompanyBriefing,
   KeyCompanyUpdate,
   CompetitiveMatrix,
+  SensingRadarItemDetail,
 } from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
@@ -29,7 +30,6 @@ import SentimentBadge from '@/components/SentimentBadge';
 import SourceEvidencePanel from '@/components/SourceEvidencePanel';
 import CostTelemetryBadge from '@/components/CostTelemetryBadge';
 import MomentumGauge from '@/components/MomentumGauge';
-import CrossDomainRollup from '@/components/CrossDomainRollup';
 import CompanyTimelineView from '@/components/CompanyTimelineView';
 import CompanyWatchlistManager from '@/components/CompanyWatchlistManager';
 import KeyCompaniesDiffView, { DiffChip } from '@/components/KeyCompaniesDiffView';
@@ -598,9 +598,6 @@ const KeyCompaniesView: React.FC = () => {
           {/* Diff vs previous briefing (#12) */}
           <KeyCompaniesDiffView diffSummary={report.diff_summary} />
 
-          {/* Cross-domain rollup (#29) */}
-          <CrossDomainRollup rollup={report.domain_rollup} />
-
           {/* Competitive matrix */}
           {report.competitive_matrix && (
             <CompetitiveMatrixView matrix={report.competitive_matrix} />
@@ -612,6 +609,14 @@ const KeyCompaniesView: React.FC = () => {
               <BriefingCard key={b.company} briefing={b} />
             ))}
           </div>
+
+          {/* Technology Deep Dives — auto-selected + user-added */}
+          {trackingId && (
+            <TechDeepDivesSection
+              trackingId={trackingId}
+              initialDetails={report.tech_deep_dives || []}
+            />
+          )}
 
           {/* Per-company historical timeline (#14) */}
           {report.briefings.length > 0 && (
@@ -928,6 +933,193 @@ const CompetitiveMatrixView: React.FC<{ matrix: CompetitiveMatrix }> = ({ matrix
         )}
       </CardContent>
     </Card>
+  );
+};
+
+// ── Technology Deep Dives section (mirrors TechSensing's renderer) ──
+const TechDeepDivesSection: React.FC<{
+  trackingId: string;
+  initialDetails: SensingRadarItemDetail[];
+}> = ({ trackingId, initialDetails }) => {
+  const [extraDetails, setExtraDetails] = useState<SensingRadarItemDetail[]>([]);
+  const [addName, setAddName] = useState('');
+  const [addLoading, setAddLoading] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  // Reset local additions when navigating to a different report
+  useEffect(() => {
+    setExtraDetails([]);
+    setAddError(null);
+  }, [trackingId]);
+
+  const merged = [...initialDetails, ...extraDetails];
+
+  const toggle = (idx: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
+  };
+
+  const handleAdd = async () => {
+    const name = addName.trim();
+    if (!name || addLoading) return;
+    setAddLoading(true);
+    setAddError(null);
+    try {
+      const result = await api.sensingKeyCompaniesAddDeepDive(trackingId, name);
+      setExtraDetails((prev) => [...prev, result.detail]);
+      setAddName('');
+      const newIndex = initialDetails.length + extraDetails.length;
+      setTimeout(() => {
+        const el = document.getElementById(`kc-deep-dive-${newIndex}`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 80);
+      toast({ title: 'Deep dive added' });
+    } catch (e: any) {
+      if (e?.status === 409 && typeof e.existing_index === 'number') {
+        setAddError('Already deep-dived — scrolling to existing entry');
+        setTimeout(() => {
+          const el = document.getElementById(`kc-deep-dive-${e.existing_index}`);
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 80);
+      } else {
+        setAddError(e?.message || 'Failed to add deep dive');
+      }
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-lg font-semibold flex items-center gap-2">
+        <Sparkles className="w-5 h-5 text-emerald-600" />
+        Technology Deep Dives ({merged.length})
+      </h3>
+      <p className="text-sm text-muted-foreground -mt-1">
+        Deep dive into the most consequential technologies surfaced across these companies. Add your own below.
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          value={addName}
+          onChange={(e) => setAddName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
+          placeholder="Technology name (e.g. LangGraph, Llama 4, FlashAttention-3)"
+          disabled={addLoading}
+          className="max-w-md"
+        />
+        <Button
+          size="sm"
+          onClick={handleAdd}
+          disabled={addLoading || !addName.trim()}
+        >
+          {addLoading
+            ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Adding...</>
+            : <>+ Deep Dive</>}
+        </Button>
+      </div>
+      {addError && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">{addError}</p>
+      )}
+      {merged.length === 0 && (
+        <p className="text-sm text-muted-foreground italic">
+          No deep dives yet — add a technology above to generate one.
+        </p>
+      )}
+      {merged.map((item, idx) => {
+        const isExpanded = expanded.has(idx);
+        return (
+          <Card
+            key={idx}
+            id={`kc-deep-dive-${idx}`}
+            className="overflow-hidden border-l-4 border-l-emerald-400"
+          >
+            <button
+              onClick={() => toggle(idx)}
+              className="w-full text-left p-4 flex items-start justify-between hover:bg-muted/50 transition-colors"
+            >
+              <div className="flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold">{item.technology_name}</span>
+                  {item.source === 'user_added' && (
+                    <Badge variant="outline" className="text-[10px] h-5 bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800">
+                      User-added
+                    </Badge>
+                  )}
+                </div>
+                {!isExpanded && (
+                  <p className="text-sm text-muted-foreground mt-1.5 line-clamp-2">
+                    {item.what_it_is}
+                  </p>
+                )}
+              </div>
+            </button>
+            {isExpanded && (
+              <CardContent className="space-y-3 pt-0 pb-4">
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">What it is</h4>
+                  <p className="text-sm">{item.what_it_is}</p>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Why it matters</h4>
+                  <p className="text-sm">{item.why_it_matters}</p>
+                </div>
+                <div>
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Current state</h4>
+                  <p className="text-sm">{item.current_state}</p>
+                </div>
+                {item.key_players?.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Key players</h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {item.key_players.map((p, i) => (
+                        <Badge key={i} variant="secondary" className="text-xs">{p}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {item.practical_applications?.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-1">Practical applications</h4>
+                    <ul className="text-sm list-disc list-inside space-y-0.5">
+                      {item.practical_applications.map((a, i) => <li key={i}>{a}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {item.quantitative_highlights && item.quantitative_highlights.length > 0 && (
+                  <div className="bg-amber-50 dark:bg-amber-950/20 p-3 rounded">
+                    <h4 className="text-xs font-semibold text-amber-700 dark:text-amber-300 uppercase mb-1">Key numbers</h4>
+                    <ul className="text-sm list-disc list-inside space-y-0.5">
+                      {item.quantitative_highlights.map((q, i) => <li key={i}>{q}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {item.recommendation && (
+                  <div className="bg-indigo-50 dark:bg-indigo-950/20 p-3 rounded">
+                    <h4 className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 uppercase mb-1">Recommendation</h4>
+                    <p className="text-sm">{item.recommendation}</p>
+                  </div>
+                )}
+                {item.source_urls && item.source_urls.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className="text-xs text-muted-foreground">Sources:</span>
+                    {item.source_urls.map((u, i) => (
+                      <a key={i} href={u} target="_blank" rel="noopener noreferrer"
+                         className="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300">
+                        {i + 1}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            )}
+          </Card>
+        );
+      })}
+    </div>
   );
 };
 

@@ -409,66 +409,71 @@ function buildKeyCompaniesPdf(
     });
   }
 
-  if (report.domain_rollup && report.domain_rollup.length > 0) {
-    content.push(sectionHeader('Domain rollup', colors.rollup));
-    const total =
-      report.domain_rollup.reduce(
-        (sum, d) => sum + (d.update_count || 0),
-        0,
-      ) || 1;
-    content.push({
-      table: {
-        widths: ['*', 80, 80, 80],
-        body: [
-          [
-            {
-              text: 'Domain',
-              bold: true,
-              fontSize: 10,
-              color: colors.slate600,
-            },
-            {
-              text: 'Updates',
-              bold: true,
-              fontSize: 10,
-              color: colors.slate600,
-            },
-            {
-              text: 'Companies',
-              bold: true,
-              fontSize: 10,
-              color: colors.slate600,
-            },
-            {
-              text: '%',
-              bold: true,
-              fontSize: 10,
-              color: colors.slate600,
-            },
-          ],
-          ...report.domain_rollup.map((d) => [
-            { text: sanitize(d.domain), fontSize: 9 },
-            {
-              text: String(d.update_count),
-              fontSize: 9,
-              alignment: 'center',
-            },
-            {
-              text: String(d.company_count),
-              fontSize: 9,
-              alignment: 'center',
-            },
-            {
-              text: `${Math.round((d.update_count / total) * 100)}%`,
-              fontSize: 9,
-              alignment: 'center',
-            },
-          ]),
+  // Technology Deep Dives — auto + user-added
+  if (report.tech_deep_dives && report.tech_deep_dives.length > 0) {
+    content.push(sectionHeader('Technology Deep Dives', colors.rollup));
+    for (const item of report.tech_deep_dives) {
+      const isUserAdded = item.source === 'user_added';
+      content.push({
+        margin: [0, 0, 0, 8],
+        stack: [
+          {
+            columns: [
+              {
+                text: sanitize(item.technology_name),
+                bold: true,
+                fontSize: 11,
+                width: '*',
+              },
+              ...(isUserAdded
+                ? [{
+                    text: 'User-added',
+                    fontSize: 8,
+                    color: '#7C3AED',
+                    width: 'auto',
+                  }]
+                : []),
+            ],
+            margin: [0, 0, 0, 4],
+          },
+          ...(item.what_it_is ? [{
+            text: [
+              { text: 'What it is: ', bold: true, fontSize: 9 },
+              { text: sanitize(item.what_it_is), fontSize: 9 },
+            ],
+            margin: [0, 0, 0, 3] as [number, number, number, number],
+          }] : []),
+          ...(item.why_it_matters ? [{
+            text: [
+              { text: 'Why it matters: ', bold: true, fontSize: 9 },
+              { text: sanitize(item.why_it_matters), fontSize: 9 },
+            ],
+            margin: [0, 0, 0, 3] as [number, number, number, number],
+          }] : []),
+          ...(item.current_state ? [{
+            text: [
+              { text: 'Current state: ', bold: true, fontSize: 9 },
+              { text: sanitize(item.current_state), fontSize: 9 },
+            ],
+            margin: [0, 0, 0, 3] as [number, number, number, number],
+          }] : []),
+          ...(item.key_players && item.key_players.length > 0 ? [{
+            text: [
+              { text: 'Key players: ', bold: true, fontSize: 9 },
+              { text: item.key_players.map(sanitize).join(', '), fontSize: 9 },
+            ],
+            margin: [0, 0, 0, 3] as [number, number, number, number],
+          }] : []),
+          ...(item.recommendation ? [{
+            text: [
+              { text: 'Recommendation: ', bold: true, fontSize: 9, color: '#4F46E5' },
+              { text: sanitize(item.recommendation), fontSize: 9, color: '#4F46E5' },
+            ],
+            margin: [0, 2, 0, 0] as [number, number, number, number],
+          }] : []),
         ],
-      },
-      layout: 'lightHorizontalLines',
-      margin: [0, 0, 0, 10],
-    });
+      });
+    }
   }
 
   // Competitive matrix

@@ -661,7 +661,7 @@ export interface KeyCompaniesReport {
   topic_highlights?: KeyCompanyTopicHighlight[];
   competitive_matrix?: CompetitiveMatrix;
   briefings: KeyCompanyBriefing[];
-  domain_rollup?: DomainRollupEntry[];
+  tech_deep_dives?: SensingRadarItemDetail[];
   watchlist_id?: string;
   diff_summary?: DiffSummary | null;
 }
@@ -1390,6 +1390,40 @@ export const api = {
     if (!response.ok) {
       // FastAPI puts 409 details under data.detail (object). Surface
       // existing_index so the UI can scroll to the duplicate.
+      const detail = data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : (detail?.message || 'Failed to add deep dive');
+      const err = new Error(message) as Error & { status?: number; existing_index?: number };
+      err.status = response.status;
+      if (typeof detail === 'object' && detail !== null) {
+        err.existing_index = detail.existing_index;
+      }
+      throw err;
+    }
+    return data;
+  },
+
+  /**
+   * Generate a RadarItemDetail for an arbitrary technology and append it to
+   * a saved Key Companies report's tech_deep_dives list. Mirrors
+   * sensingAddDeepDive (which targets the TechSensing report).
+   */
+  async sensingKeyCompaniesAddDeepDive(
+    trackingId: string,
+    technologyName: string,
+  ): Promise<{ status: string; detail: SensingRadarItemDetail; index: number }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/key-companies/${encodeURIComponent(trackingId)}/deep-dive`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ technology_name: technologyName }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) {
       const detail = data?.detail;
       const message = typeof detail === 'string'
         ? detail

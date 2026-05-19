@@ -109,21 +109,6 @@ function keyCompaniesRows(
   return rows;
 }
 
-function keyCompaniesRollupRows(
-  report: KeyCompaniesReport,
-): (string | number)[][] {
-  const header: (string | number)[] = [
-    'Domain',
-    'Update count',
-    'Company count',
-  ];
-  const rows: (string | number)[][] = [header];
-  for (const d of report.domain_rollup || []) {
-    rows.push([d.domain, d.update_count, d.company_count]);
-  }
-  return rows;
-}
-
 function keyCompaniesMomentumRows(
   report: KeyCompaniesReport,
 ): (string | number)[][] {
@@ -159,14 +144,13 @@ export function downloadKeyCompaniesCsv(
   );
 }
 
-/** XLS: three sheets — Updates, Domain rollup, Momentum. */
+/** XLS: two sheets — Updates, Momentum. */
 export function downloadKeyCompaniesXls(
   report: KeyCompaniesReport,
   filename?: string,
 ): void {
   const html = buildXlsHtml([
     { name: 'Updates', rows: keyCompaniesRows(report) },
-    { name: 'DomainRollup', rows: keyCompaniesRollupRows(report) },
     { name: 'Momentum', rows: keyCompaniesMomentumRows(report) },
   ]);
   triggerDownload(

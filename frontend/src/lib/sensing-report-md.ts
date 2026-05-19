@@ -231,21 +231,23 @@ export function renderKeyCompaniesMarkdown(
     }
   }
 
-  if (report.domain_rollup?.length) {
-    out.push(
-      section(
-        heading(2, 'Domain rollup') +
-          '\n\n' +
-          table(
-            ['Domain', 'Updates', 'Companies'],
-            report.domain_rollup.map((d) => [
-              d.domain,
-              String(d.update_count),
-              String(d.company_count),
-            ]),
-          ),
-      ),
-    );
+  if (report.tech_deep_dives?.length) {
+    const lines: string[] = [heading(2, 'Technology Deep Dives')];
+    for (const d of report.tech_deep_dives) {
+      const tag = d.source === 'user_added' ? ' _(User-added)_' : '';
+      lines.push(`### ${d.technology_name}${tag}`);
+      if (d.what_it_is) lines.push(`**What it is:** ${d.what_it_is}`);
+      if (d.why_it_matters) lines.push(`**Why it matters:** ${d.why_it_matters}`);
+      if (d.current_state) lines.push(`**Current state:** ${d.current_state}`);
+      if (d.key_players?.length) lines.push(`**Key players:** ${d.key_players.join(', ')}`);
+      if (d.practical_applications?.length) {
+        lines.push(`**Practical applications:**`);
+        for (const a of d.practical_applications) lines.push(`- ${a}`);
+      }
+      if (d.recommendation) lines.push(`**Recommendation:** ${d.recommendation}`);
+      lines.push('');
+    }
+    out.push(section(lines.join('\n\n')));
   }
 
   if (report.briefings?.length) {

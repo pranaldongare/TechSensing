@@ -13,11 +13,11 @@ from pydantic import BaseModel, Field
 
 from core.llm.output_schemas.analysis_extensions import (
     DiffTag,
-    DomainRollupEntry,
     HiringSnapshot,
     MomentumSnapshot,
 )
 from core.llm.output_schemas.base import LLMOutputBase
+from core.llm.output_schemas.sensing_outputs import RadarItemDetail
 from core.llm.output_schemas.source_evidence import ClaimEvidence
 
 
@@ -268,9 +268,15 @@ class KeyCompaniesReport(LLMOutputBase):
     cross_company_summary: str = Field(
         default="",
         description=(
-            "Markdown summary (4-6 sentences) highlighting the week's most "
-            "important moves across all analyzed companies, divergent "
-            "strategies, and any notable cross-company themes."
+            "Markdown narrative structured as paragraphs:\n"
+            "  - ONE paragraph per analyzed company (2-4 sentences each), "
+            "leading with **CompanyName**: ... and summarising that "
+            "company's most consequential moves this period (specific "
+            "products/releases, strategic intent, notable metrics).\n"
+            "  - A FINAL synthesis paragraph beginning with "
+            "**Across companies**: ... that compares strategies, calls out "
+            "divergent positioning, and flags cross-company themes.\n"
+            "Paragraphs are separated by blank lines (\\n\\n)."
         ),
     )
     topic_highlights: List[KeyCompanyTopicHighlight] = Field(
@@ -291,11 +297,15 @@ class KeyCompaniesReport(LLMOutputBase):
         default_factory=list,
         description="One briefing per analyzed company.",
     )
-    domain_rollup: List[DomainRollupEntry] = Field(
+    tech_deep_dives: List[RadarItemDetail] = Field(
         default_factory=list,
         description=(
-            "Cross-domain rollup counts across all briefings (#29). "
-            "Populated by the cross-domain aggregator."
+            "Detailed write-ups for up to 5 of the latest, deep-dive-worthy "
+            "technologies surfaced across the analyzed companies' briefings. "
+            "Mirrors the TechSensing report's Technology Deep Dives — uses "
+            "the same RadarItemDetail schema. Entries marked "
+            "source='user_added' were added on demand via the inline Add "
+            "Deep Dive box in the Key Companies UI."
         ),
     )
     watchlist_id: str = Field(
