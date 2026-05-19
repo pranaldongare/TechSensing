@@ -346,6 +346,8 @@ async def _brief_company(
     period_days: int,
     window_start: datetime,
     window_end: datetime,
+    gather_timeout_s: int = GATHER_ARTICLES_TIMEOUT_S,
+    llm_timeout_s: int = BRIEFING_LLM_TIMEOUT_S,
 ) -> CompanyBriefing:
     """Run search → extract → LLM synthesis for one company.
 
@@ -354,6 +356,10 @@ async def _brief_company(
     ...) cannot block the orchestrator's ``asyncio.gather`` forever. On
     any timeout the company returns an empty briefing and the run
     continues with the rest.
+
+    The two timeout parameters are passed in by the orchestrator and
+    scale with the number of companies in the run (DDG is serialized
+    process-wide, so per-company wall time grows with N).
     """
     logger.info(f"[{company}] briefing started")
     t_start = time.time()
@@ -365,12 +371,12 @@ async def _brief_company(
                 _gather_articles_for_company(
                     ctx, company, highlight_domain, period_days
                 ),
-                timeout=GATHER_ARTICLES_TIMEOUT_S,
+                timeout=gather_timeout_s,
             )
         except asyncio.TimeoutError:
             logger.error(
                 f"[{company}] article gather TIMED OUT after "
-                f"{GATHER_ARTICLES_TIMEOUT_S}s — returning empty briefing"
+                f"{gather_timeout_s}s — returning empty briefing"
             )
             return _empty_briefing(company)
         logger.info(
@@ -403,12 +409,12 @@ async def _brief_company(
                     response_schema=CompanyBriefing,
                     contents=prompt,
                 ),
-                timeout=BRIEFING_LLM_TIMEOUT_S,
+                timeout=llm_timeout_s,
             )
         except asyncio.TimeoutError:
             logger.error(
                 f"[{company}] LLM call TIMED OUT after "
-                f"{BRIEFING_LLM_TIMEOUT_S}s — returning empty briefing"
+                f"{llm_timeout_s}s — returning empty briefing"
             )
             return _empty_briefing(company)
         logger.info(
@@ -704,6 +710,19 @@ async def run_key_companies(
     step = 80 / max(len(companies), 1)
     completed = 0
 
+    # Scale per-stage timeouts with N because DDG is serialized
+    # process-wide and the LLM concurrency cap is small — so per-company
+    # wall time grows roughly linearly with the number of companies.
+    n = max(len(companies), 1)
+    effective_gather_timeout = GATHER_ARTICLES_TIMEOUT_S * n
+    effective_llm_timeout = BRIEFING_LLM_TIMEOUT_S * n
+    effective_total_timeout = effective_gather_timeout + effective_llm_timeout + 60
+    logger.info(
+        f"Key Companies effective per-company timeouts (scaled by N={n}): "
+        f"gather={effective_gather_timeout}s, llm={effective_llm_timeout}s, "
+        f"total={effective_total_timeout}s"
+    )
+
     async def _run_one(company: str) -> CompanyBriefing:
         nonlocal completed
         async with sem:
@@ -720,13 +739,15 @@ async def run_key_companies(
                         period_days=period_days,
                         window_start=window_start,
                         window_end=now_dt,
+                        gather_timeout_s=effective_gather_timeout,
+                        llm_timeout_s=effective_llm_timeout,
                     ),
-                    timeout=BRIEFING_TOTAL_TIMEOUT_S,
+                    timeout=effective_total_timeout,
                 )
             except asyncio.TimeoutError:
                 logger.error(
                     f"[{company}] briefing exceeded total timeout "
-                    f"{BRIEFING_TOTAL_TIMEOUT_S}s — substituting empty briefing"
+                    f"{effective_total_timeout}s — substituting empty briefing"
                 )
                 briefing = _empty_briefing(company)
             completed += 1
