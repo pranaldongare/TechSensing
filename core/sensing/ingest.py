@@ -5,6 +5,7 @@ Returns a list of RawArticle dataclass instances.
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -26,6 +27,14 @@ from core.sensing.date_filter import (
 )
 
 logger = logging.getLogger("sensing.ingest")
+
+# DDG concurrency cap. The ddgs package shares connection state via a global
+# HTTP client and is prone to rate-limit lockups when multiple async tasks
+# call it simultaneously (the symptom: a single hung call blocks all parallel
+# searches indefinitely). Default 1 = strictly serialize DDG across the
+# whole process. Override with DDG_MAX_CONCURRENCY=N for higher throughput
+# if your IP can sustain it.
+_DDG_SEMAPHORE = asyncio.Semaphore(int(os.getenv("DDG_MAX_CONCURRENCY", "1")))
 
 # Handle ddgs package rename: try new name first, fall back to old
 try:
@@ -143,9 +152,12 @@ async def search_duckduckgo(
             stale_age = max(lookback_days * 3, 180)
 
             # 1. News endpoint — returns articles WITH dates.
-            news_results = await asyncio.to_thread(
-                _ddgs_news, query, MAX_SEARCH_RESULTS, timelimit
-            )
+            # Serialize via _DDG_SEMAPHORE to prevent rate-limit lockups
+            # when multiple companies search concurrently.
+            async with _DDG_SEMAPHORE:
+                news_results = await asyncio.to_thread(
+                    _ddgs_news, query, MAX_SEARCH_RESULTS, timelimit
+                )
             for r in news_results:
                 url = r.get("url", r.get("href", r.get("link", "")))
                 if not url or url in seen_urls:
@@ -167,9 +179,10 @@ async def search_duckduckgo(
                 )
 
             # 2. Text endpoint — catches blogs, company pages, docs, etc.
-            text_results = await asyncio.to_thread(
-                _ddgs_search, query, MAX_SEARCH_RESULTS, timelimit
-            )
+            async with _DDG_SEMAPHORE:
+                text_results = await asyncio.to_thread(
+                    _ddgs_search, query, MAX_SEARCH_RESULTS, timelimit
+                )
             for r in text_results:
                 url = r.get("href", r.get("link", ""))
                 if not url or url in seen_urls:

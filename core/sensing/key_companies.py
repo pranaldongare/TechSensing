@@ -54,6 +54,14 @@ MAX_UNIQUE_PER_COMPANY = 18
 PER_COMPANY_CONCURRENCY = 3
 EXTRACT_CONCURRENCY = 5
 
+# Per-stage timeouts so a single hung HTTP / LLM call cannot stall the entire
+# briefing indefinitely. Without these, asyncio.gather() waits forever on the
+# blocked task and no further progress is emitted — the symptom users see is
+# "stuck at 5% with no logs". Each stage is generous but bounded.
+GATHER_ARTICLES_TIMEOUT_S = int(os.getenv("KC_GATHER_TIMEOUT_S", "180"))   # 3 min
+BRIEFING_LLM_TIMEOUT_S = int(os.getenv("KC_LLM_TIMEOUT_S", "240"))         # 4 min
+BRIEFING_TOTAL_TIMEOUT_S = int(os.getenv("KC_BRIEFING_TIMEOUT_S", "480"))  # 8 min
+
 _CATEGORY_SET = {c.lower(): c for c in UPDATE_CATEGORIES}
 _ISO_DATE_RE = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
 
@@ -339,11 +347,37 @@ async def _brief_company(
     window_start: datetime,
     window_end: datetime,
 ) -> CompanyBriefing:
-    """Run search → extract → LLM synthesis for one company."""
+    """Run search → extract → LLM synthesis for one company.
+
+    Each stage is wrapped in its own ``asyncio.wait_for`` so a hung HTTP
+    call (DDG rate-limit lockup, trafilatura stall, INTERNAL API timeout,
+    ...) cannot block the orchestrator's ``asyncio.gather`` forever. On
+    any timeout the company returns an empty briefing and the run
+    continues with the rest.
+    """
+    logger.info(f"[{company}] briefing started")
+    t_start = time.time()
     try:
-        articles = await _gather_articles_for_company(
-            ctx, company, highlight_domain, period_days
+        # Stage A: search + extract
+        t0 = time.time()
+        try:
+            articles = await asyncio.wait_for(
+                _gather_articles_for_company(
+                    ctx, company, highlight_domain, period_days
+                ),
+                timeout=GATHER_ARTICLES_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[{company}] article gather TIMED OUT after "
+                f"{GATHER_ARTICLES_TIMEOUT_S}s — returning empty briefing"
+            )
+            return _empty_briefing(company)
+        logger.info(
+            f"[{company}] articles gathered in {time.time() - t0:.1f}s "
+            f"({len(articles)} articles)"
         )
+
         useful = [a for a in articles if (a.content or a.snippet)]
         if not useful:
             logger.warning(f"[{company}] no useful articles — empty briefing")
@@ -358,13 +392,29 @@ async def _brief_company(
             highlight_domain=highlight_domain,
         )
 
+        # Stage B: LLM synthesis
         logger.info(f"[{company}] invoking LLM with {len(useful)} articles")
-        result = await _invoke_with_telemetry(
-            ctx,
-            label=f"briefing:{company}",
-            response_schema=CompanyBriefing,
-            contents=prompt,
+        t1 = time.time()
+        try:
+            result = await asyncio.wait_for(
+                _invoke_with_telemetry(
+                    ctx,
+                    label=f"briefing:{company}",
+                    response_schema=CompanyBriefing,
+                    contents=prompt,
+                ),
+                timeout=BRIEFING_LLM_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[{company}] LLM call TIMED OUT after "
+                f"{BRIEFING_LLM_TIMEOUT_S}s — returning empty briefing"
+            )
+            return _empty_briefing(company)
+        logger.info(
+            f"[{company}] LLM responded in {time.time() - t1:.1f}s"
         )
+
         briefing = CompanyBriefing.model_validate(result)
         briefing.company = company
         briefing.sources_used = len(useful)
@@ -377,9 +427,16 @@ async def _brief_company(
             except Exception as e:
                 logger.debug(f"[{company}] momentum calc failed: {e}")
 
+        logger.info(
+            f"[{company}] briefing complete in {time.time() - t_start:.1f}s "
+            f"({len(briefing.updates)} updates)"
+        )
         return briefing
     except Exception as e:
-        logger.error(f"[{company}] briefing failed: {e}")
+        logger.error(
+            f"[{company}] briefing failed after "
+            f"{time.time() - t_start:.1f}s: {type(e).__name__}: {e}"
+        )
         return _empty_briefing(company)
 
 
@@ -650,22 +707,50 @@ async def run_key_companies(
     async def _run_one(company: str) -> CompanyBriefing:
         nonlocal completed
         async with sem:
-            briefing = await _brief_company(
-                ctx=ctx,
-                company=company,
-                period_start=period_start,
-                period_end=period_end,
-                highlight_domain=hd,
-                period_days=period_days,
-                window_start=window_start,
-                window_end=now_dt,
-            )
+            # Hard total-timeout wraps the entire per-company pipeline so a
+            # single hung company cannot stall the asyncio.gather() forever.
+            try:
+                briefing = await asyncio.wait_for(
+                    _brief_company(
+                        ctx=ctx,
+                        company=company,
+                        period_start=period_start,
+                        period_end=period_end,
+                        highlight_domain=hd,
+                        period_days=period_days,
+                        window_start=window_start,
+                        window_end=now_dt,
+                    ),
+                    timeout=BRIEFING_TOTAL_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"[{company}] briefing exceeded total timeout "
+                    f"{BRIEFING_TOTAL_TIMEOUT_S}s — substituting empty briefing"
+                )
+                briefing = _empty_briefing(company)
             completed += 1
             pct = 5 + int(step * completed)
             await _emit(pct, f"Briefed {company} ({completed}/{len(companies)})")
             return briefing
 
-    briefings = await asyncio.gather(*[_run_one(c) for c in companies])
+    # return_exceptions=True so a single task that raises unexpectedly does
+    # NOT cancel the others; we substitute an empty briefing in its place
+    # and log the failure.
+    gather_results = await asyncio.gather(
+        *[_run_one(c) for c in companies],
+        return_exceptions=True,
+    )
+    briefings = []
+    for company, res in zip(companies, gather_results):
+        if isinstance(res, Exception):
+            logger.error(
+                f"[{company}] _run_one raised {type(res).__name__}: {res} "
+                f"— substituting empty briefing"
+            )
+            briefings.append(_empty_briefing(company))
+        else:
+            briefings.append(res)
 
     await _emit(90, "Synthesizing cross-company digest...")
     report = await _build_cross_view(
