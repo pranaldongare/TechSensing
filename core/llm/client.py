@@ -432,7 +432,9 @@ CRITICAL OUTPUT RULES:
                     )
                     s = time.time()
                     internal_output = await asyncio.to_thread(
-                        internal_llm._call, effective_prompt
+                        internal_llm._call,
+                        effective_prompt,
+                        max_new_tokens=settings.INTERNAL_MAX_NEW_TOKENS,
                     )
                     elapsed = time.time() - s
 

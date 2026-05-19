@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     INTERNAL_USER_EMAIL: str = ""
     INTERNAL_MODEL_ID: str = ""
     USE_INTERNAL: bool = False
+    # Max output tokens for INTERNAL API calls. Default 8000 matches PRISM.
+    INTERNAL_MAX_NEW_TOKENS: int = 8000
     # Debug aid: when True, an INTERNAL failure raises immediately instead of
     # falling through to GPU/Gemini/OpenAI. Useful for surfacing the actual
     # INTERNAL error during debugging. Leave False in production.
