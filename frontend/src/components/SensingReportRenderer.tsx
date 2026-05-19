@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -141,6 +142,18 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
   const [onepagerOpen, setOnepagerOpen] = useState(false);
   const [onepagerSelected, setOnepagerSelected] = useState<Set<number>>(new Set());
   const [onepagerLoading, setOnepagerLoading] = useState(false);
+
+  // Inline Deep Dive (user-added) — local additions are merged with the
+  // report's auto-generated details for rendering. Synced from props when
+  // the report itself changes (e.g. user navigates to a different report).
+  const [extraDetails, setExtraDetails] = useState<SensingRadarItemDetail[]>([]);
+  const [addDeepDiveName, setAddDeepDiveName] = useState('');
+  const [addDeepDiveLoading, setAddDeepDiveLoading] = useState(false);
+  const [addDeepDiveError, setAddDeepDiveError] = useState<string | null>(null);
+  useEffect(() => {
+    setExtraDetails([]);  // reset whenever the report identity changes
+    setAddDeepDiveError(null);
+  }, [meta.tracking_id]);
 
   // Auto-expand and scroll to highlighted technology
   useEffect(() => {
@@ -619,17 +632,77 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
           </div>
         )}
 
-        {/* Technology Deep Dives (Radar Item Details) */}
-        {report.radar_item_details?.length > 0 && (
+        {/* Technology Deep Dives — now decoupled from the radar */}
+        {(() => {
+          const mergedDetails = [
+            ...(report.radar_item_details || []),
+            ...extraDetails,
+          ];
+          const handleAddDeepDive = async () => {
+            const name = addDeepDiveName.trim();
+            if (!name || addDeepDiveLoading) return;
+            setAddDeepDiveLoading(true);
+            setAddDeepDiveError(null);
+            try {
+              const result = await api.sensingAddDeepDive(meta.tracking_id, name);
+              setExtraDetails((prev) => [...prev, result.detail]);
+              setAddDeepDiveName('');
+              const newIndex = (report.radar_item_details?.length || 0) + extraDetails.length;
+              setTimeout(() => {
+                const el = document.getElementById(`radar-detail-${newIndex}`);
+                el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }, 80);
+            } catch (e: any) {
+              if (e?.status === 409 && typeof e.existing_index === 'number') {
+                setAddDeepDiveError(`Already deep-dived: scrolling to existing entry`);
+                setTimeout(() => {
+                  const el = document.getElementById(`radar-detail-${e.existing_index}`);
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 80);
+              } else {
+                setAddDeepDiveError(e?.message || 'Failed to add deep dive');
+              }
+            } finally {
+              setAddDeepDiveLoading(false);
+            }
+          };
+          return (
           <div className="space-y-3">
             <h3 className="text-lg font-semibold flex items-center gap-2">
               <Cpu className="w-5 h-5 text-emerald-600" />
-              Technology Deep Dives ({report.radar_item_details.length})
+              Technology Deep Dives ({mergedDetails.length})
             </h3>
             <p className="text-sm text-muted-foreground -mt-1">
-              Detailed analysis of each technology on the radar.
+              Deep dive into the most consequential technologies surfaced by this report. Add your own below.
             </p>
-            {report.radar_item_details.map((item: SensingRadarItemDetail, idx: number) => {
+            <div className="flex items-center gap-2">
+              <Input
+                value={addDeepDiveName}
+                onChange={(e) => setAddDeepDiveName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddDeepDive(); }}
+                placeholder="Technology name (e.g. LangGraph, Llama 4, FlashAttention-3)"
+                disabled={addDeepDiveLoading}
+                className="max-w-md"
+              />
+              <Button
+                size="sm"
+                onClick={handleAddDeepDive}
+                disabled={addDeepDiveLoading || !addDeepDiveName.trim()}
+              >
+                {addDeepDiveLoading
+                  ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Adding...</>
+                  : <>+ Deep Dive</>}
+              </Button>
+            </div>
+            {addDeepDiveError && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">{addDeepDiveError}</p>
+            )}
+            {mergedDetails.length === 0 && (
+              <p className="text-sm text-muted-foreground italic">
+                No deep dives yet — add a technology above to generate one.
+              </p>
+            )}
+            {mergedDetails.map((item: SensingRadarItemDetail, idx: number) => {
               const radarItem = report.radar_items?.find(r => r.name === item.technology_name);
               return (
                 <Card key={idx} id={`radar-detail-${idx}`} className={`overflow-hidden border-l-4 border-l-emerald-400${highlightTechnology?.toLowerCase() === item.technology_name.toLowerCase() ? ' ring-2 ring-emerald-400' : ''}`}>
@@ -640,6 +713,11 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold">{item.technology_name}</span>
+                        {item.source === 'user_added' && (
+                          <Badge variant="outline" className="text-[10px] h-5 bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800">
+                            User-added
+                          </Badge>
+                        )}
                         {radarItem && (
                           <>
                             <Badge className={ringColors[radarItem.ring] || 'bg-gray-100'} variant="secondary">
@@ -950,7 +1028,8 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
               );
             })}
           </div>
-        )}
+          );
+        })()}
 
         {/* Report Sections (Detailed Analysis) */}
         {report.report_sections?.length > 0 && (

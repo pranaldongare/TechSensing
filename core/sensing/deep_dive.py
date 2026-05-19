@@ -67,6 +67,71 @@ def _deep_dive_prompt(
     ]
 
 
+async def gather_articles_for_tech(
+    technology_name: str,
+    domain: str,
+    lookback_days: int = 30,
+    *,
+    seed_question: str = "",
+    seed_urls: Optional[List[str]] = None,
+    max_extract: int = 15,
+) -> List[RawArticle]:
+    """Targeted DuckDuckGo search + full-text extraction for a single technology.
+
+    Reusable across both the standalone Deep Dive pipeline (``run_deep_dive``)
+    and the inline-deep-dive endpoint (``POST /sensing/report/{id}/deep-dive``).
+    Returns the extracted articles — filtering and JSON serialization are the
+    caller's responsibility.
+    """
+    # If seed_urls, pre-populate articles from those URLs first.
+    articles: List[RawArticle] = []
+    if seed_urls:
+        for url in seed_urls[:5]:
+            articles.append(RawArticle(
+                title=url.split("/")[-1][:120] or url,
+                url=url,
+                source="seed",
+                snippet=seed_question or "",
+            ))
+
+    focus = seed_question.strip() if seed_question else ""
+    search_queries = [
+        f"{technology_name} {focus or domain}",
+        f"{technology_name} {'detailed analysis' if focus else 'tutorial guide'}",
+        f"{technology_name} comparison alternatives",
+    ]
+    for query in search_queries:
+        try:
+            results = await search_duckduckgo(
+                queries=[query],
+                domain=domain,
+                lookback_days=lookback_days,
+            )
+            articles.extend(results)
+        except Exception as e:
+            logger.warning(f"Search failed for '{query}': {e}")
+
+    logger.info(
+        f"gather_articles_for_tech('{technology_name}'): found {len(articles)} "
+        f"raw articles before extraction"
+    )
+
+    # Full-text extraction with concurrency cap.
+    sem = asyncio.Semaphore(5)
+
+    async def _extract(a: RawArticle) -> RawArticle:
+        async with sem:
+            return await extract_full_text(a)
+
+    enriched = await asyncio.gather(*[_extract(a) for a in articles[:max_extract]])
+    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
+    logger.info(
+        f"gather_articles_for_tech('{technology_name}'): extracted content "
+        f"from {content_count}/{len(enriched)} articles"
+    )
+    return enriched
+
+
 async def run_deep_dive(
     technology_name: str,
     domain: str,
@@ -97,50 +162,17 @@ async def run_deep_dive(
 
     logger.info(f"Deep dive starting for '{technology_name}' in {domain}")
 
-    # Stage 1: Targeted search
+    # Stage 1+2: Targeted search + extraction (reusable helper).
     await _emit(10, f"Searching for {technology_name}...")
-
-    # If seed_urls, pre-populate articles from those URLs.
-    articles: List[RawArticle] = []
-    if seed_urls:
-        for url in seed_urls[:5]:
-            articles.append(RawArticle(
-                title=url.split("/")[-1][:120] or url,
-                url=url,
-                source="seed",
-                snippet=seed_question or "",
-            ))
-
-    focus = seed_question.strip() if seed_question else ""
-    search_queries = [
-        f"{technology_name} {focus or domain}",
-        f"{technology_name} {'detailed analysis' if focus else 'tutorial guide'}",
-        f"{technology_name} comparison alternatives",
-    ]
-    for query in search_queries:
-        try:
-            results = await search_duckduckgo(
-                queries=[query],
-                domain=domain,
-                lookback_days=30,
-            )
-            articles.extend(results)
-        except Exception as e:
-            logger.warning(f"Search failed for '{query}': {e}")
-
-    logger.info(f"Deep dive search found {len(articles)} articles")
-
-    # Stage 2: Extract full text
     await _emit(40, "Extracting article content...")
-    sem = asyncio.Semaphore(5)
-
-    async def _extract(a: RawArticle) -> RawArticle:
-        async with sem:
-            return await extract_full_text(a)
-
-    enriched = await asyncio.gather(*[_extract(a) for a in articles[:15]])
-    content_count = sum(1 for a in enriched if a.content and len(a.content) > 50)
-    logger.info(f"Extracted content from {content_count}/{len(enriched)} articles")
+    enriched = await gather_articles_for_tech(
+        technology_name=technology_name,
+        domain=domain,
+        lookback_days=30,
+        seed_question=seed_question,
+        seed_urls=seed_urls,
+        max_extract=15,
+    )
 
     # Stage 3: LLM analysis
     await _emit(60, "Analyzing with LLM...")

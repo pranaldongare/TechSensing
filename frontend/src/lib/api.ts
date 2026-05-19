@@ -84,6 +84,7 @@ export interface SensingRadarItemDetail {
   source_urls?: string[];
   hiring_indicators?: string;
   recommendation?: string;
+  source?: string;  // "auto" (selected by pipeline) | "user_added" (inline add)
 }
 
 export interface SensingHeadlineMove {
@@ -1360,6 +1361,46 @@ export const api = {
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to start deep dive');
+    return data;
+  },
+
+  /**
+   * Generate a RadarItemDetail for an arbitrary technology and append it to
+   * the saved report. The new detail is rendered in the Technology Deep Dives
+   * section and is included in subsequent PDF/PPTX downloads.
+   *
+   * Throws Error on failure. On HTTP 409 (duplicate), the thrown error
+   * payload includes `existing_index` and `existing_name` so the caller can
+   * scroll to the pre-existing card.
+   */
+  async sensingAddDeepDive(
+    trackingId: string,
+    technologyName: string,
+  ): Promise<{ status: string; detail: SensingRadarItemDetail; index: number }> {
+    const token = getAuthToken();
+    const response = await fetch(
+      `${API_URL}/sensing/report/${encodeURIComponent(trackingId)}/deep-dive`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ technology_name: technologyName }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      // FastAPI puts 409 details under data.detail (object). Surface
+      // existing_index so the UI can scroll to the duplicate.
+      const detail = data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : (detail?.message || 'Failed to add deep dive');
+      const err = new Error(message) as Error & { status?: number; existing_index?: number };
+      err.status = response.status;
+      if (typeof detail === 'object' && detail !== null) {
+        err.existing_index = detail.existing_index;
+      }
+      throw err;
+    }
     return data;
   },
 

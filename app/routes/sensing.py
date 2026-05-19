@@ -1421,6 +1421,165 @@ async def load_deep_dive(request: Request, tracking_id: str):
     })
 
 
+# --- Inline Deep Dive (append a RadarItemDetail to a saved report) ---
+
+
+class AddDeepDiveRequest(BaseModel):
+    technology_name: str = Field(min_length=1)
+
+
+@router.post("/report/{tracking_id}/deep-dive")
+async def add_inline_deep_dive(
+    tracking_id: str,
+    request: Request,
+    body: AddDeepDiveRequest = Body(...),
+):
+    """Generate a RadarItemDetail for an arbitrary technology and append it
+    to the saved report's radar_item_details list. Returns the new detail so
+    the frontend can insert it without a full reload."""
+    from core.constants import GPU_SENSING_REPORT_LLM
+    from core.llm.client import invoke_llm
+    from core.llm.output_schemas.sensing_outputs import RadarDetailsOutput
+    from core.llm.prompts.sensing_prompts import sensing_details_prompt
+    from core.sensing.deep_dive import gather_articles_for_tech
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    user_id = payload.userId
+    tech_name = body.technology_name.strip()
+    if not tech_name:
+        raise HTTPException(status_code=400, detail="technology_name is empty")
+
+    sensing_dir = _get_sensing_dir(user_id)
+    report_path = os.path.join(sensing_dir, f"report_{tracking_id}.json")
+    if not os.path.exists(report_path):
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    # Load saved report envelope: { "report": ..., "meta": ... }
+    async with aiofiles.open(report_path, "r", encoding="utf-8") as f:
+        envelope = json.loads(await f.read())
+    report = envelope.get("report", envelope)
+    meta = envelope.get("meta", {})
+
+    # Dedup against existing details (case + whitespace insensitive)
+    def _norm(s: str) -> str:
+        return "".join(ch.lower() for ch in (s or "") if ch.isalnum())
+
+    target_norm = _norm(tech_name)
+    existing_details = report.get("radar_item_details") or []
+    for idx, d in enumerate(existing_details):
+        if _norm(d.get("technology_name", "")) == target_norm:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": f"Deep dive already exists for '{tech_name}'",
+                    "existing_index": idx,
+                    "existing_name": d.get("technology_name", ""),
+                },
+            )
+
+    domain = report.get("domain") or meta.get("domain") or "Technology"
+
+    # Stage 1+2: gather articles for this technology (shared helper)
+    try:
+        articles = await gather_articles_for_tech(
+            technology_name=tech_name,
+            domain=domain,
+            lookback_days=30,
+        )
+    except Exception as e:
+        logger.warning(
+            f"add_inline_deep_dive: search/extract failed for '{tech_name}': {e}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to gather articles for '{tech_name}': {e}",
+        )
+
+    usable = [a for a in articles if a.content and len(a.content) > 50]
+    if not usable:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"No usable articles found for '{tech_name}' — try a more "
+                f"specific technology name."
+            ),
+        )
+
+    articles_json = json.dumps(
+        [
+            {
+                "title": a.title,
+                "source": a.source,
+                "url": a.url,
+                "snippet": a.snippet,
+                "content": (a.content or "")[:2000],
+            }
+            for a in usable
+        ],
+        indent=2,
+        ensure_ascii=False,
+    )
+
+    # LLM call: produce a single RadarItemDetail using the same prompt as Phase 4b
+    selected_json = json.dumps([{"name": tech_name}], indent=2, ensure_ascii=False)
+    details_prompt = sensing_details_prompt(
+        selected_technologies_json=selected_json,
+        classified_articles_json=articles_json,
+        domain=domain,
+    )
+
+    try:
+        details_result = await invoke_llm(
+            gpu_model=GPU_SENSING_REPORT_LLM.model,
+            response_schema=RadarDetailsOutput,
+            contents=details_prompt,
+            port=GPU_SENSING_REPORT_LLM.port,
+        )
+        details = RadarDetailsOutput.model_validate(details_result)
+    except Exception as e:
+        logger.error(f"add_inline_deep_dive: LLM call failed for '{tech_name}': {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM call failed for '{tech_name}': {e}",
+        )
+
+    if not details.radar_item_details:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM returned no deep dive for '{tech_name}'",
+        )
+
+    new_detail = details.radar_item_details[0]
+    new_detail.source = "user_added"
+    new_detail_dump = new_detail.model_dump()
+
+    # Append to saved report and write back.
+    if "radar_item_details" not in report or report["radar_item_details"] is None:
+        report["radar_item_details"] = []
+    report["radar_item_details"].append(new_detail_dump)
+    envelope["report"] = report
+    new_index = len(report["radar_item_details"]) - 1
+
+    async with aiofiles.open(report_path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(envelope, ensure_ascii=False, indent=2))
+
+    logger.info(
+        f"add_inline_deep_dive: appended user-added deep dive for "
+        f"'{tech_name}' (index={new_index}) to {report_path}"
+    )
+
+    return JSONResponse(
+        content={
+            "status": "ok",
+            "detail": new_detail_dump,
+            "index": new_index,
+        }
+    )
+
+
 # --- Company Analysis ---
 
 

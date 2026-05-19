@@ -24,6 +24,7 @@ from core.llm.client import invoke_llm
 from core.llm.output_schemas.sensing_outputs import (
     ClassifiedArticle,
     HeadlineMove,
+    LatestTechSelection,
     MarketSignal,
     RadarDetailsOutput,
     ReportCore,
@@ -32,6 +33,7 @@ from core.llm.output_schemas.sensing_outputs import (
     TechSensingReport,
 )
 from core.llm.prompts.sensing_prompts import (
+    latest_tech_selection_prompt,
     sensing_details_prompt,
     sensing_report_core_prompt,
     sensing_report_insights_prompt,
@@ -259,86 +261,83 @@ async def generate_report(
         if item.name not in novel_items:
             item.is_new = False
 
-    # ── Phase 4: Radar item details (batched to avoid output truncation) ─
-    # Only deep-dive genuinely new technologies (validated above).
-    # Established-but-buzzing items remain on the radar but don't get deep dives.
-    DETAILS_BATCH_SIZE = 5
-    all_radar_items = [item for item in radar.radar_items if item.is_new]
-    if not all_radar_items:
-        logger.info("[Phase 4/4] No is_new=True radar items — skipping deep dives")
-        all_radar_items = []
-    batches = [
-        all_radar_items[i : i + DETAILS_BATCH_SIZE]
-        for i in range(0, len(all_radar_items), DETAILS_BATCH_SIZE)
-    ]
-
+    # ── Phase 4: Deep dives (decoupled from radar) ──────────────────────
+    # Phase 4a: LLM picks up to 5 latest, deep-dive-worthy technologies
+    # from the assembled context (radar items + top events' related techs).
+    # Phase 4b: single LLM call generates RadarItemDetail for each pick.
+    MAX_DEEP_DIVES = 5
     phase4_start = time.time()
+
+    candidates_block = _gather_deep_dive_candidates(
+        radar_items=radar.radar_items,
+        top_events=core.top_events,
+    )
     logger.info(
-        f"[Phase 4/4] Generating details for {len(all_radar_items)} radar items "
-        f"in {len(batches)} batch(es) of ≤{DETAILS_BATCH_SIZE}..."
+        f"[Phase 4a/4] Selecting up to {MAX_DEEP_DIVES} latest technologies "
+        f"from candidates..."
     )
 
-    all_details = []
-    seen_detail_names: set[str] = set()  # Track across batches to prevent duplicates
+    selection_prompt = latest_tech_selection_prompt(
+        domain=domain,
+        date_range=date_range,
+        candidates_block=candidates_block,
+        max_picks=MAX_DEEP_DIVES,
+    )
+    selection_result = await invoke_llm(
+        gpu_model=GPU_SENSING_REPORT_LLM.model,
+        response_schema=LatestTechSelection,
+        contents=selection_prompt,
+        port=GPU_SENSING_REPORT_LLM.port,
+    )
+    selection = LatestTechSelection.model_validate(selection_result)
+    selected_names = [
+        s.technology_name for s in selection.selections
+        if s.technology_name and s.technology_name.strip()
+    ][:MAX_DEEP_DIVES]
 
-    for batch_idx, batch in enumerate(batches, 1):
-        batch_json = json.dumps(
-            [
-                {"name": item.name, "quadrant": item.quadrant, "ring": item.ring}
-                for item in batch
-            ],
+    if not selected_names:
+        logger.info(
+            "[Phase 4/4] LLM selected 0 technologies for deep dives — "
+            "skipping detail generation"
+        )
+        details = RadarDetailsOutput(radar_item_details=[])
+    else:
+        logger.info(
+            f"[Phase 4b/4] Generating deep dives for {len(selected_names)} "
+            f"selected technologies: {', '.join(selected_names)}"
+        )
+        selected_json = json.dumps(
+            [{"name": n} for n in selected_names],
             indent=2,
             ensure_ascii=False,
         )
-
-        batch_prompt = sensing_details_prompt(
-            radar_items_json=batch_json,
+        details_prompt = sensing_details_prompt(
+            selected_technologies_json=selected_json,
             classified_articles_json=articles_json,
             domain=domain,
             custom_requirements=custom_requirements,
             org_context=org_context,
         )
-
-        logger.info(
-            f"[Phase 4/4] Batch {batch_idx}/{len(batches)}: "
-            f"{', '.join(item.name for item in batch)}"
-        )
-
-        batch_result = await invoke_llm(
+        details_result = await invoke_llm(
             gpu_model=GPU_SENSING_REPORT_LLM.model,
             response_schema=RadarDetailsOutput,
-            contents=batch_prompt,
+            contents=details_prompt,
             port=GPU_SENSING_REPORT_LLM.port,
         )
+        details = RadarDetailsOutput.model_validate(details_result)
+        # Mark provenance — these were auto-selected by the pipeline.
+        for d in details.radar_item_details:
+            d.source = "auto"
 
-        batch_details = RadarDetailsOutput.model_validate(batch_result)
-
-        # Cross-batch dedup: skip details we've already seen
-        for detail in batch_details.radar_item_details:
-            norm_name = _normalize_name(detail.technology_name)
-            if norm_name in seen_detail_names:
-                logger.info(
-                    f"[Phase 4/4] Skipping cross-batch duplicate detail: "
-                    f"{detail.technology_name}"
-                )
-                continue
-            seen_detail_names.add(norm_name)
-            all_details.append(detail)
-
-        logger.info(
-            f"[Phase 4/4] Batch {batch_idx}/{len(batches)} done — "
-            f"{len(batch_details.radar_item_details)} details"
-        )
-
-    details = RadarDetailsOutput(radar_item_details=all_details)
     phase4_time = time.time() - phase4_start
 
     logger.info(
-        f"[Phase 4/4] Details generated in {phase4_time:.1f}s — "
-        f"{len(details.radar_item_details)} detail entries across {len(batches)} batches"
+        f"[Phase 4/4] Deep dives generated in {phase4_time:.1f}s — "
+        f"{len(details.radar_item_details)} detail entries"
     )
 
     # ── Post-processing: dedup, recency, specificity ─────────────────
+    pre_filter_radar_count = len(radar.radar_items)
     filtered_radar, filtered_details = _postprocess_radar(
         radar.radar_items, details.radar_item_details, classified_articles,
         domain=domain,
@@ -349,7 +348,7 @@ async def generate_report(
     details = RadarDetailsOutput(radar_item_details=filtered_details)
 
     logger.info(
-        f"Post-processing: {len(all_radar_items)} -> {len(filtered_radar)} radar items "
+        f"Post-processing: {pre_filter_radar_count} -> {len(filtered_radar)} radar items "
         f"after dedup/recency/specificity filtering"
     )
 
@@ -575,6 +574,60 @@ def _get_legacy_blocklist(
 _DEDUP_SIMILARITY_THRESHOLD = 0.75
 
 
+def _gather_deep_dive_candidates(radar_items, top_events) -> str:
+    """Build a human-readable list of candidate technologies with provenance
+    hints, suitable for the latest-tech selection LLM prompt.
+
+    Combines radar items (with is_new/signal_strength/momentum flags) and the
+    related_technologies referenced in top events. Deduplicates by normalized
+    name. Returns ``"(none)"`` when there are no candidates so the prompt
+    still parses cleanly.
+    """
+    seen: set[str] = set()
+    lines: list[str] = []
+
+    for ri in radar_items or []:
+        if not getattr(ri, "name", None):
+            continue
+        key = _normalize_name(ri.name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        flags = []
+        if getattr(ri, "is_new", False):
+            flags.append("is_new=true")
+        signal = getattr(ri, "signal_strength", 0.0) or 0.0
+        if signal:
+            flags.append(f"signal={signal:.2f}")
+        momentum = getattr(ri, "momentum", "") or ""
+        if momentum:
+            flags.append(f"momentum={momentum}")
+        quadrant = getattr(ri, "quadrant", "") or ""
+        ring = getattr(ri, "ring", "") or ""
+        if quadrant or ring:
+            flags.append(f"{quadrant}/{ring}")
+        lines.append(
+            f"- {ri.name}  [from=radar; {', '.join(flags) or '—'}]"
+        )
+
+    for ev in top_events or []:
+        actor = getattr(ev, "actor", "") or "?"
+        event_type = getattr(ev, "event_type", "") or "?"
+        for tech_name in getattr(ev, "related_technologies", None) or []:
+            if not tech_name:
+                continue
+            key = _normalize_name(tech_name)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            lines.append(
+                f"- {tech_name}  [from=top_events.related; "
+                f"actor={actor}; event_type={event_type}]"
+            )
+
+    return "\n".join(lines) if lines else "(none)"
+
+
 def _normalize_name(name: str) -> str:
     """Lowercase and strip whitespace/punctuation for comparison."""
     return re.sub(r"[^a-z0-9 .]", "", name.lower()).strip()
@@ -717,21 +770,22 @@ def _postprocess_radar(radar_items, radar_details, classified_articles,
         logger.info(f"Removed duplicate radar items: {removed_dupes}")
 
     # Step 4: Filter details to match surviving radar items
-    # Use normalized names for matching to handle whitespace/case differences
-    surviving_norm_to_name = {_normalize_name(item.name): item.name for item in deduped}
-    surviving_names = set(surviving_norm_to_name.values())
-
-    # Deduplicate details themselves (cross-batch duplicates)
+    # Deduplicate details themselves (cross-batch duplicates).
+    # NOTE: deep dives are decoupled from the radar — we no longer drop
+    # details just because their technology_name isn't in the surviving
+    # radar items. A detail may legitimately exist without a corresponding
+    # radar entry (e.g. user-added inline deep dive, or a model release
+    # that lives in top_events but didn't get promoted to the radar).
     seen_detail_names: set[str] = set()
     filtered_details = []
     for d in radar_details:
         norm = _normalize_name(d.technology_name)
-        # Match via normalized name or exact name
-        if d.technology_name in surviving_names or norm in surviving_norm_to_name:
-            if norm not in seen_detail_names:
-                seen_detail_names.add(norm)
-                filtered_details.append(d)
-            else:
-                logger.debug(f"Removed duplicate detail: {d.technology_name}")
+        if not norm:
+            continue
+        if norm in seen_detail_names:
+            logger.debug(f"Removed duplicate detail: {d.technology_name}")
+            continue
+        seen_detail_names.add(norm)
+        filtered_details.append(d)
 
     return deduped, filtered_details

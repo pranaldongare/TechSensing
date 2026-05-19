@@ -614,18 +614,20 @@ def sensing_report_insights_prompt(
 
 
 def sensing_details_prompt(
-    radar_items_json: str,
+    selected_technologies_json: str,
     classified_articles_json: str,
     domain: str = "Technology",
     custom_requirements: str = "",
     org_context: str = "",
 ) -> list[dict]:
     """
-    Build a chat prompt to generate detailed write-ups for each radar item.
+    Build a chat prompt to generate detailed write-ups for each selected
+    technology.
 
-    This is Phase 2 of report generation — called after the skeleton (Phase 1)
-    has produced the radar_items list.  Keeping this separate avoids exceeding
-    output token limits by splitting the heaviest section into its own call.
+    Previously called "Phase 4 (Radar Details)" — now selection is done
+    independently of the radar (see ``latest_tech_selection_prompt``) and
+    this prompt simply produces ``RadarItemDetail`` entries for whatever
+    technology names it receives.
     """
     contents = [
         {
@@ -642,9 +644,9 @@ def sensing_details_prompt(
                     "- Do NOT fabricate org-specific connections unsupported by articles.\n\n"
                     if org_context else ""
                 )
-                + "You are given a list of RADAR ITEMS (name, quadrant, ring) and the "
-                "CLASSIFIED ARTICLES that were used to create them.\n\n"
-                "For EVERY radar item, generate a detailed write-up covering:\n"
+                + "You are given a list of SELECTED TECHNOLOGIES (just the name) and "
+                "the CLASSIFIED ARTICLES that were used to identify them.\n\n"
+                "For EVERY selected technology, generate a detailed write-up covering:\n"
                 "  * what_it_is: Clear explanation of what this technology is and how it works (2-4 sentences).\n"
                 "  * why_it_matters: Why this technology is significant and what problems it solves (2-3 sentences).\n"
                 "  * current_state: Current maturity, adoption level, and RECENT key developments (2-3 sentences). "
@@ -697,7 +699,7 @@ def sensing_details_prompt(
                 "- Each element must have: technology_name, what_it_is, why_it_matters, "
                 "current_state, key_players, practical_applications, quantitative_highlights, "
                 "source_urls, hiring_indicators, recommendation.\n"
-                "- technology_name MUST exactly match the radar item name provided.\n"
+                "- technology_name MUST be the same string as the selected technology name provided.\n"
                 "- Do NOT include schema definitions, $defs, $ref, properties, or type metadata.\n"
                 "- Newlines inside string values MUST be written as \\n (escaped).\n"
                 '- Double quotes inside string values MUST be escaped as \\".\n'
@@ -707,10 +709,10 @@ def sensing_details_prompt(
             "role": "user",
             "parts": (
                 f"DOMAIN: {domain}\n\n"
-                f"RADAR ITEMS:\n{radar_items_json}\n\n"
+                f"SELECTED TECHNOLOGIES:\n{selected_technologies_json}\n\n"
                 f"CLASSIFIED ARTICLES:\n{classified_articles_json}\n\n"
-                "Generate detailed write-ups for EVERY radar item listed above. "
-                "Return ONLY valid JSON."
+                "Generate detailed write-ups for EVERY selected technology "
+                "listed above. Return ONLY valid JSON."
             ),
         },
     ]
@@ -1231,6 +1233,107 @@ def model_release_injection_prompt(
                 f"{executive_summary[:2000]}\n\n"
                 f"CANDIDATE MODEL RELEASES:\n\n{candidates_block}\n"
                 "Produce per-candidate decisions. Return ONLY valid JSON."
+            ),
+        },
+    ]
+
+
+def latest_tech_selection_prompt(
+    domain: str,
+    date_range: str,
+    candidates_block: str,
+    max_picks: int = 5,
+) -> list[dict]:
+    """Build the Phase 4a prompt that selects up to ``max_picks`` latest,
+    deep-dive-worthy technologies from the assembled report context.
+
+    ``candidates_block`` is a pre-formatted, human-readable list of candidate
+    technologies with provenance — e.g. ``radar/is_new=True/signal=0.85``,
+    ``model_releases/2026-05-12/Anthropic``, ``top_events.related_tech``.
+    The selection LLM uses both the candidate name and its provenance hints
+    to pick the right items.
+    """
+    from core.llm.output_schemas.sensing_outputs import LatestTechSelection
+
+    schema_json = json.dumps(LatestTechSelection.model_json_schema(), indent=2)
+    now = datetime.now(timezone.utc)
+    today_str = now.strftime("%B %d, %Y")
+
+    return [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology analyst selecting the most "
+                "consequential NEW technologies from a fresh tech-sensing "
+                "report so each can receive its own deep-dive write-up.\n\n"
+                f"DOMAIN: {domain}\n"
+                f"DATE RANGE: {date_range}\n"
+                f"TODAY: {today_str}\n\n"
+                "TASK: From the candidate list below, select AT MOST "
+                f"{max_picks} technologies. Fewer is fine — never pad with "
+                "weak picks. Quality matters far more than quantity.\n\n"
+                "WHAT QUALIFIES AS A TECHNOLOGY (must satisfy ALL):\n"
+                "1. SPECIFIC. A named model, framework, library, technique, "
+                "protocol, or system. Examples that QUALIFY: 'Claude 4.7', "
+                "'LangGraph', 'FlashAttention-3', 'Mixture of Experts routing', "
+                "'vLLM', 'Speculative decoding'.\n"
+                "2. LATEST. Either released or had a substantive new "
+                "version/capability inside the date range above, OR is "
+                "first-mentioned this week as a notable development. Stale "
+                "tech that has been the de-facto standard for >12 months "
+                "does NOT qualify unless there is a concrete new release.\n"
+                "3. DEEP-DIVE-WORTHY. Substantive enough that a 6-section "
+                "write-up (what it is, why it matters, current state, key "
+                "players, applications, recommendation) would teach a tech "
+                "leader something useful.\n\n"
+                "WHAT TO REJECT (any of these are disqualifying):\n"
+                "- COMPANIES / LABS / ORGANIZATIONS — examples that DO NOT "
+                "qualify: 'OpenAI', 'Anthropic', 'Google DeepMind', "
+                "'Meta AI', 'Hugging Face' (the company, not its libraries), "
+                "'Mistral AI' (the company). These are actors, not "
+                "technologies. If OpenAI made a movement, pick the SPECIFIC "
+                "product (e.g. 'GPT-5.5'), not the company.\n"
+                "- ABSTRACT CATEGORIES — 'AI Agents', 'Generative AI', "
+                "'Multimodal AI', 'Machine Learning', 'Foundation Models'. "
+                "These are domains, not deep-divable technologies.\n"
+                "- STALE TECH — anything released before "
+                f"{now.year - 1} that has no new release in the date range.\n"
+                "- VAGUE / GENERIC TERMS — 'Cloud platform', 'AI tool', "
+                "'Inference engine' without a specific name.\n\n"
+                "SELECTION HEURISTICS:\n"
+                "- Prefer candidates flagged as 'model_releases' (these are "
+                "guaranteed concrete releases).\n"
+                "- Prefer radar items with is_new=true AND signal_strength "
+                ">= 0.6.\n"
+                "- Prefer items that also appear in 'top_events' "
+                "related_technologies (cross-signal).\n"
+                "- Spread across distinct technology categories where "
+                "possible — don't pick 5 models if 3 models + 1 framework + "
+                "1 technique would better represent the week.\n\n"
+                "OUTPUT RULES:\n"
+                "- Return ONLY valid JSON matching the schema below.\n"
+                "- 'selections' may be empty if no candidates qualify.\n"
+                "- 'selections' must contain at most "
+                f"{max_picks} items.\n"
+                "- 'technology_name' should match the candidate name from "
+                "the list exactly when possible (preserve case and "
+                "punctuation). If the candidate name is ambiguous or "
+                "includes a parenthesised gloss, output just the canonical "
+                "name.\n"
+                "- 'justification' is one sentence; cite the provenance "
+                "(e.g. 'released 2026-05-12 per model_releases', 'is_new "
+                "radar item with signal=0.82').\n"
+                "- No markdown fencing, no commentary outside JSON.\n\n"
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"CANDIDATE TECHNOLOGIES (with provenance hints):\n\n"
+                f"{candidates_block}\n\n"
+                f"Select at most {max_picks} that satisfy the rules. "
+                "Return ONLY valid JSON."
             ),
         },
     ]

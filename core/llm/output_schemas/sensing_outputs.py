@@ -250,7 +250,10 @@ class RadarItem(BaseModel):
 
 class RadarItemDetail(BaseModel):
     technology_name: str = Field(
-        description="Technology name (must match a RadarItem name)."
+        description=(
+            "Technology name (label only — no longer required to match any "
+            "RadarItem.name; deep dives are now independent of the radar)."
+        )
     )
     what_it_is: str = Field(
         description="Clear explanation of what this technology is and how it works (2-4 sentences)."
@@ -302,6 +305,42 @@ class RadarItemDetail(BaseModel):
             "regarding this technology. What should they evaluate, adopt, "
             "pilot, or monitor? Be specific and grounded in the evidence."
         ),
+    )
+    source: str = Field(
+        default="auto",
+        description=(
+            "Origin of this deep dive: 'auto' (selected by the report "
+            "pipeline) or 'user_added' (added on demand via the inline "
+            "Add Deep Dive box in the report renderer)."
+        ),
+    )
+
+
+class LatestTechSelectionItem(BaseModel):
+    """One technology selected by the latest-tech selection LLM call."""
+
+    technology_name: str = Field(
+        description="Specific technology name — a model, framework, library, "
+        "technique, protocol, or system. Never a company/org or abstract category."
+    )
+    category: str = Field(
+        default="other",
+        description="One of: 'model', 'framework', 'library', 'technique', "
+        "'protocol', 'tool', 'system', 'other'.",
+    )
+    justification: str = Field(
+        description="One-sentence reason this technology is among the latest "
+        "and most consequential developments in this report's date range."
+    )
+
+
+class LatestTechSelection(LLMOutputBase):
+    """Output schema for the Phase 4a latest-tech selection LLM call."""
+
+    selections: List[LatestTechSelectionItem] = Field(
+        default_factory=list,
+        description="Up to 5 selected technologies. Fewer is acceptable when "
+        "the corpus does not justify more — never pad with weak picks.",
     )
 
 
