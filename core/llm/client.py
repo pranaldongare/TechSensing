@@ -405,6 +405,8 @@ CRITICAL OUTPUT RULES:
         logger.info("Attempt %d/%d for schema=%s", attempt, MAX_RETRIES, schema_name)
         effective_prompt = _build_prompt(prompt, last_failed_output, last_parse_error)
 
+        no_fallback = SWITCHES.get("INTERNAL_NO_FALLBACK", False)
+
         # ── Phase 0: INTERNAL API (opt-in, before GPU) ──────────
         use_internal = (
             SWITCHES.get("USE_INTERNAL", False)
@@ -413,6 +415,24 @@ CRITICAL OUTPUT RULES:
             and settings.INTERNAL_BASE_URL
             and settings.INTERNAL_API_TOKEN
         )
+
+        # If INTERNAL_NO_FALLBACK is set but INTERNAL isn't usable (switch
+        # off, missing credentials, or sticky-skip already tripped on an
+        # earlier attempt), refuse to fall through to GPU/Gemini/OpenAI.
+        # This catches the leak path where users set NO_FALLBACK=True but
+        # forgot to set USE_INTERNAL=true or fill in the credentials.
+        if no_fallback and not use_internal:
+            raise RuntimeError(
+                "INTERNAL_NO_FALLBACK=True but INTERNAL is not usable on this "
+                "attempt — refusing to fall back to GPU/Gemini/OpenAI. "
+                f"USE_INTERNAL={SWITCHES.get('USE_INTERNAL', False)}, "
+                f"INTERNALLLM_class_available={INTERNALLLM is not None}, "
+                f"BASE_URL_set={bool(settings.INTERNAL_BASE_URL)}, "
+                f"TOKEN_set={bool(settings.INTERNAL_API_TOKEN)}, "
+                f"sticky_skip={_skip_internal.get()}. "
+                f"Last error from a prior attempt: "
+                f"{last_parse_error or '(none — INTERNAL never attempted this request)'}"
+            )
         if use_internal:
             internal_output = None
             internal_parse_error = False
@@ -503,20 +523,32 @@ CRITICAL OUTPUT RULES:
             # Debug aid: if the user has explicitly disabled fallback to GPU
             # (INTERNAL_NO_FALLBACK=true), raise the INTERNAL error now so the
             # user sees it instead of having it masked by a successful GPU
-            # call. This applies whether INTERNAL failed via transport or
-            # parse error.
-            if SWITCHES.get("INTERNAL_NO_FALLBACK", False) and (
-                internal_parse_error or _skip_internal.get()
-            ):
+            # call. We raise on ANY failure mode (parse, transport, OR
+            # blank-blank) — anything other than a successful early-return.
+            if no_fallback:
                 raise RuntimeError(
-                    f"INTERNAL API failed and INTERNAL_NO_FALLBACK=True "
-                    f"(no fallback to GPU/Gemini/OpenAI). "
-                    f"Last error: {last_parse_error or err}"
+                    f"INTERNAL_NO_FALLBACK=True and INTERNAL did not return "
+                    f"a usable response — refusing to fall back to GPU/"
+                    f"Gemini/OpenAI. "
+                    f"internal_parse_error={internal_parse_error}, "
+                    f"sticky_skip={_skip_internal.get()}, "
+                    f"last_error={last_parse_error or err or 'blank response twice'}"
                 )
             # On a parse error, give INTERNAL the next attempt to self-correct
             # before falling through to GPU. Transport errors fall through now.
             if internal_parse_error:
                 continue
+
+        # Safety net: if we got here with no_fallback=True (e.g. because
+        # use_internal evaluated to False mid-loop), still refuse to use GPU.
+        # The earlier guard already covers this for the common case but this
+        # double-check protects against any future code-path that adds a
+        # path between the use_internal check and the GPU block.
+        if no_fallback:
+            raise RuntimeError(
+                "INTERNAL_NO_FALLBACK=True — refusing to call GPU/Gemini/"
+                "OpenAI. This should have been caught earlier; please report."
+            )
 
         if gpu_model:
             llm_output = None

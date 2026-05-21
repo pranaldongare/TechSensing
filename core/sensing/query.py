@@ -38,7 +38,21 @@ class QueryAnswer(LLMOutputBase):
 
 
 async def _call_ollama_raw(prompt: str, model: str, port: int) -> str:
-    """Call Ollama /api/generate directly (no schema injection)."""
+    """Call Ollama /api/generate directly (no schema injection).
+
+    Honors INTERNAL_NO_FALLBACK: when set, this bypass path is refused so
+    debugging users always see the actual INTERNAL failure instead of a
+    silent fall-through to local Ollama. The Ask query feature should be
+    treated as offline when NO_FALLBACK is on.
+    """
+    from core.constants import SWITCHES
+    if SWITCHES.get("INTERNAL_NO_FALLBACK", False):
+        raise RuntimeError(
+            "INTERNAL_NO_FALLBACK=True — refusing to call local Ollama from "
+            "the Ask query path. Disable INTERNAL_NO_FALLBACK once debugging "
+            "is complete."
+        )
+
     url = f"{_OLLAMA_BASE.format(port=port)}/api/generate"
     payload = {
         "model": model,
