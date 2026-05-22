@@ -34,9 +34,15 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add the project root (parent of scripts/) to sys.path so `from core.*` works
+# when the script is invoked as `python scripts/diagnose_internal_classifier.py`.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(dotenv_path=_PROJECT_ROOT / ".env")
 except ImportError:
     pass
 
