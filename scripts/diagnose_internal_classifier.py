@@ -118,10 +118,11 @@ def _dump_settings() -> bool:
     return True
 
 
-# ── Fixture: a small batch of 2 fake articles ─────────────────────────
+# ── Fixture: 6 fake articles — same size as production ARTICLE_BATCH_SIZE ──
 
-FIXTURE_ARTICLES_TEXT = """\
---- Article 1 ---
+FIXTURE_ARTICLES = [
+    """\
+--- Article {idx} ---
 Title: Anthropic releases Claude 4.7 with improved tool use
 Source: anthropic.com
 URL: https://www.anthropic.com/news/claude-4-7
@@ -132,8 +133,9 @@ with substantially improved tool-use reliability and a 500K-token context
 window. Internal benchmarks show a 32% reduction in tool-call errors on the
 agent-bench suite versus Claude 4.6. The model is available immediately via
 the Claude API and AWS Bedrock.
-
---- Article 2 ---
+""",
+    """\
+--- Article {idx} ---
 Title: vLLM 0.9.0 ships continuous batching v2
 Source: github.com
 URL: https://github.com/vllm-project/vllm/releases/tag/v0.9.0
@@ -144,17 +146,80 @@ batching v2" which the team claims doubles throughput on H100 GPUs for
 long-context workloads. The release also adds first-class support for
 speculative decoding with draft models, and an experimental disaggregated
 prefill/decode mode.
-"""
+""",
+    """\
+--- Article {idx} ---
+Title: Mistral open-sources Mixtral 9x22B with native long context
+Source: mistral.ai
+URL: https://mistral.ai/news/mixtral-9x22b
+Date: 2026-05-18
+Content:
+Mistral released Mixtral 9x22B under Apache 2.0. The model uses a 9-of-22
+sparse mixture-of-experts architecture and supports a 256K native context
+window. Reported benchmarks: MMLU-Pro 74.1, GSM8K 92.5, HumanEval 84.3.
+The release includes quantized GGUF and FP8 variants ready for vLLM and
+llama.cpp deployment.
+""",
+    """\
+--- Article {idx} ---
+Title: LangGraph 1.0 GA with durable execution and checkpointing
+Source: langchain.com
+URL: https://blog.langchain.com/langgraph-1-0-ga
+Date: 2026-05-17
+Content:
+LangChain announced LangGraph 1.0 GA. The new release introduces durable
+execution — agent state automatically checkpoints to a configurable backend
+(SQLite, Postgres, Redis) so long-running agent runs can resume after
+crashes. Also new: a typed message protocol that surfaces tool errors as
+first-class events rather than swallowed exceptions.
+""",
+    """\
+--- Article {idx} ---
+Title: NVIDIA H200 successor benchmarks leak
+Source: theverge.com
+URL: https://www.theverge.com/nvidia-h300-benchmarks-leak
+Date: 2026-05-16
+Content:
+Leaked benchmarks for NVIDIA's next-gen datacenter GPU show a 2.3x
+improvement in FP8 tokens-per-second over the H200 for Llama 3.1 70B
+inference. Memory bandwidth reportedly increases to 6.5 TB/s with HBM4.
+NVIDIA has not officially commented on the leak; mass shipping is expected
+to begin in Q3 2026.
+""",
+    """\
+--- Article {idx} ---
+Title: DeepSeek-R2 paper details $5M training run
+Source: arxiv.org
+URL: https://arxiv.org/abs/2605.19234
+Date: 2026-05-15
+Content:
+DeepSeek published the technical report for DeepSeek-R2, a 671B sparse MoE
+reasoning model that the authors claim was trained for under $5M of GPU
+time. The paper details a new "thinking-token" training objective and a
+verifier-based reward model used during RLHF. Benchmark numbers match GPT-5
+on MATH and code competitions.
+""",
+]
 
 
-def _build_classifier_prompt():
-    """Build the exact prompt the production classifier uses."""
+def _build_articles_text(n_articles: int) -> str:
+    """Pick the first N articles from the fixture and number them properly."""
+    n_articles = max(1, min(n_articles, len(FIXTURE_ARTICLES)))
+    parts = []
+    for i, tmpl in enumerate(FIXTURE_ARTICLES[:n_articles], 1):
+        parts.append(tmpl.format(idx=i))
+    return "\n".join(parts)
+
+
+def _build_classifier_prompt(n_articles: int):
+    """Build the exact prompt the production classifier uses, with the
+    first ``n_articles`` items from FIXTURE_ARTICLES."""
     from core.llm.prompts.sensing_prompts import sensing_classify_prompt
     from core.sensing.config import get_preset_for_domain
 
     preset = get_preset_for_domain("Generative AI")
     return sensing_classify_prompt(
-        articles_text=FIXTURE_ARTICLES_TEXT,
+        articles_text=_build_articles_text(n_articles),
         domain="Generative AI",
         custom_requirements="",
         key_people=None,
@@ -179,15 +244,15 @@ def _serialize_prompt(contents) -> str:
 
 # ── Mode 1: RAW HTTP exchange via INTERNALLLM._call ───────────────────
 
-async def run_raw_mode() -> bool:
-    _banner("MODE 1: RAW — INTERNALLLM._call directly")
+async def run_raw_mode(n_articles: int) -> bool:
+    _banner(f"MODE 1: RAW — INTERNALLLM._call directly  [{n_articles} articles]")
     from core.config import settings
     from core.llm.configurations.internal_llm import INTERNALLLM
     from core.llm.output_schemas.sensing_outputs import ArticleBatchClassification
     from langchain_core.output_parsers import PydanticOutputParser
 
-    log.info("Building the exact classifier prompt the pipeline uses...")
-    raw_contents = _build_classifier_prompt()
+    log.info(f"Building classifier prompt with {n_articles} article(s)...")
+    raw_contents = _build_classifier_prompt(n_articles)
     serialized = _serialize_prompt(raw_contents)
     log.info(f"  Serialized prompt: {len(serialized)} chars")
     log.debug(f"  Prompt preview (first 800 chars):\n{serialized[:800]}")
@@ -397,8 +462,11 @@ def _log_classified_summary(result) -> None:
 
 # ── Mode 2: FULL invoke_llm path ──────────────────────────────────────
 
-async def run_full_mode() -> bool:
-    _banner("MODE 2: FULL — invoke_llm() with INTERNAL_NO_FALLBACK forced True")
+async def run_full_mode(n_articles: int) -> bool:
+    _banner(
+        f"MODE 2: FULL — invoke_llm() with INTERNAL_NO_FALLBACK forced True  "
+        f"[{n_articles} articles]"
+    )
     from core.config import settings
     from core.constants import SWITCHES
     from core.llm.client import invoke_llm
@@ -409,8 +477,11 @@ async def run_full_mode() -> bool:
     settings.INTERNAL_NO_FALLBACK = True
     log.info("Forced SWITCHES['INTERNAL_NO_FALLBACK'] = True for this run.")
 
-    contents = _build_classifier_prompt()
-    log.info(f"  Built classifier prompt: {len(_serialize_prompt(contents))} chars")
+    contents = _build_classifier_prompt(n_articles)
+    log.info(
+        f"  Built classifier prompt with {n_articles} article(s): "
+        f"{len(_serialize_prompt(contents))} chars"
+    )
 
     log.info("Calling invoke_llm() — this exercises the full Phase 0 pipeline...")
     t0 = time.time()
@@ -476,20 +547,48 @@ def _dump_last_call_log() -> None:
 # ── Main ──────────────────────────────────────────────────────────────
 
 async def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  # Start at the production batch size (6 articles)\n"
+            "  python scripts/diagnose_internal_classifier.py\n\n"
+            "  # If that fails (token-window suspect), drop to 5, then 4, ...\n"
+            "  python scripts/diagnose_internal_classifier.py -n 5\n"
+            "  python scripts/diagnose_internal_classifier.py -n 4\n"
+            "  python scripts/diagnose_internal_classifier.py -n 3\n"
+            "  python scripts/diagnose_internal_classifier.py -n 2\n"
+        ),
+    )
     parser.add_argument(
         "--mode",
         choices=("raw", "full", "both"),
         default="raw",
         help="raw = INTERNALLLM._call only (default). full = invoke_llm. both = run both.",
     )
+    parser.add_argument(
+        "-n", "--batch-size",
+        type=int,
+        default=len(FIXTURE_ARTICLES),
+        choices=range(1, len(FIXTURE_ARTICLES) + 1),
+        metavar=f"{{1..{len(FIXTURE_ARTICLES)}}}",
+        help=(
+            f"How many fixture articles to send (default {len(FIXTURE_ARTICLES)} "
+            f"= production ARTICLE_BATCH_SIZE). Drop to a smaller number to "
+            f"isolate token-window issues."
+        ),
+    )
     args = parser.parse_args()
+    n_articles = args.batch_size
 
     _banner("INTERNAL Classifier Diagnostic")
-    log.info(f"Started: {datetime.now(timezone.utc).isoformat()}")
-    log.info(f"CWD:     {os.getcwd()}")
-    log.info(f"Logfile: {LOG_PATH.resolve()}")
-    log.info(f"Mode:    {args.mode}")
+    log.info(f"Started:    {datetime.now(timezone.utc).isoformat()}")
+    log.info(f"CWD:        {os.getcwd()}")
+    log.info(f"Logfile:    {LOG_PATH.resolve()}")
+    log.info(f"Mode:       {args.mode}")
+    log.info(f"Batch size: {n_articles} article(s) "
+             f"(production default = {len(FIXTURE_ARTICLES)})")
 
     if not _dump_settings():
         log.error("Fix the missing env vars before continuing.")
@@ -498,7 +597,7 @@ async def main() -> int:
     results = {}
     if args.mode in ("raw", "both"):
         try:
-            results["raw"] = await run_raw_mode()
+            results["raw"] = await run_raw_mode(n_articles)
         except Exception as e:
             log.error(f"Mode 'raw' crashed unexpectedly: {e}")
             log.error(traceback.format_exc())
@@ -506,7 +605,7 @@ async def main() -> int:
 
     if args.mode in ("full", "both"):
         try:
-            results["full"] = await run_full_mode()
+            results["full"] = await run_full_mode(n_articles)
         except Exception as e:
             log.error(f"Mode 'full' crashed unexpectedly: {e}")
             log.error(traceback.format_exc())
