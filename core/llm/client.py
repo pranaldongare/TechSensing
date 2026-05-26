@@ -322,6 +322,7 @@ async def invoke_llm(
     contents,
     port=11434,
     remove_thinking=False,
+    bypass_internal=False,
 ):
     """
     Unified structured LLM invocation with retries and fallbacks:
@@ -330,10 +331,19 @@ async def invoke_llm(
     - OpenAI API
 
     Guarded by a concurrency semaphore to prevent GPU thrashing.
+
+    ``bypass_internal=True`` forces this single call to skip the INTERNAL
+    backend and go straight to the GPU/cloud chain, even when USE_INTERNAL
+    is on globally. INTERNAL_NO_FALLBACK is also suppressed for this call
+    since the bypass is intentional, not a failure. Used by the article
+    classifier when the operator opts into hybrid mode (the classifier
+    prompt trips the INTERNAL content filter; everything else still uses
+    INTERNAL).
     """
     async with _LLM_SEMAPHORE:
         return await _invoke_llm_inner(
-            gpu_model, response_schema, contents, port, remove_thinking
+            gpu_model, response_schema, contents, port, remove_thinking,
+            bypass_internal=bypass_internal,
         )
 
 
@@ -343,6 +353,8 @@ async def _invoke_llm_inner(
     contents,
     port,
     remove_thinking,
+    *,
+    bypass_internal=False,
 ):
     parser = PydanticOutputParser(pydantic_object=response_schema)
     schema_name = getattr(response_schema, "__name__", "unknown")
@@ -406,13 +418,19 @@ CRITICAL OUTPUT RULES:
         logger.info("Attempt %d/%d for schema=%s", attempt, MAX_RETRIES, schema_name)
         effective_prompt = _build_prompt(prompt, last_failed_output, last_parse_error)
 
-        no_fallback = SWITCHES.get("INTERNAL_NO_FALLBACK", False)
+        # bypass_internal overrides both the INTERNAL routing AND the
+        # NO_FALLBACK guard: this call is intentionally going to GPU, so
+        # there's no "INTERNAL failure" to refuse to fall back from.
+        no_fallback = (
+            SWITCHES.get("INTERNAL_NO_FALLBACK", False) and not bypass_internal
+        )
 
         # ── Phase 0: INTERNAL API (opt-in, before GPU) ──────────
         use_internal = (
             SWITCHES.get("USE_INTERNAL", False)
             and INTERNALLLM is not None
             and not _skip_internal.get()
+            and not bypass_internal
             and settings.INTERNAL_BASE_URL
             and settings.INTERNAL_API_TOKEN
         )

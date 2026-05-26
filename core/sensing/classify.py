@@ -57,20 +57,26 @@ async def classify_articles(
         else:
             uncached_articles.append(article)
 
-    # Effective batch size: smaller when going through INTERNAL to reduce
-    # filter-block (FR-201) risk; default otherwise.
+    # Hybrid mode: classifier alone goes to GPU even when USE_INTERNAL=true.
+    # When on, batch size and cascade revert to the pre-INTERNAL defaults
+    # since GPU doesn't have the FR-201 filter.
+    bypass_classifier = SWITCHES.get("INTERNAL_BYPASS_CLASSIFIER", False)
+
+    # Effective batch size: smaller when actually going through INTERNAL to
+    # reduce filter-block (FR-201) risk; default otherwise (incl. bypass).
+    use_internal_for_classifier = (
+        SWITCHES.get("USE_INTERNAL", False) and not bypass_classifier
+    )
     effective_batch_size = (
-        _INTERNAL_BATCH_SIZE
-        if SWITCHES.get("USE_INTERNAL", False)
-        else ARTICLE_BATCH_SIZE
+        _INTERNAL_BATCH_SIZE if use_internal_for_classifier else ARTICLE_BATCH_SIZE
     )
 
-    # When USE_INTERNAL AND INTERNAL_NO_FALLBACK are both on, run through
-    # the filter-aware cascade (skip-and-continue + retry + per-article
-    # escalation). Otherwise stick with the simple sequential flow — the
-    # other providers have their own retry semantics in invoke_llm.
+    # When USE_INTERNAL AND INTERNAL_NO_FALLBACK are both on (and the
+    # classifier isn't bypassed to GPU), run through the filter-aware
+    # cascade (skip-and-continue + retry + per-article escalation).
+    # Otherwise stick with the simple sequential flow.
     use_cascade = (
-        SWITCHES.get("USE_INTERNAL", False)
+        use_internal_for_classifier
         and SWITCHES.get("INTERNAL_NO_FALLBACK", False)
     )
 
@@ -80,6 +86,7 @@ async def classify_articles(
         f"(batch_size={effective_batch_size}, "
         f"USE_INTERNAL={SWITCHES.get('USE_INTERNAL', False)}, "
         f"NO_FALLBACK={SWITCHES.get('INTERNAL_NO_FALLBACK', False)}, "
+        f"BYPASS_CLASSIFIER={bypass_classifier}, "
         f"cascade={'ON' if use_cascade else 'OFF'})"
     )
 
@@ -133,6 +140,7 @@ async def classify_articles(
                 response_schema=ArticleBatchClassification,
                 contents=prompt,
                 port=GPU_SENSING_CLASSIFY_LLM.port,
+                bypass_internal=bypass_classifier,
             )
 
             validated = ArticleBatchClassification.model_validate(result)

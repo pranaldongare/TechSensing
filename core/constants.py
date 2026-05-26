@@ -24,6 +24,12 @@ SWITCHES = {
     # instead of falling through to GPU/Gemini/OpenAI. Debug aid only — leave
     # False in production so the existing fallback chain protects requests.
     "INTERNAL_NO_FALLBACK": settings.INTERNAL_NO_FALLBACK,
+    # INTERNAL_BYPASS_CLASSIFIER: hybrid mode — when True (alongside
+    # USE_INTERNAL), the article classifier alone goes to local GPU; every
+    # other LLM call still uses INTERNAL. Workaround for FR-201 filter
+    # blocks on the classifier prompt. INTERNAL_NO_FALLBACK does not apply
+    # to the bypassed classifier call.
+    "INTERNAL_BYPASS_CLASSIFIER": settings.INTERNAL_BYPASS_CLASSIFIER,
 }
 
 PORT1 = 11434

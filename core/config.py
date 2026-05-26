@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     # falling through to GPU/Gemini/OpenAI. Useful for surfacing the actual
     # INTERNAL error during debugging. Leave False in production.
     INTERNAL_NO_FALLBACK: bool = False
+    # Hybrid mode: when True (and USE_INTERNAL=true), the article classifier
+    # specifically routes to the local GPU LLM while every OTHER LLM call
+    # (report generation, deep dives, novelty, key companies, LIR, ...)
+    # still goes through INTERNAL. Use this when the INTERNAL content filter
+    # keeps blocking the classifier prompt (FR-201) but works fine for the
+    # rest of the pipeline. INTERNAL_NO_FALLBACK is ignored for the
+    # classifier when this is on.
+    INTERNAL_BYPASS_CLASSIFIER: bool = False
 
     # YouTube Data API v3 (for tech sensing video enrichment)
     YOUTUBE_API_KEY: str = ""
