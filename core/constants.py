@@ -82,6 +82,14 @@ SENSING_FEATURES = {
     "byo_urls": _env_flag("SENSING_FEATURE_BYO_URLS", True),
     "aliases": _env_flag("SENSING_FEATURE_ALIASES", True),
     "exclusions": _env_flag("SENSING_FEATURE_EXCLUSIONS", True),
+    # Technology Radar master switch (gates Phase 2 radar generation plus
+    # all 8 signal/scoring enrichment stages: movement, signal_strength,
+    # source_count, lifecycle, momentum, funding, relationships,
+    # weak_signals, trending_videos). Default OFF — set
+    # SENSING_FEATURE_TECH_RADAR=true to re-enable the radar section,
+    # relationships graph, weak signals, trending videos, and all
+    # signal-strength / momentum / source-count badges.
+    "tech_radar": _env_flag("SENSING_FEATURE_TECH_RADAR", False),
     # Phase 3 — output richness
     "momentum": _env_flag("SENSING_FEATURE_MOMENTUM", True),
     "overlap_matrix": _env_flag("SENSING_FEATURE_OVERLAP", True),

@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import List
 
-from core.constants import GPU_SENSING_REPORT_LLM
+from core.constants import GPU_SENSING_REPORT_LLM, sensing_feature
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.sensing_outputs import (
     ClassifiedArticle,
@@ -179,35 +179,46 @@ async def generate_report(
     }
     core_context_json = json.dumps(core_context, indent=2, ensure_ascii=False)
 
-    radar_prompt = sensing_report_radar_prompt(
-        classified_articles_json=articles_json,
-        core_context_json=core_context_json,
-        domain=domain,
-        date_range=date_range,
-        custom_quadrant_names=custom_quadrant_names,
-        custom_requirements=custom_requirements,
-        experience_block=experience_block,
-        prompt_patch=_radar_patch,
-        feedback_block=feedback_block,
-    )
+    if sensing_feature("tech_radar"):
+        radar_prompt = sensing_report_radar_prompt(
+            classified_articles_json=articles_json,
+            core_context_json=core_context_json,
+            domain=domain,
+            date_range=date_range,
+            custom_quadrant_names=custom_quadrant_names,
+            custom_requirements=custom_requirements,
+            experience_block=experience_block,
+            prompt_patch=_radar_patch,
+            feedback_block=feedback_block,
+        )
 
-    phase2_start = time.time()
-    logger.info("[Phase 2/4] Generating radar items...")
+        phase2_start = time.time()
+        logger.info("[Phase 2/4] Generating radar items...")
 
-    radar_result = await invoke_llm(
-        gpu_model=GPU_SENSING_REPORT_LLM.model,
-        response_schema=ReportRadar,
-        contents=radar_prompt,
-        port=GPU_SENSING_REPORT_LLM.port,
-    )
+        radar_result = await invoke_llm(
+            gpu_model=GPU_SENSING_REPORT_LLM.model,
+            response_schema=ReportRadar,
+            contents=radar_prompt,
+            port=GPU_SENSING_REPORT_LLM.port,
+        )
 
-    radar = ReportRadar.model_validate(radar_result)
-    phase2_time = time.time() - phase2_start
+        radar = ReportRadar.model_validate(radar_result)
+        phase2_time = time.time() - phase2_start
 
-    logger.info(
-        f"[Phase 2/4] Radar generated in {phase2_time:.1f}s — "
-        f"radar_items={len(radar.radar_items)}"
-    )
+        logger.info(
+            f"[Phase 2/4] Radar generated in {phase2_time:.1f}s — "
+            f"radar_items={len(radar.radar_items)}"
+        )
+    else:
+        # tech_radar feature flag disabled — skip radar generation entirely.
+        # Downstream Phase 4 deep-dive selection handles radar_items=[] by
+        # falling back to top_events.related_technologies as candidates.
+        logger.info(
+            "[Phase 2/4] Radar generation SKIPPED — tech_radar feature flag "
+            "disabled (set SENSING_FEATURE_TECH_RADAR=true to re-enable)"
+        )
+        radar = ReportRadar(radar_items=[])
+        phase2_time = 0.0
 
     # ── Phase 3: Insights (signals, sections, recommendations) ─────────
     radar_context = [
@@ -337,20 +348,24 @@ async def generate_report(
     )
 
     # ── Post-processing: dedup, recency, specificity ─────────────────
-    pre_filter_radar_count = len(radar.radar_items)
-    filtered_radar, filtered_details = _postprocess_radar(
-        radar.radar_items, details.radar_item_details, classified_articles,
-        domain=domain,
-        dynamic_generic_blocklist=dynamic_generic_blocklist,
-        dynamic_legacy_blocklist=dynamic_legacy_blocklist,
-    )
-    radar.radar_items = filtered_radar
-    details = RadarDetailsOutput(radar_item_details=filtered_details)
+    # Skip entirely when the radar is disabled — there's nothing to filter,
+    # and we don't want to apply radar-specific filters (e.g. is_stale) to
+    # the deep-dive details list, which is now decoupled from the radar.
+    if radar.radar_items:
+        pre_filter_radar_count = len(radar.radar_items)
+        filtered_radar, filtered_details = _postprocess_radar(
+            radar.radar_items, details.radar_item_details, classified_articles,
+            domain=domain,
+            dynamic_generic_blocklist=dynamic_generic_blocklist,
+            dynamic_legacy_blocklist=dynamic_legacy_blocklist,
+        )
+        radar.radar_items = filtered_radar
+        details = RadarDetailsOutput(radar_item_details=filtered_details)
 
-    logger.info(
-        f"Post-processing: {pre_filter_radar_count} -> {len(filtered_radar)} radar items "
-        f"after dedup/recency/specificity filtering"
-    )
+        logger.info(
+            f"Post-processing: {pre_filter_radar_count} -> {len(filtered_radar)} radar items "
+            f"after dedup/recency/specificity filtering"
+        )
 
     # ── Link trends to report sections (deep_dive) ──────────────────
     linked_trends = _link_trends_to_sections(

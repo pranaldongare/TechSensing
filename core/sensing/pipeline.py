@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, List, Optional
 
+from core.constants import sensing_feature
 from core.llm.output_schemas.sensing_outputs import TechSensingReport, TrendingVideoItem
 from core.sensing.classify import classify_articles
 from core.sensing.config import DEFAULT_DOMAIN, GENERAL_RSS_FEEDS, LOOKBACK_DAYS, get_feeds_for_domain, get_search_queries_for_domain
@@ -527,8 +528,14 @@ async def run_sensing_pipeline(
     )
     await _emit("enhance", 94, "Enhancement complete")
 
+    # All 8 stages below (movement, signal strengths, lifecycle, momentum,
+    # funding, relationships, weak signals, trending videos) derive from /
+    # decorate the Technology Radar. Gate them on the tech_radar flag so
+    # disabling the radar leaves a clean report with no signal badges.
+    radar_on = sensing_feature("tech_radar")
+
     # --- Stage 7: Movement detection ---
-    if user_id:
+    if radar_on and user_id:
         logger.info(
             f"[Stage 7/7] MOVEMENT — detecting radar movements... [{_elapsed()}]"
         )
@@ -539,17 +546,22 @@ async def run_sensing_pipeline(
             domain=domain,
         )
         logger.info(f"[Stage 7/7] MOVEMENT COMPLETE [{_elapsed()}]")
+    elif not radar_on:
+        logger.info("[Stage 7/7] MOVEMENT — skipped (tech_radar disabled)")
     else:
         logger.info("[Stage 7/7] MOVEMENT — skipped (no user_id)")
 
     # Signal strength scoring
-    logger.info(f"Computing signal strengths... [{_elapsed()}]")
-    await _emit("scoring", 94, "Computing signal strengths...")
-    report = await compute_signal_strengths(report, classified, user_id=user_id)
+    if radar_on:
+        logger.info(f"Computing signal strengths... [{_elapsed()}]")
+        await _emit("scoring", 94, "Computing signal strengths...")
+        report = await compute_signal_strengths(report, classified, user_id=user_id)
 
-    # Technology lifecycle detection
-    from core.sensing.lifecycle import detect_lifecycle_stages
-    report = detect_lifecycle_stages(report, classified)
+        # Technology lifecycle detection
+        from core.sensing.lifecycle import detect_lifecycle_stages
+        report = detect_lifecycle_stages(report, classified)
+    else:
+        logger.info("Signal strengths + lifecycle — skipped (tech_radar disabled)")
 
     # Report confidence scoring
     report.report_confidence, report.confidence_factors = _compute_report_confidence(
@@ -565,32 +577,35 @@ async def run_sensing_pipeline(
     )
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
 
-    # Radar momentum computation
-    _compute_radar_momentum(report)
+    if radar_on:
+        # Radar momentum computation
+        _compute_radar_momentum(report)
 
-    # Source tier breakdown
-    _compute_source_tiers(report)
+        # Source tier breakdown
+        _compute_source_tiers(report)
 
-    # Funding signal enrichment
-    logger.info(f"Checking funding signals... [{_elapsed()}]")
-    await _emit("funding", 95, "Checking funding signals...")
-    try:
-        from core.sensing.sources.funding_signals import enrich_with_funding_signals
+        # Funding signal enrichment
+        logger.info(f"Checking funding signals... [{_elapsed()}]")
+        await _emit("funding", 95, "Checking funding signals...")
+        try:
+            from core.sensing.sources.funding_signals import enrich_with_funding_signals
 
-        tech_names = [item.name for item in report.radar_items[:15]]
-        funding_signals = await enrich_with_funding_signals(tech_names, domain)
+            tech_names = [item.name for item in report.radar_items[:15]]
+            funding_signals = await enrich_with_funding_signals(tech_names, domain)
 
-        funding_map = {s.technology_name.lower(): s for s in funding_signals if s.has_recent_funding}
-        for item in report.radar_items:
-            signal = funding_map.get(item.name.lower())
-            if signal:
-                item.funding_signal = signal.funding_summary
-                item.signal_strength = min(1.0, item.signal_strength + 0.15)
-    except Exception as e:
-        logger.warning(f"Funding enrichment failed (non-fatal): {e}")
+            funding_map = {s.technology_name.lower(): s for s in funding_signals if s.has_recent_funding}
+            for item in report.radar_items:
+                signal = funding_map.get(item.name.lower())
+                if signal:
+                    item.funding_signal = signal.funding_summary
+                    item.signal_strength = min(1.0, item.signal_strength + 0.15)
+        except Exception as e:
+            logger.warning(f"Funding enrichment failed (non-fatal): {e}")
+    else:
+        logger.info("Momentum + source tiers + funding — skipped (tech_radar disabled)")
 
     # --- Technology Relationship Extraction ---
-    if user_id:
+    if radar_on and user_id:
         logger.info(f"Extracting technology relationships... [{_elapsed()}]")
         await _emit("relationships", 97, "Mapping technology relationships...")
         try:
@@ -603,9 +618,11 @@ async def run_sensing_pipeline(
             )
         except Exception as e:
             logger.warning(f"Relationship extraction failed (non-fatal): {e}")
+    elif not radar_on:
+        logger.info("Relationship extraction — skipped (tech_radar disabled)")
 
     # --- Weak Signal Detection ---
-    if user_id:
+    if radar_on and user_id:
         logger.info(f"Detecting weak signals... [{_elapsed()}]")
         await _emit("weak_signals", 97, "Detecting emerging signals...")
         try:
@@ -625,10 +642,13 @@ async def run_sensing_pipeline(
         except Exception as e:
             logger.warning(f"Weak signal detection failed (non-fatal): {e}")
             report.weak_signals = []
+    elif not radar_on:
+        logger.info("Weak signal detection — skipped (tech_radar disabled)")
+        report.weak_signals = []
 
     # --- YouTube Video Enrichment ---
     # YouTube video enrichment (opt-in)
-    if include_videos:
+    if radar_on and include_videos:
         logger.info(f"Enriching with YouTube videos... [{_elapsed()}]")
         await _emit("videos", 98, "Finding trending YouTube videos...")
         try:
@@ -663,6 +683,8 @@ async def run_sensing_pipeline(
             logger.warning(f"YouTube video enrichment failed (non-fatal): {e}")
             report.trending_videos = []
     else:
+        if not radar_on:
+            logger.info("YouTube video enrichment — skipped (tech_radar disabled)")
         report.trending_videos = []
 
     # --- Model Releases (GenAI domains only) ---
@@ -1572,8 +1594,12 @@ async def run_sensing_pipeline_from_document(
         url_content_map=url_content_map,
     )
 
+    # All 8 stages below derive from the Technology Radar — gate on the
+    # tech_radar flag so disabling the radar leaves a clean report.
+    radar_on = sensing_feature("tech_radar")
+
     # Movement detection
-    if user_id:
+    if radar_on and user_id:
         logger.info(f"Detecting technology movements... [{_elapsed()}]")
         await _emit("movement", 92, "Detecting technology movements...")
         report = await detect_radar_movements(
@@ -1581,15 +1607,20 @@ async def run_sensing_pipeline_from_document(
             user_id=user_id,
             domain=domain,
         )
+    elif not radar_on:
+        logger.info("Movement detection — skipped (tech_radar disabled)")
 
-    # Signal strength scoring
-    logger.info(f"Computing signal strengths... [{_elapsed()}]")
-    await _emit("scoring", 92, "Computing signal strengths...")
-    report = await compute_signal_strengths(report, classified, user_id=user_id)
+    # Signal strength scoring + lifecycle
+    if radar_on:
+        logger.info(f"Computing signal strengths... [{_elapsed()}]")
+        await _emit("scoring", 92, "Computing signal strengths...")
+        report = await compute_signal_strengths(report, classified, user_id=user_id)
 
-    # Technology lifecycle detection
-    from core.sensing.lifecycle import detect_lifecycle_stages
-    report = detect_lifecycle_stages(report, classified)
+        # Technology lifecycle detection
+        from core.sensing.lifecycle import detect_lifecycle_stages
+        report = detect_lifecycle_stages(report, classified)
+    else:
+        logger.info("Signal strengths + lifecycle — skipped (tech_radar disabled)")
 
     # Report confidence scoring
     report.report_confidence, report.confidence_factors = _compute_report_confidence(
@@ -1605,40 +1636,45 @@ async def run_sensing_pipeline_from_document(
     )
     logger.info(f"Report confidence: {report.report_confidence} [{_elapsed()}]")
 
-    # Radar momentum computation
-    _compute_radar_momentum(report)
+    if radar_on:
+        # Radar momentum computation
+        _compute_radar_momentum(report)
 
-    # Source tier breakdown
-    _compute_source_tiers(report)
+        # Source tier breakdown
+        _compute_source_tiers(report)
 
-    # Funding signal enrichment
-    await _emit("funding", 94, "Checking funding signals...")
-    try:
-        from core.sensing.sources.funding_signals import enrich_with_funding_signals
+        # Funding signal enrichment
+        await _emit("funding", 94, "Checking funding signals...")
+        try:
+            from core.sensing.sources.funding_signals import enrich_with_funding_signals
 
-        tech_names = [item.name for item in report.radar_items[:15]]
-        funding_signals = await enrich_with_funding_signals(tech_names, domain)
+            tech_names = [item.name for item in report.radar_items[:15]]
+            funding_signals = await enrich_with_funding_signals(tech_names, domain)
 
-        funding_map = {s.technology_name.lower(): s for s in funding_signals if s.has_recent_funding}
-        for item in report.radar_items:
-            signal = funding_map.get(item.name.lower())
-            if signal:
-                item.funding_signal = signal.funding_summary
-                item.signal_strength = min(1.0, item.signal_strength + 0.15)
-    except Exception as e:
-        logger.warning(f"Funding enrichment failed (non-fatal): {e}")
+            funding_map = {s.technology_name.lower(): s for s in funding_signals if s.has_recent_funding}
+            for item in report.radar_items:
+                signal = funding_map.get(item.name.lower())
+                if signal:
+                    item.funding_signal = signal.funding_summary
+                    item.signal_strength = min(1.0, item.signal_strength + 0.15)
+        except Exception as e:
+            logger.warning(f"Funding enrichment failed (non-fatal): {e}")
+    else:
+        logger.info("Momentum + source tiers + funding — skipped (tech_radar disabled)")
 
     # Technology Relationship Extraction
-    if user_id:
+    if radar_on and user_id:
         try:
             from core.sensing.relationships import extract_relationships
             rel_map = await extract_relationships(report, classified, domain)
             report.relationships = rel_map
         except Exception as e:
             logger.warning(f"Relationship extraction failed (non-fatal): {e}")
+    elif not radar_on:
+        logger.info("Relationship extraction — skipped (tech_radar disabled)")
 
     # Weak signals
-    if user_id:
+    if radar_on and user_id:
         await _emit("weak_signals", 95, "Detecting emerging signals...")
         try:
             from core.sensing.weak_signals import detect_weak_signals
@@ -1655,9 +1691,12 @@ async def run_sensing_pipeline_from_document(
         except Exception as e:
             logger.warning(f"Weak signal detection failed (non-fatal): {e}")
             report.weak_signals = []
+    elif not radar_on:
+        logger.info("Weak signal detection — skipped (tech_radar disabled)")
+        report.weak_signals = []
 
     # YouTube video enrichment (opt-in)
-    if include_videos:
+    if radar_on and include_videos:
         await _emit("videos", 98, "Finding trending YouTube videos...")
         try:
             sorted_radar = sorted(
@@ -1683,6 +1722,8 @@ async def run_sensing_pipeline_from_document(
             logger.warning(f"YouTube enrichment failed (non-fatal): {e}")
             report.trending_videos = []
     else:
+        if not radar_on:
+            logger.info("YouTube video enrichment — skipped (tech_radar disabled)")
         report.trending_videos = []
 
     # --- Model Releases (GenAI domains only) ---

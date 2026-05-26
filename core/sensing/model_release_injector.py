@@ -21,7 +21,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from core.constants import GPU_SENSING_REPORT_LLM
+from core.constants import GPU_SENSING_REPORT_LLM, sensing_feature
 from core.llm.client import invoke_llm
 from core.llm.output_schemas.sensing_outputs import (
     ModelInjectionOutput,
@@ -260,11 +260,15 @@ async def inject_model_releases(
     appended_radar = 0
     appended_details = 0
 
+    # tech_radar gates radar_items promotion only — top_events and the deep
+    # dive details (radar_item_details) are independent surfaces and stay.
+    radar_on = sensing_feature("tech_radar")
+
     for d in included:
         if d.top_event is not None:
             report.top_events.append(d.top_event)
             appended_events += 1
-        if d.radar_item is not None:
+        if d.radar_item is not None and radar_on:
             report.radar_items.append(d.radar_item)
             appended_radar += 1
         if d.radar_detail is not None:
