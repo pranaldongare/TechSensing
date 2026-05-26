@@ -317,12 +317,18 @@ async def run_raw_mode(n_articles: int) -> bool:
 
     if not raw_output or not raw_output.strip():
         log.error("INTERNAL returned an EMPTY response.")
-        log.error(
-            "If the raw_jsonl shows HTTP 200 with status=SUCCESS but content "
-            "is empty, the model is producing no text. Check "
-            "INTERNAL_MAX_NEW_TOKENS and any safety filters on the INTERNAL "
-            "side."
-        )
+        # Try to read the most recent raw exchange and inspect filterBlockReason
+        # so the user sees the actual cause without parsing the JSON manually.
+        filter_diag = _diagnose_empty_response()
+        if filter_diag:
+            for line in filter_diag:
+                log.error(line)
+        else:
+            log.error(
+                "No filterBlockReason found. Other possibilities: "
+                "INTERNAL_MAX_NEW_TOKENS too low, model unavailable, "
+                "or upstream filtering not surfaced in the response payload."
+            )
         return False
 
     _dump_long_text("FULL LLM OUTPUT", raw_output)
@@ -388,6 +394,83 @@ def _dump_last_raw_exchange() -> None:
         log.info(f"  request_body.contents[0] length: {len(str(contents[0]))} chars")
     resp_body = entry.get("response_body") or ""
     _dump_long_text("RESPONSE BODY (raw HTTP)", str(resp_body))
+
+
+def _diagnose_empty_response() -> list[str]:
+    """Read the most recent raw exchange and inspect filterBlockReason /
+    finishReason / truncated to explain why content is empty. Returns a list
+    of human-readable diagnostic lines; empty list if the exchange isn't
+    available or doesn't reveal a filter block."""
+    raw_path = Path("DEBUG") / "llm_calls" / "internal_raw.jsonl"
+    if not raw_path.exists():
+        return []
+    try:
+        last_line = ""
+        with raw_path.open(encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    last_line = line
+        if not last_line:
+            return []
+        entry = json.loads(last_line)
+    except Exception:
+        return []
+
+    body_text = entry.get("response_body") or ""
+    if not body_text:
+        return []
+    try:
+        body = json.loads(body_text)
+    except Exception:
+        return [
+            "Response body is not JSON, can't inspect filterBlockReason."
+        ]
+
+    fbr = body.get("filterBlockReason") or {}
+    filter_code = fbr.get("resultCode") or ""
+    filter_msg = fbr.get("message") or fbr.get("en") or fbr.get("ko") or ""
+    finish_reason = body.get("finishReason") or ""
+    truncated = body.get("truncated")
+
+    out = []
+    out.append("─── EMPTY RESPONSE DIAGNOSIS ───")
+    out.append(f"  finishReason: {finish_reason!r}")
+    out.append(f"  truncated:    {truncated}")
+    out.append(f"  filterBlockReason.resultCode: {filter_code or '(empty)'}")
+    out.append(f"  filterBlockReason.message:    {filter_msg or '(empty)'}")
+
+    if filter_code:
+        out.append("")
+        out.append("CONTENT FILTER BLOCKED the response.")
+        out.append(
+            "This is NOT a max_tokens issue — the filter rejected the "
+            "request BEFORE the model could generate any output."
+        )
+        out.append("Things to try:")
+        out.append(
+            "  1. Shrink the prompt — drop to -n 1, then 2, etc. to see "
+            "if a smaller prompt passes the filter."
+        )
+        out.append(
+            "  2. Remove specific company/product names from the fixture "
+            "(competitor mentions can trigger corporate filters)."
+        )
+        out.append(
+            "  3. Strip the long DOMAIN FOCUS rule block from the system "
+            "prompt and resend to see if the filter is keyword-driven."
+        )
+        out.append(
+            "  4. Contact the INTERNAL API team with the resultCode above "
+            "and ask which policy fired."
+        )
+    elif truncated is True:
+        out.append("Output was TRUNCATED — increase INTERNAL_MAX_NEW_TOKENS.")
+    else:
+        out.append(
+            "No filter code AND not truncated — the model returned empty "
+            "for unknown reasons. Inspect the raw response above."
+        )
+    return out
 
 
 def _attempt_parse(raw_output, response_schema, parser) -> bool:

@@ -208,6 +208,11 @@ def sensing_classify_prompt(
             "Boost relevance_score by ~0.1 for articles featuring their actions or statements.\n"
         )
 
+    # NOTE: ``custom_quadrant_names`` is kept on the signature for backward
+    # compatibility with existing callers but is no longer used — radar
+    # placement (quadrant/ring) is decoupled from classification. The
+    # downstream radar generator produces those independently.
+
     contents = [
         {
             "role": "system",
@@ -218,17 +223,13 @@ def sensing_classify_prompt(
                 "For each article, determine:\n"
                 "1. A concise summary (2-3 sentences)\n"
                 "2. Relevance score (0.0-1.0) to the domain\n"
-                "3. Technology Radar quadrant placement\n"
-                "4. Technology Radar ring placement\n"
-                "5. A short technology name for the radar blip\n"
-                "6. Topic category\n"
-                "7. Industry segment\n\n"
+                "3. Topic category\n"
+                "4. Industry segment\n\n"
                 f"DOMAIN FOCUS — CRITICAL:\n"
                 f"This report is EXCLUSIVELY about '{domain}'. Apply these rules strictly:\n"
                 f"- An article is relevant ONLY if its PRIMARY subject is '{domain}' "
                 "or a specific sub-topic/technology within that domain.\n"
-                "- Articles about OTHER technology domains (e.g., general AI/LLM news, "
-                "cryptocurrency, cloud infrastructure, cybersecurity) that merely MENTION "
+                "- Articles about OTHER technology domains that merely MENTION "
                 f"'{domain}' in passing should receive relevance_score < 0.2.\n"
                 "- An article about a big-tech company's strategy is NOT relevant unless "
                 f"it specifically discusses their work on '{domain}' technologies.\n"
@@ -236,20 +237,13 @@ def sensing_classify_prompt(
                 "a focused report with fewer items than a diluted report with off-topic noise.\n\n"
                 + _custom_requirements_block(custom_requirements)
                 + (_recency_block_classify(date_range) if date_range else "")
-                + _quadrant_definitions_block(custom_quadrant_names)
-                + "RING DEFINITIONS:\n"
-                "- Adopt: Proven technology, recommend for wide use\n"
-                "- Trial: Worth pursuing in projects that can handle some risk\n"
-                "- Assess: Worth exploring to understand its impact\n"
-                "- Hold: Proceed with caution, not recommended for new work\n\n"
                 + topic_categories_text + "\n"
                 + industry_segments_text + "\n"
                 + people_block
                 + "OUTPUT RULES:\n"
                 "- Return ONLY a valid JSON object with an \"articles\" array.\n"
                 "- Each element must have: title, source, url, published_date, summary, "
-                "relevance_score, quadrant, ring, technology_name, reasoning, "
-                "topic_category, industry_segment.\n"
+                "relevance_score, topic_category, industry_segment.\n"
                 "- Do NOT include schema definitions, $defs, $ref, properties, or type metadata.\n"
                 "- Newlines inside string values MUST be written as \\n (escaped), NOT as actual line breaks.\n"
                 '- Double quotes inside string values MUST be escaped as \\".\n'

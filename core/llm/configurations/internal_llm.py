@@ -256,6 +256,54 @@ class INTERNALLLM(LLM):
 
         content = data.get("content", "")
 
+        # status=SUCCESS but empty content can mean the corporate content
+        # filter blocked the output. The filterBlockReason payload tells us
+        # what happened — surface it as a distinct, actionable error rather
+        # than a generic "blank response" that mis-leads users into bumping
+        # max_tokens (which won't help — the filter rejects BEFORE generation).
+        if not content or not str(content).strip():
+            fbr = data.get("filterBlockReason") or {}
+            filter_code = fbr.get("resultCode") or ""
+            filter_msg = (
+                fbr.get("message")
+                or fbr.get("en")
+                or fbr.get("ko")
+                or ""
+            )
+            finish_reason = data.get("finishReason") or ""
+            truncated = data.get("truncated")
+            if filter_code:
+                log_entry["status"] = "filter_blocked"
+                log_entry["error"] = (
+                    f"content blocked by INTERNAL filter "
+                    f"(resultCode={filter_code}, message={filter_msg!r})"
+                )
+                _log_raw_exchange(log_entry)
+                raise RuntimeError(
+                    f"INTERNAL CONTENT FILTER BLOCKED the response.\n"
+                    f"  filterBlockReason.resultCode = {filter_code}\n"
+                    f"  filterBlockReason.message    = {filter_msg or '(none)'}\n"
+                    f"  finishReason                 = {finish_reason!r}\n"
+                    f"  truncated                    = {truncated}\n"
+                    f"This is NOT a max_tokens problem. The filter rejected "
+                    f"the request before the model could generate any output. "
+                    f"Try shortening the prompt or removing flagged content "
+                    f"(competitor/product names, proprietary details, etc.)."
+                )
+            # No filter code, but still empty — log it but raise generic
+            log_entry["status"] = "blank_response"
+            log_entry["error"] = (
+                f"empty content with no filterBlockReason "
+                f"(finishReason={finish_reason!r}, truncated={truncated})"
+            )
+            _log_raw_exchange(log_entry)
+            raise RuntimeError(
+                f"INTERNAL returned empty content "
+                f"(HTTP {status_code}, status=SUCCESS). "
+                f"finishReason={finish_reason!r}, truncated={truncated}. "
+                f"No filterBlockReason was set."
+            )
+
         # Strip reasoning tags (same pattern as remote_llm.py / local_llm.py)
         cleaned = re.sub(
             r"<thinking>.*?</thinking>", "", content, flags=re.DOTALL

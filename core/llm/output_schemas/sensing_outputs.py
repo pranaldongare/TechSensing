@@ -18,16 +18,33 @@ class ClassifiedArticle(BaseModel):
         description="Relevance score 0.0-1.0 to the target domain."
     )
     quadrant: str = Field(
-        description="Technology Radar quadrant: 'Techniques', 'Platforms', 'Tools', or 'Languages & Frameworks'."
+        default="",
+        description=(
+            "Optional Technology Radar quadrant ('Techniques', 'Platforms', "
+            "'Tools', 'Languages & Frameworks'). Empty string when the "
+            "classifier prompt is run without radar instructions; downstream "
+            "radar generation does not depend on this hint."
+        ),
     )
     ring: str = Field(
-        description="Technology Radar ring: 'Adopt', 'Trial', 'Assess', or 'Hold'."
+        default="",
+        description=(
+            "Optional Technology Radar ring ('Adopt', 'Trial', 'Assess', "
+            "'Hold'). Empty string when the classifier prompt is run without "
+            "radar instructions."
+        ),
     )
     technology_name: str = Field(
-        description="Short name of the technology or technique (for radar blip label)."
+        default="",
+        description=(
+            "Optional short technology name for the radar blip label. "
+            "Empty string when the classifier prompt is run without radar "
+            "instructions."
+        ),
     )
     reasoning: str = Field(
-        description="Brief reasoning for quadrant and ring placement."
+        default="",
+        description="Brief reasoning for the classification decisions.",
     )
     topic_category: str = Field(
         default="",
