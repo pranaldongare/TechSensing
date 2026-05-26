@@ -7,6 +7,7 @@ import os
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
+from typing import Optional
 
 from google import genai
 from langchain_core.output_parsers import PydanticOutputParser
@@ -437,6 +438,7 @@ CRITICAL OUTPUT RULES:
             internal_output = None
             internal_parse_error = False
             err = ""
+            captured_exc: Optional[Exception] = None
             for blank_retry in range(2):
                 s = time.time()
                 try:
@@ -490,6 +492,7 @@ CRITICAL OUTPUT RULES:
                 except Exception as exc:
                     elapsed = time.time() - s
                     err = str(exc)
+                    captured_exc = exc  # preserve original type for NO_FALLBACK
                     if internal_output:
                         # Parse error — feed back into the next attempt's prompt
                         # so INTERNAL gets a self-correction shot before GPU.
@@ -526,6 +529,14 @@ CRITICAL OUTPUT RULES:
             # call. We raise on ANY failure mode (parse, transport, OR
             # blank-blank) — anything other than a successful early-return.
             if no_fallback:
+                # Preserve typed filter-block exceptions so callers (e.g. the
+                # classifier cascade) can isinstance-check them. Wrapping in
+                # a bare RuntimeError would lose the type.
+                from core.llm.configurations.internal_llm import (
+                    InternalFilterBlockedError,
+                )
+                if isinstance(captured_exc, InternalFilterBlockedError):
+                    raise captured_exc
                 raise RuntimeError(
                     f"INTERNAL_NO_FALLBACK=True and INTERNAL did not return "
                     f"a usable response — refusing to fall back to GPU/"

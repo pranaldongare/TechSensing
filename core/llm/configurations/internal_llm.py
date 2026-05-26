@@ -29,6 +29,22 @@ from langchain_core.language_models import LLM
 
 logger = logging.getLogger("llm.internal")
 
+
+class InternalFilterBlockedError(RuntimeError):
+    """Raised when the INTERNAL API returns HTTP 200 + status=SUCCESS but
+    the model's output is empty AND ``filterBlockReason.resultCode`` is set.
+
+    This is a distinct exception type so callers (e.g. the classifier
+    cascade) can catch filter blocks specifically without matching on the
+    error message. Subclass of RuntimeError so existing ``except Exception``
+    handlers still work unchanged.
+    """
+
+    def __init__(self, message: str, *, filter_code: str = "", filter_message: str = ""):
+        super().__init__(message)
+        self.filter_code = filter_code
+        self.filter_message = filter_message
+
 # ── Raw exchange log (full request + response per call) ──────────
 _RAW_LOG_ENABLED = os.getenv("LLM_CALL_LOG", "true").lower() != "false"
 _RAW_LOG_PATH = os.path.join("DEBUG", "llm_calls", "internal_raw.jsonl")
@@ -279,7 +295,7 @@ class INTERNALLLM(LLM):
                     f"(resultCode={filter_code}, message={filter_msg!r})"
                 )
                 _log_raw_exchange(log_entry)
-                raise RuntimeError(
+                raise InternalFilterBlockedError(
                     f"INTERNAL CONTENT FILTER BLOCKED the response.\n"
                     f"  filterBlockReason.resultCode = {filter_code}\n"
                     f"  filterBlockReason.message    = {filter_msg or '(none)'}\n"
@@ -288,7 +304,9 @@ class INTERNALLLM(LLM):
                     f"This is NOT a max_tokens problem. The filter rejected "
                     f"the request before the model could generate any output. "
                     f"Try shortening the prompt or removing flagged content "
-                    f"(competitor/product names, proprietary details, etc.)."
+                    f"(competitor/product names, proprietary details, etc.).",
+                    filter_code=filter_code,
+                    filter_message=filter_msg,
                 )
             # No filter code, but still empty — log it but raise generic
             log_entry["status"] = "blank_response"
