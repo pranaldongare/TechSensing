@@ -13,11 +13,18 @@ from core.llm.output_schemas.sensing_outputs import (
     ClassifiedArticle,
 )
 from core.llm.prompts.sensing_prompts import sensing_classify_prompt
+from core.constants import SWITCHES
 from core.sensing.cache import cache_classification, get_cached_classification
 from core.sensing.config import ARTICLE_BATCH_SIZE, MIN_RELEVANCE_SCORE, get_preset_for_domain
 from core.sensing.ingest import RawArticle
 
 logger = logging.getLogger("sensing.classify")
+
+# When routing through the corporate INTERNAL LLM, large batches occasionally
+# trip the content filter (FR-201) — the bigger prompt has more surface area
+# for a filter to flag. Drop to 3 articles per batch in that case. The Ollama
+# / Gemini / OpenAI paths keep the default ARTICLE_BATCH_SIZE (6).
+_INTERNAL_BATCH_SIZE = 3
 
 
 async def classify_articles(
@@ -46,19 +53,29 @@ async def classify_articles(
         else:
             uncached_articles.append(article)
 
-    logger.info(
-        f"Cache: {cache_hits}/{len(articles)} hits, "
-        f"{len(uncached_articles)} articles need LLM classification"
+    # Effective batch size: smaller when going through INTERNAL to reduce
+    # filter-block (FR-201) risk; default otherwise.
+    effective_batch_size = (
+        _INTERNAL_BATCH_SIZE
+        if SWITCHES.get("USE_INTERNAL", False)
+        else ARTICLE_BATCH_SIZE
     )
 
-    total_batches = (len(uncached_articles) + ARTICLE_BATCH_SIZE - 1) // ARTICLE_BATCH_SIZE if uncached_articles else 0
+    logger.info(
+        f"Cache: {cache_hits}/{len(articles)} hits, "
+        f"{len(uncached_articles)} articles need LLM classification "
+        f"(batch_size={effective_batch_size}, "
+        f"USE_INTERNAL={SWITCHES.get('USE_INTERNAL', False)})"
+    )
+
+    total_batches = (len(uncached_articles) + effective_batch_size - 1) // effective_batch_size if uncached_articles else 0
 
     if preset is None:
         preset = get_preset_for_domain(domain)
 
-    for i in range(0, len(uncached_articles), ARTICLE_BATCH_SIZE):
-        batch_num = i // ARTICLE_BATCH_SIZE + 1
-        batch = uncached_articles[i : i + ARTICLE_BATCH_SIZE]
+    for i in range(0, len(uncached_articles), effective_batch_size):
+        batch_num = i // effective_batch_size + 1
+        batch = uncached_articles[i : i + effective_batch_size]
         articles_text = _format_batch_for_prompt(batch)
 
         prompt = sensing_classify_prompt(
