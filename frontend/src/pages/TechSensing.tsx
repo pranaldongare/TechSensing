@@ -213,7 +213,7 @@ const TechSensing: React.FC = () => {
   // ESC to exit full-screen
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isFullScreen) setIsFullScreen(false);
+      if (e.key === 'Escape' && isFullScreen) closeReport();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -293,6 +293,8 @@ const TechSensing: React.FC = () => {
       const res = await api.sensingStatus(tid);
       if (res.status === 'completed' && res.data) {
         setReportData(res.data);
+        setActiveTab('report');
+        setIsFullScreen(true);
       } else if (res.status === 'pending') {
         toast({ title: 'Still generating', description: 'This report is still being generated. It will appear when ready.' });
       } else {
@@ -301,6 +303,12 @@ const TechSensing: React.FC = () => {
     } catch {
       toast({ title: 'Error', description: 'Failed to load report', variant: 'destructive' });
     }
+  };
+
+  /** Close the full-screen report view and return to the config + history home. */
+  const closeReport = () => {
+    setIsFullScreen(false);
+    setReportData(null);
   };
 
   const handleDeleteReport = async (tid: string) => {
@@ -609,10 +617,10 @@ const TechSensing: React.FC = () => {
               <Download className="w-4 h-4 mr-1.5" />
               PPTX
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setIsFullScreen(false)}>
+            <Button variant="ghost" size="icon" onClick={closeReport}>
               <Minimize2 className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setIsFullScreen(false)}>
+            <Button variant="ghost" size="icon" onClick={closeReport}>
               <X className="w-4 h-4" />
             </Button>
           </div>
@@ -750,10 +758,10 @@ const TechSensing: React.FC = () => {
       </div>
 
       {/* Configuration + History row */}
-      <div className="flex gap-4 shrink-0 max-h-[380px]">
+      <div className="flex gap-4 flex-1 min-h-0">
         {/* Config card */}
-        <Card className="flex-1">
-          <CardContent className="p-4 space-y-3">
+        <Card className="flex-1 flex flex-col min-h-0">
+          <CardContent className="p-4 space-y-3 overflow-y-auto flex-1 min-h-0">
             {/* Ask your radar */}
             <div className="flex gap-2">
               <Input
@@ -1220,61 +1228,8 @@ const TechSensing: React.FC = () => {
         </Card>
       </div>
 
-      {/* Report display — tabs always visible; report-dependent tabs disabled when no report */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
-        <TabsList className="shrink-0">
-          <TabsTrigger value="report">Report</TabsTrigger>
-          <TabsTrigger value="companies" disabled={!reportData}>Companies</TabsTrigger>
-        </TabsList>
-        <TabsContent value="report" className="flex-1 min-h-0 mt-2">
-          {reportData ? (
-            <SensingReportRenderer report={reportData.report} meta={reportData.meta} highlightTechnology={highlightTech} onDeepDive={handleDeepDive} topicPreferences={topicPrefs} onTopicInterest={handleTopicInterest} onSourceFeedback={handleSourceFeedback} annotations={annotations} onAnnotate={handleAnnotate} />
-          ) : !isSubmitting ? (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground py-12">
-              <div className="text-center space-y-2">
-                <Radar className="w-12 h-12 mx-auto opacity-20" />
-                <p className="text-sm">Generate a report or select one from history</p>
-              </div>
-            </div>
-          ) : null}
-        </TabsContent>
-        <TabsContent value="companies" className="flex-1 min-h-0 mt-2 overflow-auto">
-          <div className="space-y-6">
-            {reportData && (
-              <CompanyAnalysisView
-                reportTrackingId={reportData?.meta?.tracking_id}
-                domain={reportData?.report?.domain}
-                radarItems={reportData?.report?.radar_items || []}
-              />
-            )}
-            <Card>
-              <CardContent className="p-4">
-                <h4 className="text-sm font-medium mb-2">Generate Company Report</h4>
-                <div className="flex gap-2">
-                  <Input
-                    value={companyName}
-                    onChange={(e) => setCompanyName(e.target.value)}
-                    placeholder="Company name..."
-                    className="flex-1"
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleGenerateCompanyReport(); }}
-                  />
-                  <Button
-                    onClick={handleGenerateCompanyReport}
-                    disabled={companyGenerating || !companyName.trim()}
-                    size="sm"
-                  >
-                    {companyGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Generate'}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Creates a focused report on this company using current domain and date range.
-                </p>
-              </CardContent>
-            </Card>
-            <CompanyWatchlistManager compact />
-          </div>
-        </TabsContent>
-      </Tabs>
+      {/* Reports open full-screen on selection (see the full-screen view above);
+          the home screen is intentionally limited to inputs, Generate, and history. */}
 
       {/* Schedule dialog */}
       <Dialog open={showScheduleDialog} onOpenChange={setShowScheduleDialog}>
