@@ -8,6 +8,10 @@ import { PROJECT_NAME } from '../../config';
 const AppNavbar: React.FC = () => {
   const { theme, toggleTheme } = useTheme();
 
+  // Company Analysis is temporarily hidden from the nav. Route, page, and the
+  // CompanyAnalysisView component remain fully functional — flip to true to restore.
+  const SHOW_COMPANY_ANALYSIS = false;
+
   const linkClass = ({ isActive }: { isActive: boolean }): string =>
     `inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
       isActive
@@ -32,10 +36,12 @@ const AppNavbar: React.FC = () => {
             <Radar className="w-4 h-4" />
             Tech Sensing
           </NavLink>
-          <NavLink to="/company-analysis" className={linkClass}>
-            <Building2 className="w-4 h-4" />
-            Company Analysis
-          </NavLink>
+          {SHOW_COMPANY_ANALYSIS && (
+            <NavLink to="/company-analysis" className={linkClass}>
+              <Building2 className="w-4 h-4" />
+              Company Analysis
+            </NavLink>
+          )}
           <NavLink to="/key-companies" className={linkClass}>
             <Briefcase className="w-4 h-4" />
             Key Companies
