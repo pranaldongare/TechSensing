@@ -86,6 +86,7 @@ async def generate_report(
     experience_block: str = "",
     prompt_patches: dict | None = None,
     feedback_block: str = "",
+    china_focus: bool = False,
 ) -> TechSensingReport:
     """
     Generate the complete Tech Sensing Report from classified articles.
@@ -129,13 +130,27 @@ async def generate_report(
     if preset is None:
         preset = get_preset_for_domain(domain)
 
+    # China Focus uses a fully separate prompt set (reliability over directive-injection).
+    if china_focus:
+        from core.llm.prompts.china_prompts import (
+            china_report_core_prompt as _core_prompt,
+            china_report_radar_prompt as _radar_prompt,
+            china_report_insights_prompt as _insights_prompt,
+            china_details_prompt as _details_prompt,
+        )
+    else:
+        _core_prompt = sensing_report_core_prompt
+        _radar_prompt = sensing_report_radar_prompt
+        _insights_prompt = sensing_report_insights_prompt
+        _details_prompt = sensing_details_prompt
+
     # ── Phase 1: Core (executive summary, headline moves, key trends) ──
     # Resolve prompt patches for each phase
     _patches = prompt_patches or {}
     _core_patch = _patches.get("classification_guidance", "")  # general guidance applies to core
     _radar_patch = _patches.get("radar_guidance", "")
 
-    core_prompt = sensing_report_core_prompt(
+    core_prompt = _core_prompt(
         classified_articles_json=articles_json,
         domain=domain,
         date_range=date_range,
@@ -180,7 +195,7 @@ async def generate_report(
     core_context_json = json.dumps(core_context, indent=2, ensure_ascii=False)
 
     if sensing_feature("tech_radar"):
-        radar_prompt = sensing_report_radar_prompt(
+        radar_prompt = _radar_prompt(
             classified_articles_json=articles_json,
             core_context_json=core_context_json,
             domain=domain,
@@ -227,7 +242,7 @@ async def generate_report(
     ]
     radar_context_json = json.dumps(radar_context, indent=2, ensure_ascii=False)
 
-    insights_prompt = sensing_report_insights_prompt(
+    insights_prompt = _insights_prompt(
         classified_articles_json=articles_json,
         core_context_json=core_context_json,
         radar_context_json=radar_context_json,
@@ -322,7 +337,7 @@ async def generate_report(
             indent=2,
             ensure_ascii=False,
         )
-        details_prompt = sensing_details_prompt(
+        details_prompt = _details_prompt(
             selected_technologies_json=selected_json,
             classified_articles_json=articles_json,
             domain=domain,

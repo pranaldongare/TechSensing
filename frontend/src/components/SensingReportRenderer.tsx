@@ -13,13 +13,14 @@ import {
   ChevronDown, ChevronRight, ExternalLink, Clock, TrendingUp,
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
-  ArrowDown, Minus, Info, Zap, Network, Database, Edit3, LayoutGrid, Download,
+  ArrowDown, Minus, Info, Zap, Network, Database, Edit3, LayoutGrid, Download, Globe2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
   TopicPreferences, ModelRelease, Annotation, OnepagerCard,
+  ChinaFocus, ChinaStreamItem,
 } from '@/lib/api';
 import { downloadOnepagerPptx } from '@/lib/sensing-onepager-pptx';
 import { downloadOnepagerPdf } from '@/lib/sensing-onepager-pdf';
@@ -527,6 +528,9 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
             ))}
           </div>
         )}
+
+        {/* China Focus (opt-in) */}
+        {report.china_focus && <ChinaFocusSection cf={report.china_focus} />}
 
         {/* Latest Model Releases (GenAI domains only) */}
         {report.model_releases && report.model_releases.length > 0 && (
@@ -1374,6 +1378,151 @@ function RefreshModelReleasesButton({ trackingId, onRefresh }: { trackingId?: st
       {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
       {loading ? 'Refreshing...' : 'Refresh'}
     </button>
+  );
+}
+
+function ChinaStreamBlock({ title, icon, items }: { title: string; icon: React.ReactNode; items?: ChinaStreamItem[] }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <h4 className="text-sm font-semibold flex items-center gap-2">{icon}{title}</h4>
+      <div className="space-y-2">
+        {items.map((item, i) => (
+          <div key={i} className="rounded-md border p-3">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-sm font-medium">{item.title}</span>
+              {item.source_url && (
+                <a href={item.source_url} target="_blank" rel="noopener noreferrer" className="text-primary shrink-0">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+            </div>
+            {item.detail && <p className="text-xs text-muted-foreground mt-1">{item.detail}</p>}
+            {item.organizations && item.organizations.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {item.organizations.map((o, j) => (
+                  <Badge key={j} variant="secondary" className="text-[10px]">{o}</Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChinaFocusSection({ cf }: { cf: ChinaFocus }) {
+  const cvu = cf.china_vs_us;
+  const hasComparison = !!cvu && !!(
+    cvu.summary || cvu.china_strengths?.length || cvu.us_strengths?.length ||
+    cvu.models_comparison || cvu.ecosystem_comparison
+  );
+  return (
+    <Card className="border-l-4 border-l-red-500">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Globe2 className="w-5 h-5 text-red-600" />
+          China Focus
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {cf.overview && (
+          <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+            <SafeMarkdownRenderer content={cf.overview} />
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <ChinaStreamBlock title="Business" icon={<Building2 className="w-4 h-4 text-muted-foreground" />} items={cf.business} />
+          <ChinaStreamBlock title="Technology" icon={<Cpu className="w-4 h-4 text-muted-foreground" />} items={cf.technology} />
+          <ChinaStreamBlock title="Implementation" icon={<Zap className="w-4 h-4 text-muted-foreground" />} items={cf.implementation} />
+          <ChinaStreamBlock title="Research" icon={<FileText className="w-4 h-4 text-muted-foreground" />} items={cf.research} />
+        </div>
+
+        {hasComparison && cvu && (
+          <div className="space-y-3 border-t pt-4">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Target className="w-4 h-4 text-muted-foreground" />China vs US
+            </h4>
+            {cvu.summary && (
+              <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                <SafeMarkdownRenderer content={cvu.summary} />
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {cvu.china_strengths && cvu.china_strengths.length > 0 && (
+                <div className="rounded-md border p-3">
+                  <span className="text-xs font-semibold text-red-600">China strengths</span>
+                  <ul className="list-disc pl-4 mt-1 space-y-0.5 text-xs text-muted-foreground">
+                    {cvu.china_strengths.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              )}
+              {cvu.us_strengths && cvu.us_strengths.length > 0 && (
+                <div className="rounded-md border p-3">
+                  <span className="text-xs font-semibold text-blue-600">US strengths</span>
+                  <ul className="list-disc pl-4 mt-1 space-y-0.5 text-xs text-muted-foreground">
+                    {cvu.us_strengths.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+            {cvu.models_comparison && (
+              <div>
+                <span className="text-xs font-semibold">GenAI models</span>
+                <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                  <SafeMarkdownRenderer content={cvu.models_comparison} />
+                </div>
+              </div>
+            )}
+            {cvu.ecosystem_comparison && (
+              <div>
+                <span className="text-xs font-semibold">Ecosystem</span>
+                <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                  <SafeMarkdownRenderer content={cvu.ecosystem_comparison} />
+                </div>
+              </div>
+            )}
+            {cvu.sources && cvu.sources.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-xs font-semibold text-muted-foreground">Sources:</span>
+                {cvu.sources.slice(0, 8).map((u, i) => {
+                  let host = 'link';
+                  try { host = new URL(u).hostname.replace('www.', ''); } catch { /* keep default */ }
+                  return (
+                    <a key={i} href={u} target="_blank" rel="noopener noreferrer" className="text-xs text-primary inline-flex items-center gap-0.5">
+                      <Link2 className="w-3 h-3" />{host}
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {cf.problem_categories && cf.problem_categories.length > 0 && (
+          <div className="space-y-2 border-t pt-4">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Target className="w-4 h-4 text-muted-foreground" />Problems China is focusing on
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {cf.problem_categories.map((pc, i) => (
+                <div key={i} className="rounded-md border p-3">
+                  <span className="text-sm font-medium">{pc.category}</span>
+                  {pc.description && <p className="text-xs text-muted-foreground mt-1">{pc.description}</p>}
+                  {pc.examples && pc.examples.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {pc.examples.map((ex, j) => <Badge key={j} variant="outline" className="text-[10px]">{ex}</Badge>)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

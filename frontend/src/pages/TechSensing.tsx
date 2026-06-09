@@ -106,6 +106,7 @@ const TechSensing: React.FC = () => {
   // Document upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [includeVideos, setIncludeVideos] = useState(false);
+  const [chinaFocus, setChinaFocus] = useState(false);
 
   // Company report state
   const [companyName, setCompanyName] = useState('');
@@ -262,6 +263,7 @@ const TechSensing: React.FC = () => {
           dontInclude.length > 0 ? dontInclude : undefined,
           lookbackDays,
           includeVideos,
+          chinaFocus,
         );
       } else {
         await api.sensingGenerate(
@@ -273,6 +275,7 @@ const TechSensing: React.FC = () => {
           feedUrls.length > 0 ? feedUrls : undefined,
           searchQueries.length > 0 ? searchQueries : undefined,
           includeVideos,
+          chinaFocus,
         );
       }
       toast({ title: 'Report submitted', description: 'Generation is running in the background. It will appear in history when ready.' });
@@ -871,6 +874,17 @@ const TechSensing: React.FC = () => {
                   />
                   <label htmlFor="include-videos" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
                     YouTube Videos
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 pt-5">
+                  <Switch
+                    id="china-focus"
+                    checked={chinaFocus}
+                    onCheckedChange={setChinaFocus}
+                    disabled={isSubmitting}
+                  />
+                  <label htmlFor="china-focus" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
+                    China Focus
                   </label>
                 </div>
                 <div className="pt-3">

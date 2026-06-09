@@ -210,6 +210,38 @@ export interface AILeaderboardData {
   speech: LeaderboardMediaEntry[];
 }
 
+export interface ChinaStreamItem {
+  title: string;
+  detail?: string;
+  organizations?: string[];
+  source_url?: string;
+}
+
+export interface ChinaProblemCategory {
+  category: string;
+  description?: string;
+  examples?: string[];
+}
+
+export interface ChinaVsUsComparison {
+  summary?: string;
+  china_strengths?: string[];
+  us_strengths?: string[];
+  models_comparison?: string;
+  ecosystem_comparison?: string;
+  sources?: string[];
+}
+
+export interface ChinaFocus {
+  overview?: string;
+  business?: ChinaStreamItem[];
+  technology?: ChinaStreamItem[];
+  implementation?: ChinaStreamItem[];
+  research?: ChinaStreamItem[];
+  china_vs_us?: ChinaVsUsComparison;
+  problem_categories?: ChinaProblemCategory[];
+}
+
 export interface SensingReport {
   schema_version?: string; // '1.0' (legacy) or '2.0' (with top_events/blind_spots)
   report_title: string;
@@ -232,6 +264,7 @@ export interface SensingReport {
   trending_videos?: SensingTrendingVideo[];
   weak_signals?: WeakSignal[];
   model_releases?: ModelRelease[];
+  china_focus?: ChinaFocus | null;
   relationships?: TechRelationshipMap | null;
   report_confidence?: string;
   confidence_note?: string;
@@ -1040,6 +1073,7 @@ export const api = {
     feedUrls?: string[],
     searchQueries?: string[],
     includeVideos: boolean = false,
+    chinaFocus: boolean = false,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const response = await fetch(`${API_URL}/sensing/generate`, {
@@ -1057,6 +1091,7 @@ export const api = {
         feed_urls: feedUrls || null,
         search_queries: searchQueries || null,
         include_videos: includeVideos,
+        china_focus: chinaFocus,
       }),
     });
     const data = await response.json();
@@ -1074,6 +1109,7 @@ export const api = {
     dontInclude?: string[],
     lookbackDays: number = 7,
     includeVideos: boolean = false,
+    chinaFocus: boolean = false,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const formData = new FormData();
@@ -1084,6 +1120,7 @@ export const api = {
     if (dontInclude?.length) formData.append('dont_include', dontInclude.join(','));
     formData.append('lookback_days', String(lookbackDays));
     formData.append('include_videos', String(includeVideos));
+    formData.append('china_focus', String(chinaFocus));
 
     const response = await fetch(`${API_URL}/sensing/generate-from-document`, {
       method: 'POST',

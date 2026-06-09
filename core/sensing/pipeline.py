@@ -148,6 +148,7 @@ async def run_sensing_pipeline(
     user_id: Optional[str] = None,
     key_people: Optional[List[str]] = None,
     include_videos: bool = False,
+    china_focus: bool = False,
 ) -> SensingPipelineResult:
     """
     Full tech sensing pipeline execution.
@@ -280,6 +281,20 @@ async def run_sensing_pipeline(
     effective_queries = search_queries or _merge_queries(domain, domain_ref, search_must_include)
     effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include)
 
+    # China Focus mode: ingest only China-scoped sources.
+    if china_focus:
+        from core.sensing.china_sources import (
+            CHINA_REGION_TERMS, get_china_feeds, get_china_search_queries,
+        )
+        effective_feeds = get_china_feeds(domain)
+        effective_queries = get_china_search_queries(domain)
+        search_must_include = list(search_must_include or []) + CHINA_REGION_TERMS
+        effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include)
+        logger.info(
+            f"[ChinaFocus] China-scoped ingestion: {len(effective_feeds)} feeds, "
+            f"{len(effective_queries)} queries"
+        )
+
     (
         rss_articles,
         ddg_articles,
@@ -387,6 +402,7 @@ async def run_sensing_pipeline(
         custom_quadrant_names=custom_quadrant_names,
         preset=preset,
         date_range=date_range,
+        china_focus=china_focus,
     )
     await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
@@ -496,6 +512,7 @@ async def run_sensing_pipeline(
         experience_block=experience_block,
         prompt_patches=prompt_patches,
         feedback_block=feedback_block,
+        china_focus=china_focus,
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(
@@ -688,7 +705,7 @@ async def run_sensing_pipeline(
         report.trending_videos = []
 
     # --- Model Releases (GenAI domains only) ---
-    if _is_ai_domain(domain):
+    if _is_ai_domain(domain) and not china_focus:
         logger.info(f"Searching for model releases... [{_elapsed()}]")
         await _emit("model_releases", 99, "Finding recent model releases...")
         try:
@@ -720,6 +737,26 @@ async def run_sensing_pipeline(
                 logger.info(f"Model release injection complete [{_elapsed()}]")
             except Exception as e:
                 logger.warning(f"Model release injection failed (non-fatal): {e}")
+
+    # --- China Focus (opt-in) ---
+    if china_focus:
+        logger.info(f"[ChinaFocus] Generating China-focused section... [{_elapsed()}]")
+        await _emit("china_focus", 99, "Generating China-focused analysis...")
+        try:
+            from core.sensing.china_focus import generate_china_focus
+
+            cf = await generate_china_focus(
+                report=report,
+                classified=classified,
+                domain=domain,
+                date_range=date_range,
+                lookback_days=lookback_days,
+                url_content_map=url_content_map,
+            )
+            if cf is not None:
+                report.china_focus = cf
+        except Exception as e:
+            logger.warning(f"China Focus generation failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
     await _run_self_learning(report, classified, domain, user_id, _emit, _elapsed)
@@ -1143,6 +1180,7 @@ async def run_sensing_pipeline_from_document(
     user_id: Optional[str] = None,
     key_people: Optional[List[str]] = None,
     include_videos: bool = False,
+    china_focus: bool = False,
 ) -> SensingPipelineResult:
     """Hybrid sensing pipeline: parse an uploaded document, extract key themes
     via LLM, then use those themes to drive the full web search pipeline.
@@ -1359,6 +1397,20 @@ async def run_sensing_pipeline_from_document(
     effective_feeds = _merge_feeds(search_domain, domain_ref)
     effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include or None)
 
+    # China Focus mode: ingest only China-scoped sources.
+    if china_focus:
+        from core.sensing.china_sources import (
+            CHINA_REGION_TERMS, get_china_feeds, get_china_search_queries,
+        )
+        effective_feeds = get_china_feeds(search_domain)
+        effective_search_queries = get_china_search_queries(search_domain)
+        search_must_include = list(search_must_include or []) + CHINA_REGION_TERMS
+        effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include or None)
+        logger.info(
+            f"[ChinaFocus] China-scoped ingestion: {len(effective_feeds)} feeds, "
+            f"{len(effective_search_queries)} queries"
+        )
+
     (
         rss_articles,
         ddg_articles,
@@ -1466,6 +1518,7 @@ async def run_sensing_pipeline_from_document(
         custom_quadrant_names=custom_quadrant_names,
         preset=preset,
         date_range=date_range,
+        china_focus=china_focus,
     )
     await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
@@ -1568,6 +1621,7 @@ async def run_sensing_pipeline_from_document(
         experience_block=experience_block,
         prompt_patches=prompt_patches,
         feedback_block=feedback_block,
+        china_focus=china_focus,
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(f"[Stage 8/9] REPORT COMPLETE [{_elapsed()}]")
@@ -1727,7 +1781,7 @@ async def run_sensing_pipeline_from_document(
         report.trending_videos = []
 
     # --- Model Releases (GenAI domains only) ---
-    if _is_ai_domain(domain):
+    if _is_ai_domain(domain) and not china_focus:
         logger.info(f"Searching for model releases... [{_elapsed()}]")
         await _emit("model_releases", 99, "Finding recent model releases...")
         try:
@@ -1759,6 +1813,26 @@ async def run_sensing_pipeline_from_document(
                 logger.info(f"Model release injection complete [{_elapsed()}]")
             except Exception as e:
                 logger.warning(f"Model release injection failed (non-fatal): {e}")
+
+    # --- China Focus (opt-in) ---
+    if china_focus:
+        logger.info(f"[ChinaFocus] Generating China-focused section... [{_elapsed()}]")
+        await _emit("china_focus", 99, "Generating China-focused analysis...")
+        try:
+            from core.sensing.china_focus import generate_china_focus
+
+            cf = await generate_china_focus(
+                report=report,
+                classified=classified,
+                domain=domain,
+                date_range=date_range,
+                lookback_days=lookback_days,
+                url_content_map=url_content_map,
+            )
+            if cf is not None:
+                report.china_focus = cf
+        except Exception as e:
+            logger.warning(f"China Focus generation failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
     await _run_self_learning(report, classified, domain, user_id, _emit, _elapsed)

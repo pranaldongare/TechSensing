@@ -824,6 +824,105 @@ class PromptPatchOutput(LLMOutputBase):
     )
 
 
+# --- China Focus (optional, opt-in section) ---
+
+
+class ChinaStreamItem(BaseModel):
+    """A single development within one of the four China-focus streams."""
+
+    title: str = Field(description="Short headline of the development.")
+    detail: str = Field(
+        default="",
+        description="1-3 sentence explanation grounded in the source articles.",
+    )
+    organizations: List[str] = Field(
+        default_factory=list,
+        description="Chinese companies, labs, or institutions involved (e.g., 'DeepSeek', 'Alibaba', 'Tsinghua').",
+    )
+    source_url: str = Field(
+        default="",
+        description="Supporting article URL, if one exists.",
+    )
+
+
+class ChinaProblemCategory(BaseModel):
+    """A category of problems / strategic priorities China is focusing on."""
+
+    category: str = Field(
+        description="Short name of the problem area (e.g., 'Compute self-sufficiency')."
+    )
+    description: str = Field(
+        default="",
+        description="1-2 sentences on what the focus is and why it matters.",
+    )
+    examples: List[str] = Field(
+        default_factory=list,
+        description="Concrete initiatives, companies, or technologies illustrating this focus.",
+    )
+
+
+class ChinaVsUsComparison(BaseModel):
+    """Brief China vs US landscape comparison, focused on GenAI models + ecosystem."""
+
+    summary: str = Field(
+        default="",
+        description="2-4 sentence overall comparison narrative (markdown).",
+    )
+    china_strengths: List[str] = Field(
+        default_factory=list,
+        description="Areas where China currently leads or is highly competitive.",
+    )
+    us_strengths: List[str] = Field(
+        default_factory=list,
+        description="Areas where the US currently leads or is highly competitive.",
+    )
+    models_comparison: str = Field(
+        default="",
+        description="Comparison specific to GenAI models (frontier + open-weight).",
+    )
+    ecosystem_comparison: str = Field(
+        default="",
+        description="Comparison of the broader ecosystem: chips/compute, capital, talent, open-source, and deployment.",
+    )
+    sources: List[str] = Field(
+        default_factory=list,
+        description="URLs of the (China + US) sources the comparison is grounded in.",
+    )
+
+
+class ChinaFocus(BaseModel):
+    """Optional China-focused analysis appended to the report when China Focus is enabled."""
+
+    overview: str = Field(
+        default="",
+        description="2-4 sentence overview of China developments this period (markdown).",
+    )
+    business: List[ChinaStreamItem] = Field(
+        default_factory=list,
+        description="Business stream — funding, commercialization, partnerships, policy/market moves.",
+    )
+    technology: List[ChinaStreamItem] = Field(
+        default_factory=list,
+        description="Technology stream — model releases, hardware/chips, infrastructure.",
+    )
+    implementation: List[ChinaStreamItem] = Field(
+        default_factory=list,
+        description="Implementation stream — agentic AI and other real-world deployments, products, applications.",
+    )
+    research: List[ChinaStreamItem] = Field(
+        default_factory=list,
+        description="Research stream — novel/incremental papers, open-source/GitHub, benchmarks.",
+    )
+    china_vs_us: ChinaVsUsComparison = Field(
+        default_factory=ChinaVsUsComparison,
+        description="Brief China vs US comparison, focused on GenAI models and ecosystem.",
+    )
+    problem_categories: List[ChinaProblemCategory] = Field(
+        default_factory=list,
+        description="Categorization of the problems/priorities China is focusing on.",
+    )
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
@@ -911,6 +1010,13 @@ class TechSensingReport(LLMOutputBase):
     confidence_factors: dict = Field(
         default_factory=dict,
         description="Breakdown of confidence factors.",
+    )
+    china_focus: Optional[ChinaFocus] = Field(
+        default=None,
+        description=(
+            "Optional China-focused analysis (4 streams + China vs US + problem "
+            "categories). Present only when China Focus is enabled for the run."
+        ),
     )
 
 
