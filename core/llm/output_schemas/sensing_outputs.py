@@ -1111,6 +1111,21 @@ class TechRelationshipMap(LLMOutputBase):
 # --- One-Pager Export ---
 
 
+class OnepagerMetric(BaseModel):
+    """A single boxed statistic on a one-pager card."""
+
+    label: str = Field(
+        description="Short metric name, e.g. 'SWE-bench Verified', 'Funding', 'Params', 'Context'."
+    )
+    value: str = Field(
+        description="The metric value with unit, e.g. '65.4%', '$1.5K', '262K', '405B'."
+    )
+    comparison: str = Field(
+        default="",
+        description="Optional comparison/delta, e.g. 'vs 49.0% (Claude 3.5)', '+30% QoQ', '10x cheaper'.",
+    )
+
+
 class OnepagerCard(BaseModel):
     """A single card on the weekly tech sensing one-pager."""
 
@@ -1137,6 +1152,36 @@ class OnepagerCard(BaseModel):
             "Short label for the source link, e.g. 'See Benchmark Scores', "
             "'See Full Article', 'View Details'."
         ),
+    )
+    organization: str = Field(
+        default="",
+        description=(
+            "The company / lab / organization behind this item. ALWAYS populate "
+            "when identifiable (e.g. 'OpenAI', 'DeepSeek', 'Stanford')."
+        ),
+    )
+    people: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Named creators / researchers / leaders involved, ONLY when clearly "
+            "supported by the sources. Empty if not identifiable."
+        ),
+    )
+    metrics: List[OnepagerMetric] = Field(
+        default_factory=list,
+        description=(
+            "0-4 boxed statistics — quantitative facts with explicit numbers and "
+            "a comparison where available. Prefer benchmarks, $ amounts, params, "
+            "context length, growth %, user/customer counts."
+        ),
+    )
+    sources: List[str] = Field(
+        default_factory=list,
+        description="Supporting source URLs used to ground this card (1-5).",
+    )
+    as_of: str = Field(
+        default="",
+        description="Date or period the facts are from, if known (e.g. 'Jun 2026').",
     )
 
 

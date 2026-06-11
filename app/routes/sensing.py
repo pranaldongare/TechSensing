@@ -1087,8 +1087,268 @@ async def update_org_context(
 class OnepagerRequest(BaseModel):
     tracking_id: str = Field(description="Report tracking ID to pull events from.")
     selected_indices: List[int] = Field(
-        description="0-based indices into top_events (max 8)."
+        default_factory=list,
+        description="0-based indices into top_events (max 8).",
     )
+    custom_topics: List[str] = Field(
+        default_factory=list,
+        description=(
+            "User-entered topics for the one-pager. Topics matching a report "
+            "event reuse report data; topics not in the report are researched "
+            "on the fly (quick web lookup + summary)."
+        ),
+    )
+
+
+def _onepager_norm(s: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).strip()
+
+
+def _match_topic_to_event(topic: str, top_events: list) -> Optional[int]:
+    """Return the index of the report event matching a user topic, or None.
+
+    Matches when the normalized topic is a substring of, or has strong token
+    overlap with, an event's headline / actor / related technologies.
+    """
+    nt = _onepager_norm(topic)
+    if not nt:
+        return None
+    nt_tokens = set(nt.split())
+    for i, ev in enumerate(top_events):
+        if not isinstance(ev, dict):
+            continue
+        hay = " ".join([
+            ev.get("headline", "") or "",
+            ev.get("actor", "") or "",
+            " ".join(ev.get("related_technologies", []) or []),
+        ])
+        nh = _onepager_norm(hay)
+        if not nh:
+            continue
+        if nt in nh:
+            return i
+        if nt_tokens and len(nt_tokens & set(nh.split())) / len(nt_tokens) >= 0.8:
+            return i
+    return None
+
+
+# One-pager synthesis runs on a stronger model than the global fallback for
+# better extraction + far less fabrication.
+_ONEPAGER_MODEL = "gpt-4o"
+
+_ONEPAGER_STOPWORDS = {
+    "the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with", "by",
+    "from", "as", "new", "ai", "model", "models", "tech", "technology", "report",
+    "update", "latest", "this", "that", "its", "into", "via", "amid", "over",
+    "under", "is", "are", "be", "vs", "than",
+}
+
+_ONEPAGER_BOILERPLATE = (
+    "sign in", "log in", "please wait", "something went wrong",
+    "create an account", "subscribe to continue", "enable javascript",
+    "page not found", "access denied", "404",
+)
+
+
+def _significant_tokens(text: str) -> set:
+    """Entity tokens used to relevance-filter retrieved sources."""
+    import re
+    out: set = set()
+    for t in re.findall(r"[a-z0-9$%.\-]+", (text or "").lower()):
+        t2 = t.strip(".-")
+        if not t2:
+            continue
+        if any(ch.isdigit() for ch in t2) or (len(t2) >= 4 and t2 not in _ONEPAGER_STOPWORDS):
+            out.add(t2)
+    return out
+
+
+def _is_usable_source(article, entity_tokens: set) -> bool:
+    """Drop boilerplate / login / off-topic pages so they never become 'grounding'."""
+    content = getattr(article, "content", "") or ""
+    if len(content) < 200:
+        return False
+    low = content.lower()
+    if len(content) < 800 and any(b in low for b in _ONEPAGER_BOILERPLATE):
+        return False
+    # Must mention at least one entity token, else it's an irrelevant result.
+    if entity_tokens and not any(t in low for t in entity_tokens if len(t) >= 4):
+        return False
+    return True
+
+
+async def _extract_urls(urls: list, limit: int) -> list:
+    """Fetch + extract a list of URLs into RawArticles (for the event's own sources)."""
+    import asyncio
+
+    from core.sensing.ingest import RawArticle, extract_full_text
+
+    seen: set = set()
+    targets: list = []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            targets.append(u)
+        if len(targets) >= limit:
+            break
+    if not targets:
+        return []
+
+    sem = asyncio.Semaphore(3)
+
+    async def _ex(u):
+        async with sem:
+            try:
+                return await extract_full_text(RawArticle(title="", url=u, source=""))
+            except Exception:
+                return None
+
+    arts = await asyncio.gather(*[_ex(u) for u in targets])
+    return [a for a in arts if a is not None]
+
+
+async def _gather_onepager_sources(topic: str, domain: str, seed_urls: list, entity_tokens: set):
+    """Grounding for one card: the event's OWN sources first, then a clean
+    supplementary search — relevance-filtered. Returns (block, used_urls, usable_count)."""
+    import asyncio
+
+    from core.sensing.dedup import deduplicate_articles
+    from core.sensing.ingest import extract_full_text, search_duckduckgo
+
+    arts: list = []
+    if seed_urls:
+        arts.extend(await _extract_urls(seed_urls, 4))
+
+    # Supplementary search — clean queries only (no junk operator words like
+    # 'OR results OR figures', which trawled unrelated 'results' sites).
+    base = (topic or "").strip()
+    queries = list(dict.fromkeys([q for q in [base, f"{base} {domain}"] if q]))[:2]
+    try:
+        raw = await search_duckduckgo(queries, domain, lookback_days=0)
+        unique = deduplicate_articles(raw)[:6]
+        sem = asyncio.Semaphore(3)
+
+        async def _ex(a):
+            async with sem:
+                return await extract_full_text(a)
+
+        search_arts = await asyncio.gather(
+            *[_ex(a) for a in unique[:3]], return_exceptions=True
+        )
+        arts.extend([a for a in search_arts if not isinstance(a, Exception)])
+    except Exception as e:
+        logger.warning("One-pager supplementary search failed: %s", e)
+
+    usable = [a for a in arts if _is_usable_source(a, entity_tokens)]
+
+    block = ""
+    used_urls: List[str] = []
+    for a in usable:
+        url = getattr(a, "url", "") or ""
+        if url and url not in used_urls:
+            used_urls.append(url)
+        body_text = (getattr(a, "content", "") or getattr(a, "snippet", "") or "")[:900]
+        block += f"- {getattr(a, 'title', '')}\n  {body_text}\n  URL: {url}\n\n"
+
+    return (block or "(no usable sources retrieved)"), used_urls, len(usable)
+
+
+async def _verify_card(card_dict: dict, sources_block: str, domain: str) -> dict:
+    """Fact-check pass: strip metrics/bullets/people not supported by the sources."""
+    from core.constants import GPU_SENSING_REPORT_LLM
+    from core.llm.client import invoke_llm
+    from core.llm.output_schemas.sensing_outputs import OnepagerCard
+    from core.llm.prompts.sensing_prompts import onepager_verify_card_prompt
+
+    try:
+        prompt = onepager_verify_card_prompt(
+            json.dumps(card_dict, ensure_ascii=False), sources_block, domain
+        )
+        result = await invoke_llm(
+            gpu_model=GPU_SENSING_REPORT_LLM.model,
+            response_schema=OnepagerCard,
+            contents=prompt,
+            port=GPU_SENSING_REPORT_LLM.port,
+            openai_model=_ONEPAGER_MODEL,
+        )
+        v = OnepagerCard.model_validate(result).model_dump()
+        # Preserve server-attached provenance (the verifier shouldn't touch these).
+        v["sources"] = card_dict.get("sources", [])
+        v["source_url"] = card_dict.get("source_url", "")
+        v["actor"] = card_dict.get("actor", "")
+        if not v.get("organization"):
+            v["organization"] = card_dict.get("organization", "")
+        return v
+    except Exception as e:
+        logger.warning("One-pager verify pass failed (keeping draft): %s", e)
+        return card_dict
+
+
+async def _build_enriched_card(kind: str, seed, domain: str) -> Optional[dict]:
+    """Research (event's own sources + clean search) -> synthesize (gpt-4o) ->
+    verify ONE enriched one-pager card.
+
+    kind='event' -> seed is a top_events dict; kind='topic' -> a user topic string.
+    """
+    from core.constants import GPU_SENSING_REPORT_LLM
+    from core.llm.client import invoke_llm
+    from core.llm.output_schemas.sensing_outputs import OnepagerCard
+    from core.llm.prompts.sensing_prompts import onepager_enriched_card_prompt
+
+    if kind == "event" and isinstance(seed, dict):
+        related = seed.get("related_technologies", []) or []
+        topic = seed.get("headline", "") or seed.get("actor", "") or "topic"
+        topic_context = "\n".join([
+            f"Headline: {seed.get('headline', '')}",
+            f"Actor/Org: {seed.get('actor', '')}",
+            f"Event type: {seed.get('event_type', '')}",
+            f"Impact: {seed.get('impact_summary', '')}",
+            f"Strategic intent: {seed.get('strategic_intent', '')}",
+            f"Segment: {seed.get('segment', '')}",
+            f"Related technologies: {', '.join(related)}",
+        ])
+        event_urls = [u for u in (seed.get("source_urls", []) or []) if u]
+        fallback_actor = seed.get("actor", "") or ""
+        entity_text = " ".join([
+            seed.get("headline", ""), seed.get("actor", ""), " ".join(related),
+        ])
+    else:
+        topic = str(seed)
+        topic_context = f"User-requested topic: {topic}"
+        event_urls = []
+        fallback_actor = ""
+        entity_text = topic
+
+    entity_tokens = _significant_tokens(entity_text)
+    sources_block, used_urls, usable_count = await _gather_onepager_sources(
+        topic, domain, event_urls, entity_tokens
+    )
+
+    prompt = onepager_enriched_card_prompt(topic_context, domain, sources_block)
+    result = await invoke_llm(
+        gpu_model=GPU_SENSING_REPORT_LLM.model,
+        response_schema=OnepagerCard,
+        contents=prompt,
+        port=GPU_SENSING_REPORT_LLM.port,
+        openai_model=_ONEPAGER_MODEL,
+    )
+    d = OnepagerCard.model_validate(result).model_dump()
+
+    # Merge provenance: the event's real sources + the ones we actually used.
+    merged: List[str] = []
+    for u in (list(d.get("sources") or []) + used_urls + event_urls):
+        if u and u not in merged:
+            merged.append(u)
+    d["sources"] = merged[:5]
+    d["source_url"] = d["sources"][0] if d["sources"] else ""
+    d["actor"] = d.get("organization") or fallback_actor or ""
+
+    # Verification pass — only meaningful when we actually had usable sources.
+    if usable_count > 0:
+        d = await _verify_card(d, sources_block, domain)
+
+    return d
 
 
 @router.post("/onepager")
@@ -1096,11 +1356,14 @@ async def generate_onepager(
     request: Request,
     body: OnepagerRequest = Body(...),
 ):
-    """Generate one-pager card data for selected top events via LLM."""
-    from core.constants import GPU_SENSING_REPORT_LLM
-    from core.llm.client import invoke_llm
-    from core.llm.output_schemas.sensing_outputs import OnepagerOutput
-    from core.llm.prompts.sensing_prompts import onepager_bullets_prompt
+    """Generate enriched one-pager cards for selected events + custom topics.
+
+    Every card goes through a research + synthesize step (parallelized): report
+    events reuse their context plus a fresh metric-focused search; custom topics
+    are researched on the fly. Each card surfaces organization, people, and
+    quantitative metrics.
+    """
+    import asyncio
 
     payload = request.state.user
     if not payload:
@@ -1119,42 +1382,60 @@ async def generate_onepager(
 
     report = report_data.get("report", report_data)
     top_events = report.get("top_events", [])
-
-    if not top_events:
-        raise HTTPException(status_code=400, detail="Report has no top events")
-
-    # Validate indices
-    indices = [i for i in body.selected_indices if 0 <= i < len(top_events)]
-    if not indices:
-        raise HTTPException(status_code=400, detail="No valid event indices")
-    indices = indices[:8]  # Cap at 8
-
-    selected_events = [top_events[i] for i in indices]
     domain = report.get("domain", "Technology")
     date_range = report.get("date_range", "")
 
-    # Build prompt and call LLM
-    prompt = onepager_bullets_prompt(selected_events, domain)
+    indices = [i for i in body.selected_indices if 0 <= i < len(top_events)][:8]
+    custom_topics = [t.strip() for t in (body.custom_topics or []) if t and t.strip()]
 
-    try:
-        result = await invoke_llm(
-            gpu_model=GPU_SENSING_REPORT_LLM.model,
-            response_schema=OnepagerOutput,
-            contents=prompt,
-            port=GPU_SENSING_REPORT_LLM.port,
-        )
-        output = OnepagerOutput.model_validate(result)
-    except Exception as e:
-        logger.error("One-pager LLM call failed: %s", e)
+    if not indices and not custom_topics:
         raise HTTPException(
-            status_code=500,
-            detail=f"One-pager generation failed: {e}",
+            status_code=400,
+            detail="Select at least one event or enter a custom topic",
         )
+
+    # Custom topics matching a report event reuse that event; the rest are researched.
+    matched_indices: List[int] = []
+    research_topics: List[str] = []
+    for topic in custom_topics:
+        mi = _match_topic_to_event(topic, top_events)
+        if mi is not None:
+            if mi not in indices and mi not in matched_indices:
+                matched_indices.append(mi)
+        else:
+            research_topics.append(topic)
+
+    # Ordered card tasks (cap 8): events first, then researched topics.
+    event_order = (indices + matched_indices)[:8]
+    tasks: list = [("event", top_events[i]) for i in event_order]
+    for topic in research_topics:
+        tasks.append(("topic", topic))
+    tasks = tasks[:8]
+
+    # Enrich every card in parallel — each does its own search + synthesis.
+    sem = asyncio.Semaphore(4)
+
+    async def _one(kind: str, seed):
+        async with sem:
+            try:
+                return await _build_enriched_card(kind, seed, domain)
+            except Exception as e:
+                label = seed.get("headline", "") if isinstance(seed, dict) else seed
+                logger.warning(
+                    "One-pager card enrichment failed for %r: %s", label, e
+                )
+                return None
+
+    results = await asyncio.gather(*[_one(k, s) for (k, s) in tasks])
+    cards_out = [c for c in results if isinstance(c, dict)]
+
+    if not cards_out:
+        raise HTTPException(status_code=500, detail="One-pager produced no cards")
 
     return JSONResponse(
         content={
             "status": "ok",
-            "cards": [c.model_dump() for c in output.cards],
+            "cards": cards_out[:8],
             "domain": domain,
             "date_range": date_range,
         }

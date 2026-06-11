@@ -11,6 +11,8 @@ if (g?.pdfMake?.vfs) {
     (pdfMake as any).vfs = g.pdfMake.vfs;
 }
 
+type Layout = 'compact' | 'detailed';
+
 // ── Color palette ──────────────────────────────────────────────────────────
 const COLORS = {
     banner: '#1e3a5f',
@@ -24,14 +26,7 @@ const COLORS = {
 };
 
 const CATEGORY_COLORS = [
-    '#0D9488',  // teal
-    '#059669',  // green
-    '#7C3AED',  // purple
-    '#EA580C',  // orange
-    '#2563EB',  // blue
-    '#DC2626',  // red
-    '#DB2777',  // pink
-    '#4F46E5',  // indigo
+    '#0D9488', '#059669', '#7C3AED', '#EA580C', '#2563EB', '#DC2626', '#DB2777', '#4F46E5',
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -42,7 +37,7 @@ function sanitize(s: string | undefined | null): string {
         .replace(/[–—]/g, '-')
         .replace(/[""]/g, '"')
         .replace(/'/g, "'")
-        .replace(/\u202F/g, ' ');
+        .replace(/ /g, ' ');
 }
 
 function truncate(s: string, max: number): string {
@@ -54,9 +49,7 @@ function sortByCategory(cards: OnepagerCard[]): OnepagerCard[] {
     const tagOrder = new Map<string, number>();
     let idx = 0;
     for (const c of cards) {
-        if (!tagOrder.has(c.category_tag)) {
-            tagOrder.set(c.category_tag, idx++);
-        }
+        if (!tagOrder.has(c.category_tag)) tagOrder.set(c.category_tag, idx++);
     }
     return [...cards].sort(
         (a, b) => (tagOrder.get(a.category_tag) ?? 0) - (tagOrder.get(b.category_tag) ?? 0),
@@ -75,111 +68,104 @@ function buildCategoryColorMap(cards: OnepagerCard[]): Map<string, string> {
     return map;
 }
 
-/**
- * Build the pdfmake content for a single card cell (one table cell).
- */
-function buildCardContent(card: OnepagerCard, categoryColor: string): Content {
-    const actorInitial = (card.actor || card.card_title || '?').charAt(0).toUpperCase();
-
-    const bulletItems: Content[] = card.bullets.slice(0, 5).map(b => ({
-        columns: [
-            { text: '\u00d7', width: 8, fontSize: 8, color: COLORS.bulletMarker, bold: true },
-            { text: truncate(b, 150), fontSize: 7.5, color: COLORS.textDark },
-        ],
-        columnGap: 3,
-        margin: [0, 1, 0, 1] as any,
-    }));
-
-    return {
-        margin: [0, 0, 0, 0] as any,
-        stack: [
-            // Headline row with icon
-            {
-                columns: [
-                    // Icon circle (simulated with a colored square + letter)
-                    {
-                        width: 20,
-                        stack: [{
-                            table: {
-                                widths: [16],
-                                body: [[{
-                                    text: actorInitial,
-                                    fontSize: 10,
-                                    bold: true,
-                                    color: COLORS.white,
-                                    fillColor: categoryColor,
-                                    alignment: 'center',
-                                    margin: [0, 2, 0, 2] as any,
-                                }]],
-                            },
-                            layout: 'noBorders',
-                        }],
-                    },
-                    // Headline text
-                    {
-                        text: truncate(card.card_title, 80),
-                        fontSize: 9,
-                        bold: true,
-                        color: COLORS.textDark,
-                        margin: [4, 2, 0, 0] as any,
-                    },
-                ],
-                columnGap: 0,
-                margin: [0, 0, 0, 4] as any,
-            },
-            // Bullets
-            ...bulletItems,
-            // Source link
-            {
-                text: sanitize(card.source_label || 'See Full Article'),
-                fontSize: 6.5,
-                color: COLORS.sourceLink,
-                decoration: 'underline',
-                margin: [0, 4, 0, 0] as any,
-                ...(card.source_url ? { link: card.source_url } : {}),
-            },
-        ],
-    };
+function whoLine(card: OnepagerCard): string {
+    const org = card.organization || card.actor || '';
+    const people = (card.people || []).slice(0, 2);
+    return sanitize([org, ...people].filter(Boolean).join('  ·  '));
 }
 
-// ── Main export function ─────────────────────────────────────────────────
+function metricsLine(card: OnepagerCard): string {
+    const ms = card.metrics || [];
+    if (!ms.length) return '';
+    return ms
+        .map((m) => `${m.label} ${m.value}${m.comparison ? ` (${m.comparison})` : ''}`)
+        .join('   ·   ');
+}
 
-export async function downloadOnepagerPdf(
-    cards: OnepagerCard[],
-    domain: string,
-    dateRange: string,
-): Promise<void> {
-    const sorted = sortByCategory(cards);
-    const colorMap = buildCategoryColorMap(sorted);
+/** Build the pdfmake content for a single card cell. */
+function buildCardContent(card: OnepagerCard, categoryColor: string, detailed: boolean): Content {
+    const initial = (card.organization || card.actor || card.card_title || '?').charAt(0).toUpperCase();
 
-    // Split into left (even) and right (odd) columns
-    const leftCards: OnepagerCard[] = [];
-    const rightCards: OnepagerCard[] = [];
-    for (let i = 0; i < sorted.length && i < 8; i++) {
-        if (i % 2 === 0) leftCards.push(sorted[i]);
-        else rightCards.push(sorted[i]);
+    const stack: Content[] = [
+        // Headline row with icon
+        {
+            columns: [
+                {
+                    width: 20,
+                    stack: [{
+                        table: {
+                            widths: [16],
+                            body: [[{
+                                text: initial, fontSize: 10, bold: true, color: COLORS.white,
+                                fillColor: categoryColor, alignment: 'center', margin: [0, 2, 0, 2] as any,
+                            }]],
+                        },
+                        layout: 'noBorders',
+                    }],
+                },
+                {
+                    text: truncate(card.card_title, detailed ? 110 : 80),
+                    fontSize: detailed ? 10 : 9, bold: true, color: COLORS.textDark,
+                    margin: [4, 2, 0, 0] as any,
+                },
+            ],
+            columnGap: 0,
+            margin: [0, 0, 0, 3] as any,
+        },
+    ];
+
+    // Organization + people subtitle
+    const who = whoLine(card);
+    if (who) {
+        stack.push({ text: who, fontSize: detailed ? 8 : 7, italics: true, color: COLORS.textMuted, margin: [0, 0, 0, 2] as any });
     }
 
-    // Build table rows: each row has [left_sidebar, left_card, gap, right_sidebar, right_card]
-    const maxRows = Math.max(leftCards.length, rightCards.length, 1);
-    const tableBody: any[][] = [];
+    // Metrics strip
+    const metrics = metricsLine(card);
+    if (metrics) {
+        stack.push({ text: truncate(metrics, detailed ? 260 : 140), fontSize: detailed ? 8 : 7, bold: true, color: categoryColor, margin: [0, 0, 0, 3] as any });
+    }
 
-    // Track category spans for sidebars
+    // Bullets
+    const maxBullets = detailed ? 6 : (metrics ? 2 : 3);
+    for (const b of card.bullets.slice(0, maxBullets)) {
+        stack.push({
+            columns: [
+                { text: '×', width: 8, fontSize: 8, color: COLORS.bulletMarker, bold: true },
+                { text: truncate(b, 160), fontSize: detailed ? 8 : 7.5, color: COLORS.textDark },
+            ],
+            columnGap: 3,
+            margin: [0, 1, 0, 1] as any,
+        });
+    }
+
+    // Source link
+    stack.push({
+        text: sanitize(card.source_label || 'See Full Article'),
+        fontSize: 6.5, color: COLORS.sourceLink, decoration: 'underline', margin: [0, 4, 0, 0] as any,
+        ...(card.source_url ? { link: card.source_url } : {}),
+    });
+
+    return { margin: [0, 0, 0, 0] as any, stack };
+}
+
+/** Build a 2-column card table for a chunk of cards (≤8). */
+function buildTable(chunk: OnepagerCard[], colorMap: Map<string, string>, detailed: boolean): Content {
+    const leftCards: OnepagerCard[] = [];
+    const rightCards: OnepagerCard[] = [];
+    chunk.forEach((c, i) => (i % 2 === 0 ? leftCards : rightCards).push(c));
+
     const buildSpanInfo = (colCards: OnepagerCard[]) => {
         const info: { tag: string; color: string; isStart: boolean; spanRows: number }[] = [];
         let i = 0;
         while (i < colCards.length) {
             const tag = colCards[i].category_tag;
             let count = 1;
-            while (i + count < colCards.length && colCards[i + count].category_tag === tag) {
-                count++;
-            }
+            while (i + count < colCards.length && colCards[i + count].category_tag === tag) count++;
             for (let j = 0; j < count; j++) {
                 info.push({
-                    tag,
-                    color: colorMap.get(tag) || CATEGORY_COLORS[0],
-                    isStart: j === 0,
-                    spanRows: j === 0 ? count : 0,
+                    tag, color: colorMap.get(tag) || CATEGORY_COLORS[0],
+                    isStart: j === 0, spanRows: j === 0 ? count : 0,
                 });
             }
             i += count;
@@ -189,20 +175,19 @@ export async function downloadOnepagerPdf(
 
     const leftSpanInfo = buildSpanInfo(leftCards);
     const rightSpanInfo = buildSpanInfo(rightCards);
+    const maxRows = Math.max(leftCards.length, rightCards.length, 1);
+    const tableBody: any[][] = [];
+
+    // Vertical (stacked-character) rail text so it stays legible in a narrow column.
+    const railText = (tag: string) => (tag || '').split('').join('\n');
 
     for (let r = 0; r < maxRows; r++) {
         const row: any[] = [];
 
-        // Left sidebar
         if (r < leftSpanInfo.length && leftSpanInfo[r].isStart) {
             row.push({
-                text: leftSpanInfo[r].tag,
-                fontSize: 7,
-                bold: true,
-                color: COLORS.white,
-                fillColor: leftSpanInfo[r].color,
-                alignment: 'center',
-                margin: [0, 6, 0, 6] as any,
+                text: railText(leftSpanInfo[r].tag), fontSize: 7, bold: true, color: COLORS.white,
+                fillColor: leftSpanInfo[r].color, alignment: 'center', margin: [0, 6, 0, 6] as any,
                 rowSpan: leftSpanInfo[r].spanRows,
             });
         } else if (r < leftSpanInfo.length) {
@@ -211,27 +196,18 @@ export async function downloadOnepagerPdf(
             row.push({ text: '' });
         }
 
-        // Left card
         if (r < leftCards.length) {
-            const color = colorMap.get(leftCards[r].category_tag) || CATEGORY_COLORS[0];
-            row.push(buildCardContent(leftCards[r], color));
+            row.push(buildCardContent(leftCards[r], colorMap.get(leftCards[r].category_tag) || CATEGORY_COLORS[0], detailed));
         } else {
             row.push({ text: '' });
         }
 
-        // Gap
         row.push({ text: '', border: [false, false, false, false] });
 
-        // Right sidebar
         if (r < rightSpanInfo.length && rightSpanInfo[r].isStart) {
             row.push({
-                text: rightSpanInfo[r].tag,
-                fontSize: 7,
-                bold: true,
-                color: COLORS.white,
-                fillColor: rightSpanInfo[r].color,
-                alignment: 'center',
-                margin: [0, 6, 0, 6] as any,
+                text: railText(rightSpanInfo[r].tag), fontSize: 7, bold: true, color: COLORS.white,
+                fillColor: rightSpanInfo[r].color, alignment: 'center', margin: [0, 6, 0, 6] as any,
                 rowSpan: rightSpanInfo[r].spanRows,
             });
         } else if (r < rightSpanInfo.length) {
@@ -240,10 +216,8 @@ export async function downloadOnepagerPdf(
             row.push({ text: '' });
         }
 
-        // Right card
         if (r < rightCards.length) {
-            const color = colorMap.get(rightCards[r].category_tag) || CATEGORY_COLORS[0];
-            row.push(buildCardContent(rightCards[r], color));
+            row.push(buildCardContent(rightCards[r], colorMap.get(rightCards[r].category_tag) || CATEGORY_COLORS[0], detailed));
         } else {
             row.push({ text: '' });
         }
@@ -251,65 +225,64 @@ export async function downloadOnepagerPdf(
         tableBody.push(row);
     }
 
+    return {
+        table: { headerRows: 0, widths: [18, '*', 8, 18, '*'], body: tableBody },
+        layout: {
+            hLineWidth: () => 0.5,
+            vLineWidth: () => 0.5,
+            hLineColor: () => COLORS.border,
+            vLineColor: () => COLORS.border,
+            paddingLeft: () => 6,
+            paddingRight: () => 6,
+            paddingTop: () => 5,
+            paddingBottom: () => 5,
+        },
+    };
+}
+
+// ── Main export function ─────────────────────────────────────────────────
+
+export async function downloadOnepagerPdf(
+    cards: OnepagerCard[],
+    domain: string,
+    dateRange: string,
+    layout: Layout = 'compact',
+): Promise<void> {
+    const sorted = sortByCategory(cards);
+    const colorMap = buildCategoryColorMap(sorted);
+    const detailed = layout === 'detailed';
+
+    // Compact: one table (≤8 cards) on a single page.
+    // Detailed: 4 cards per page (2×2), paginated, with fuller card content.
+    const perPage = detailed ? 4 : 8;
+    const chunks: OnepagerCard[][] = [];
+    for (let i = 0; i < sorted.length && i < (detailed ? sorted.length : 8); i += perPage) {
+        chunks.push(sorted.slice(i, i + perPage));
+    }
+    if (chunks.length === 0) chunks.push([]);
+
+    const content: Content[] = [];
+    chunks.forEach((chunk, ci) => {
+        content.push(buildTable(chunk, colorMap, detailed));
+        if (ci < chunks.length - 1) content.push({ text: '', pageBreak: 'after' });
+    });
+
     const docDefinition: TDocumentDefinitions = {
         pageSize: 'LETTER',
         pageOrientation: 'landscape',
         pageMargins: [20, 60, 20, 30] as any,
-
         header: {
             columns: [
-                {
-                    text: 'WEEKLY TECH SENSING',
-                    fontSize: 16,
-                    bold: true,
-                    color: COLORS.white,
-                    margin: [25, 15, 0, 0] as any,
-                },
-                {
-                    text: `${sanitize(domain)}  |  ${sanitize(dateRange)}`,
-                    fontSize: 9,
-                    color: '#B0BEC5',
-                    alignment: 'right',
-                    margin: [0, 20, 25, 0] as any,
-                },
+                { text: 'WEEKLY TECH SENSING', fontSize: 16, bold: true, color: COLORS.white, margin: [25, 15, 0, 0] as any },
+                { text: `${sanitize(domain)}  |  ${sanitize(dateRange)}`, fontSize: 9, color: '#B0BEC5', alignment: 'right', margin: [0, 20, 25, 0] as any },
             ],
             margin: [0, 0, 0, 0] as any,
-            canvas: [{
-                type: 'rect',
-                x: 0, y: 0,
-                w: 792, h: 45,
-                color: COLORS.banner,
-            }],
+            canvas: [{ type: 'rect', x: 0, y: 0, w: 792, h: 45, color: COLORS.banner }],
         },
-
         footer: {
-            canvas: [{
-                type: 'rect',
-                x: 0, y: 0,
-                w: 792, h: 15,
-                color: COLORS.footerBg,
-            }],
+            canvas: [{ type: 'rect', x: 0, y: 0, w: 792, h: 15, color: COLORS.footerBg }],
         },
-
-        content: [
-            {
-                table: {
-                    headerRows: 0,
-                    widths: [18, '*', 8, 18, '*'],
-                    body: tableBody,
-                },
-                layout: {
-                    hLineWidth: () => 0.5,
-                    vLineWidth: () => 0.5,
-                    hLineColor: () => COLORS.border,
-                    vLineColor: () => COLORS.border,
-                    paddingLeft: () => 6,
-                    paddingRight: () => 6,
-                    paddingTop: () => 5,
-                    paddingBottom: () => 5,
-                },
-            },
-        ],
+        content,
     };
 
     pdfMake.createPdf(docDefinition).download('Weekly Tech Sensing One-Pager.pdf');

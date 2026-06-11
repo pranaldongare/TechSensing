@@ -14,12 +14,13 @@ import {
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
   ArrowDown, Minus, Info, Zap, Network, Database, Edit3, LayoutGrid, Download, Globe2,
+  Plus, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
-  TopicPreferences, ModelRelease, Annotation, OnepagerCard,
+  TopicPreferences, ModelRelease, Annotation,
   ChinaFocus, ChinaStreamItem,
 } from '@/lib/api';
 import { downloadOnepagerPptx } from '@/lib/sensing-onepager-pptx';
@@ -143,6 +144,9 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
   const [onepagerOpen, setOnepagerOpen] = useState(false);
   const [onepagerSelected, setOnepagerSelected] = useState<Set<number>>(new Set());
   const [onepagerLoading, setOnepagerLoading] = useState(false);
+  const [onepagerCustomInput, setOnepagerCustomInput] = useState('');
+  const [onepagerCustomTopics, setOnepagerCustomTopics] = useState<string[]>([]);
+  const [onepagerLayout, setOnepagerLayout] = useState<'compact' | 'detailed'>('compact');
 
   // Inline Deep Dive (user-added) — local additions are merged with the
   // report's auto-generated details for rendering. Synced from props when
@@ -187,35 +191,42 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
       const next = new Set(prev);
       if (next.has(idx)) {
         next.delete(idx);
-      } else if (next.size < 8) {
+      } else if (next.size + onepagerCustomTopics.length < 8) {
         next.add(idx);
       }
       return next;
     });
   };
 
+  const addOnepagerCustomTopic = () => {
+    const t = onepagerCustomInput.trim();
+    if (!t) return;
+    if (onepagerSelected.size + onepagerCustomTopics.length >= 8) return;
+    if (onepagerCustomTopics.some((x) => x.toLowerCase() === t.toLowerCase())) {
+      setOnepagerCustomInput('');
+      return;
+    }
+    setOnepagerCustomTopics((prev) => [...prev, t]);
+    setOnepagerCustomInput('');
+  };
+
+  const removeOnepagerCustomTopic = (t: string) => {
+    setOnepagerCustomTopics((prev) => prev.filter((x) => x !== t));
+  };
+
   const handleOnepagerGenerate = async (format: 'pptx' | 'pdf') => {
-    if (onepagerSelected.size === 0 || !report.top_events) return;
+    const indices = Array.from(onepagerSelected).sort((a, b) => a - b);
+    if (indices.length === 0 && onepagerCustomTopics.length === 0) return;
     setOnepagerLoading(true);
     try {
-      const indices = Array.from(onepagerSelected).sort((a, b) => a - b);
-      const result = await api.sensingOnepager(meta.tracking_id, indices);
-
-      // Enrich cards with source_url and actor from original events
-      const enrichedCards: OnepagerCard[] = result.cards.map((card, i) => {
-        const origIdx = indices[i];
-        const orig = report.top_events![origIdx];
-        return {
-          ...card,
-          source_url: orig?.source_urls?.[0] || '',
-          actor: orig?.actor || '',
-        };
-      });
-
+      const result = await api.sensingOnepager(meta.tracking_id, indices, onepagerCustomTopics);
+      // Backend returns cards already enriched with source_url/actor — event
+      // cards from the report, custom cards from the on-the-fly research step.
+      const cards = result.cards;
       if (format === 'pptx') {
-        await downloadOnepagerPptx(enrichedCards, result.domain, result.date_range);
+        await downloadOnepagerPptx(cards, result.domain, result.date_range, onepagerLayout);
       } else {
-        await downloadOnepagerPdf(enrichedCards, result.domain, result.date_range);
+        await downloadOnepagerPdf(cards, result.domain, result.date_range, onepagerLayout);
       }
       setOnepagerOpen(false);
     } catch (e) {
@@ -304,7 +315,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => { setOnepagerSelected(new Set()); setOnepagerOpen(true); }}
+                onClick={() => { setOnepagerSelected(new Set()); setOnepagerCustomTopics([]); setOnepagerCustomInput(''); setOnepagerLayout('compact'); setOnepagerOpen(true); }}
               >
                 <LayoutGrid className="w-4 h-4 mr-1.5" />
                 One-Pager
@@ -1285,13 +1296,49 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
               Select Topics for One-Pager
             </DialogTitle>
             <DialogDescription>
-              Choose up to 8 top events to include in the one-pager export. Selected: {onepagerSelected.size}/8
+              Choose events and/or add custom topics — up to 8 total. Selected: {onepagerSelected.size + onepagerCustomTopics.length}/8
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-2 border-b pb-3 shrink-0">
+            <label className="text-xs font-medium text-muted-foreground">
+              Add a custom topic (researched on the fly if not in the report)
+            </label>
+            <div className="flex gap-2">
+              <Input
+                value={onepagerCustomInput}
+                onChange={(e) => setOnepagerCustomInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOnepagerCustomTopic(); } }}
+                placeholder="e.g., Model Context Protocol"
+                disabled={onepagerLoading || (onepagerSelected.size + onepagerCustomTopics.length) >= 8}
+                className="text-sm"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0 h-9 w-9"
+                onClick={addOnepagerCustomTopic}
+                disabled={!onepagerCustomInput.trim() || onepagerLoading || (onepagerSelected.size + onepagerCustomTopics.length) >= 8}
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
+            {onepagerCustomTopics.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {onepagerCustomTopics.map((t) => (
+                  <Badge key={t} variant="secondary" className="gap-1 text-xs">
+                    {t}
+                    <button onClick={() => removeOnepagerCustomTopic(t)} disabled={onepagerLoading}>
+                      <X className="w-3 h-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="flex-1 overflow-y-auto space-y-1 pr-2">
             {report.top_events?.map((event: SensingTopEvent, idx: number) => {
               const isSelected = onepagerSelected.has(idx);
-              const isDisabled = !isSelected && onepagerSelected.size >= 8;
+              const isDisabled = !isSelected && (onepagerSelected.size + onepagerCustomTopics.length) >= 8;
               return (
                 <label
                   key={idx}
@@ -1327,20 +1374,41 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
             })}
           </div>
           <DialogFooter className="flex items-center gap-2 pt-3 border-t">
+            <div className="mr-auto flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Layout:</span>
+              <div className="flex rounded-md border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setOnepagerLayout('compact')}
+                  disabled={onepagerLoading}
+                  className={`px-2.5 py-1 text-xs ${onepagerLayout === 'compact' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted/60'}`}
+                >
+                  Compact (8/page)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOnepagerLayout('detailed')}
+                  disabled={onepagerLoading}
+                  className={`px-2.5 py-1 text-xs border-l ${onepagerLayout === 'detailed' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted/60'}`}
+                >
+                  Detailed (paginated)
+                </button>
+              </div>
+            </div>
             <Button variant="ghost" onClick={() => setOnepagerOpen(false)} disabled={onepagerLoading}>
               Cancel
             </Button>
             <Button
               variant="outline"
               onClick={() => handleOnepagerGenerate('pdf')}
-              disabled={onepagerSelected.size === 0 || onepagerLoading}
+              disabled={(onepagerSelected.size + onepagerCustomTopics.length) === 0 || onepagerLoading}
             >
               {onepagerLoading ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
               PDF
             </Button>
             <Button
               onClick={() => handleOnepagerGenerate('pptx')}
-              disabled={onepagerSelected.size === 0 || onepagerLoading}
+              disabled={(onepagerSelected.size + onepagerCustomTopics.length) === 0 || onepagerLoading}
             >
               {onepagerLoading ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Download className="w-4 h-4 mr-1.5" />}
               PPTX

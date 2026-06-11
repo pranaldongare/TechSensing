@@ -1065,6 +1065,170 @@ def onepager_bullets_prompt(
     ]
 
 
+def onepager_custom_topic_prompt(
+    topic: str,
+    domain: str,
+    articles_block: str,
+) -> list[dict]:
+    """Build a prompt to produce ONE one-pager card for a user-requested topic
+    that is not present in the report, grounded in freshly-fetched web sources.
+    """
+    from core.llm.output_schemas.sensing_outputs import OnepagerCard
+
+    schema_json = json.dumps(OnepagerCard.model_json_schema(), indent=2)
+
+    return [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology analyst producing ONE infographic "
+                f"card for a user-requested topic within the '{domain}' space.\n\n"
+                "You are given recent web sources about the topic. Produce a "
+                "single card with:\n\n"
+                "1. card_title: A punchy headline (<=80 chars).\n"
+                "2. category_tag: A short UPPERCASE tag (2-8 chars) grouping the "
+                "topic by technology domain (e.g. 'GENAI', 'AGENTS', 'CHIPS', "
+                "'CLOUD', 'SECURITY', 'DATA', 'INFRA').\n"
+                "3. bullets: 3-5 concise, factual, information-dense one-liners "
+                "(each <=150 chars), each ONE fact. Prioritize quantitative data, "
+                "specs, benchmarks, licensing, architecture. Ground every bullet "
+                "in the provided sources. Do NOT fabricate; if the sources are "
+                "thin, include only what is supported.\n"
+                "4. source_label: A short contextual label for the source link.\n\n"
+                "OUTPUT RULES:\n"
+                "- Return ONLY valid JSON matching the schema below.\n"
+                "- No markdown fencing, no commentary outside JSON.\n"
+                "- Newlines inside string values MUST be written as \\n.\n"
+                '- Double quotes inside string values MUST be escaped as \\".\n\n'
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"TOPIC: {topic}\n"
+                f"DOMAIN: {domain}\n\n"
+                f"SOURCES:\n{articles_block}\n"
+                "Produce ONE card for this topic. Return ONLY valid JSON."
+            ),
+        },
+    ]
+
+
+def onepager_enriched_card_prompt(
+    topic_context: str,
+    domain: str,
+    sources_block: str,
+) -> list[dict]:
+    """Build a prompt to synthesize ONE rich one-pager card from the topic/event
+    context plus freshly-gathered web sources. Used by the enriched one-pager
+    flow for both report events and custom topics.
+    """
+    from core.llm.output_schemas.sensing_outputs import OnepagerCard
+
+    schema_json = json.dumps(OnepagerCard.model_json_schema(), indent=2)
+
+    return [
+        {
+            "role": "system",
+            "parts": (
+                "You are a senior technology analyst producing ONE rich infographic "
+                f"card for a weekly one-pager in the '{domain}' space.\n\n"
+                "You are given (a) the topic/event context and (b) freshly-gathered "
+                "web sources. Synthesize a single, information-dense card:\n\n"
+                "1. card_title: punchy headline (<=80 chars); include the organization/actor.\n"
+                "2. category_tag: short UPPERCASE domain tag (2-8 chars), e.g. 'GENAI', "
+                "'AGENTS', 'CHIPS', 'CLOUD', 'SECURITY', 'DATA', 'INFRA'.\n"
+                "3. organization: the company / lab / org behind this. ALWAYS fill when identifiable.\n"
+                "4. people: named creators / researchers / leaders — ONLY when clearly "
+                "supported by the sources; otherwise leave empty.\n"
+                "5. metrics: 0-4 boxed statistics — quantitative facts with explicit numbers "
+                "AND a comparison where available (e.g. label='SWE-bench Verified', "
+                "value='65.4%', comparison='vs 49.0% prev'). Prefer benchmarks, $ amounts, "
+                "params, context length, growth %, user/customer counts.\n"
+                "6. bullets: 3-5 concise one-line facts (<=150 chars each), each ONE fact, "
+                "complementing (not repeating) the metrics.\n"
+                "7. source_label + sources: a short label plus the source URLs you grounded on.\n"
+                "8. as_of: the date / period the facts are from, if known.\n\n"
+                "GROUNDING & SPECIFICITY RULES (CRITICAL):\n"
+                "- Use ONLY facts present in the TOPIC/EVENT CONTEXT or GATHERED SOURCES. "
+                "NEVER state a number, %, $, score, benchmark, or comparison unless it appears "
+                "in those sources. Do not estimate, approximate, round, or invent. If a number "
+                "is not present in the sources, OMIT that metric entirely.\n"
+                "- If GATHERED SOURCES has no real content (e.g. it says '(no ... retrieved)'), "
+                "set metrics=[] and write only concrete facts drawn from the event context.\n"
+                "- Every bullet must be a SPECIFIC, verifiable fact (who / what / when / how much). "
+                "BANNED — never write vague or rhetorical filler such as: 'aims to', 'seeks to', "
+                "'emphasizes', 'focuses on', 'is designed to', 'democratizes', 'revolutionizes', "
+                "'is significant', 'highlights the importance', 'underscores', 'paving the way', "
+                "'aims at improving'. If you cannot make a bullet concrete and sourced, DROP it.\n"
+                "- Always attribute the organization; include people only when named in the sources.\n"
+                "- Fewer accurate, specific items beat many generic ones. An empty metrics list or "
+                "a short bullet list is acceptable; fabricated specifics are NOT.\n\n"
+                "OUTPUT RULES:\n"
+                "- Return ONLY valid JSON matching the schema below.\n"
+                "- No markdown fencing, no commentary outside JSON.\n"
+                "- Newlines inside string values MUST be written as \\n.\n"
+                '- Double quotes inside string values MUST be escaped as \\".\n\n'
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"DOMAIN: {domain}\n\n"
+                f"TOPIC / EVENT CONTEXT:\n{topic_context}\n\n"
+                f"GATHERED SOURCES:\n{sources_block}\n\n"
+                "Produce ONE rich card. Return ONLY valid JSON."
+            ),
+        },
+    ]
+
+
+def onepager_verify_card_prompt(
+    card_json: str,
+    sources_block: str,
+    domain: str,
+) -> list[dict]:
+    """Build a fact-check prompt that strips any metric/bullet/person from a draft
+    one-pager card that is NOT supported by the provided sources. Removal-only —
+    never adds new facts."""
+    from core.llm.output_schemas.sensing_outputs import OnepagerCard
+
+    schema_json = json.dumps(OnepagerCard.model_json_schema(), indent=2)
+
+    return [
+        {
+            "role": "system",
+            "parts": (
+                "You are a strict fact-checker for a one-pager card in the "
+                f"'{domain}' space. You are given a DRAFT card and the SOURCES it must "
+                "be grounded in. Return a CORRECTED card by REMOVING anything unsupported:\n"
+                "- REMOVE any metric whose value OR comparison is not explicitly stated in the SOURCES.\n"
+                "- REMOVE any bullet that is vague/rhetorical, or whose specifics are not in the SOURCES.\n"
+                "- REMOVE any person not named in the SOURCES.\n"
+                "- KEEP card_title, category_tag, and organization.\n"
+                "- Do NOT add, rewrite, or invent any facts — ONLY keep or remove. "
+                "If nothing in a list survives, return it empty.\n\n"
+                "OUTPUT RULES:\n"
+                "- Return ONLY valid JSON matching the schema below.\n"
+                "- No markdown fencing, no commentary outside JSON.\n"
+                "- Newlines inside string values MUST be written as \\n.\n"
+                '- Double quotes inside string values MUST be escaped as \\".\n\n'
+                f"OUTPUT SCHEMA:\n```json\n{schema_json}\n```\n"
+            ),
+        },
+        {
+            "role": "user",
+            "parts": (
+                f"DRAFT CARD:\n{card_json}\n\n"
+                f"SOURCES:\n{sources_block}\n\n"
+                "Return the corrected card with unsupported items removed. Return ONLY valid JSON."
+            ),
+        },
+    ]
+
+
 def model_release_injection_prompt(
     candidates: list[dict],
     existing_radar_items: list[dict],

@@ -116,13 +116,24 @@ export interface SensingTopEvent {
   recommendation?: string;
 }
 
+export interface OnepagerMetric {
+  label: string;
+  value: string;
+  comparison?: string;
+}
+
 export interface OnepagerCard {
   card_title: string;
   category_tag: string;
   bullets: string[];
   source_label: string;
-  source_url?: string;   // Attached client-side from the original event
-  actor?: string;         // Attached client-side for the icon
+  organization?: string;
+  people?: string[];
+  metrics?: OnepagerMetric[];
+  sources?: string[];
+  as_of?: string;
+  source_url?: string;   // Primary source (attached server-side)
+  actor?: string;         // Org/actor for the icon (attached server-side)
 }
 
 export interface SensingBlindSpot {
@@ -1359,6 +1370,7 @@ export const api = {
   async sensingOnepager(
     trackingId: string,
     selectedIndices: number[],
+    customTopics: string[] = [],
   ): Promise<{ status: string; cards: OnepagerCard[]; domain: string; date_range: string }> {
     const token = getAuthToken();
     const response = await fetch(
@@ -1369,6 +1381,7 @@ export const api = {
         body: JSON.stringify({
           tracking_id: trackingId,
           selected_indices: selectedIndices,
+          custom_topics: customTopics,
         }),
       },
     );
