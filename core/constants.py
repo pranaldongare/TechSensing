@@ -11,9 +11,12 @@ class GPULLMConfig(BaseModel):
 # SETTINGS
 SWITCHES = {
     "FALLBACK_TO_GEMINI": False,
-    "FALLBACK_TO_OPENAI": False,
+    "FALLBACK_TO_OPENAI": True,
     "DISABLE_THINKING": True,
     "TECH_SENSING": True,
+    # Local LLM (Ollama) primary path. When False, invoke_llm skips the GPU
+    # block and goes straight to the cloud fallback chain (Gemini/OpenAI).
+    "USE_LOCAL_LLM": settings.USE_LOCAL_LLM,
     # INTERNAL LLM API (opt-in). Activated only when settings.USE_INTERNAL=true
     # AND the INTERNAL_* credentials are populated. See core/llm/client.py.
     "USE_INTERNAL": settings.USE_INTERNAL,

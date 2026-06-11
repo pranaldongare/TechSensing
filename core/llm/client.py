@@ -323,6 +323,7 @@ async def invoke_llm(
     port=11434,
     remove_thinking=False,
     bypass_internal=False,
+    openai_model=None,
 ):
     """
     Unified structured LLM invocation with retries and fallbacks:
@@ -344,6 +345,7 @@ async def invoke_llm(
         return await _invoke_llm_inner(
             gpu_model, response_schema, contents, port, remove_thinking,
             bypass_internal=bypass_internal,
+            openai_model=openai_model,
         )
 
 
@@ -355,6 +357,7 @@ async def _invoke_llm_inner(
     remove_thinking,
     *,
     bypass_internal=False,
+    openai_model=None,
 ):
     parser = PydanticOutputParser(pydantic_object=response_schema)
     schema_name = getattr(response_schema, "__name__", "unknown")
@@ -579,7 +582,7 @@ CRITICAL OUTPUT RULES:
                 "OpenAI. This should have been caught earlier; please report."
             )
 
-        if gpu_model:
+        if gpu_model and SWITCHES.get("USE_LOCAL_LLM", True):
             llm_output = None
             for blank_retry in range(2):
                 s = time.time()
@@ -747,6 +750,7 @@ CRITICAL OUTPUT RULES:
 
         # === OPENAI FALLBACK ===
         if SWITCHES["FALLBACK_TO_OPENAI"]:
+            eff_openai_model = openai_model or FALLBACK_OPENAI_MODEL
             openai_raw = None
             s = time.time()
             try:
@@ -754,7 +758,7 @@ CRITICAL OUTPUT RULES:
                 s = time.time()
                 response = await asyncio.wait_for(
                     openai_client.chat.completions.create(
-                        model=FALLBACK_OPENAI_MODEL,
+                        model=eff_openai_model,
                         messages=[{"role": "user", "content": effective_prompt}],
                         temperature=0.2,
                     ),
@@ -768,7 +772,7 @@ CRITICAL OUTPUT RULES:
                 except Exception as parse_exc:
                     _log_llm_call(
                         source="openai", attempt=attempt,
-                        model=FALLBACK_OPENAI_MODEL,
+                        model=eff_openai_model,
                         prompt=effective_prompt, output=openai_raw or "",
                         error=str(parse_exc), elapsed_s=elapsed,
                         schema=schema_name, status="parse_error",
@@ -776,7 +780,7 @@ CRITICAL OUTPUT RULES:
                     raise
                 _log_llm_call(
                     source="openai", attempt=attempt,
-                    model=FALLBACK_OPENAI_MODEL,
+                    model=eff_openai_model,
                     prompt=effective_prompt, output=openai_raw or "",
                     elapsed_s=elapsed, schema=schema_name, status="ok",
                 )
@@ -786,7 +790,7 @@ CRITICAL OUTPUT RULES:
                 elapsed = time.time() - s
                 _log_llm_call(
                     source="openai", attempt=attempt,
-                    model=FALLBACK_OPENAI_MODEL,
+                    model=eff_openai_model,
                     prompt=effective_prompt, output="",
                     error=f"timeout after {OPENAI_TIMEOUT}s",
                     elapsed_s=elapsed, schema=schema_name, status="timeout",
@@ -804,7 +808,7 @@ CRITICAL OUTPUT RULES:
                 else:
                     _log_llm_call(
                         source="openai", attempt=attempt,
-                        model=FALLBACK_OPENAI_MODEL,
+                        model=eff_openai_model,
                         prompt=effective_prompt, output="",
                         error=str(e), elapsed_s=elapsed,
                         schema=schema_name, status="transport_error",

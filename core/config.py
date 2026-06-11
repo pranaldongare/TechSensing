@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     MAIN_MODEL: str = "qwen3:14b"
     LOCAL_BASE_URL: str = "http://localhost"
 
+    # Local LLM (Ollama) primary path. Set USE_LOCAL_LLM=false to skip Ollama
+    # entirely and use the cloud fallback chain (OpenAI/Gemini) directly.
+    USE_LOCAL_LLM: bool = True
+
     # INTERNAL API (default disabled — set USE_INTERNAL=true to enable)
     INTERNAL_BASE_URL: str = ""
     INTERNAL_CLIENT_KEY: str = ""
