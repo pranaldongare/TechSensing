@@ -45,6 +45,17 @@ function truncate(s: string, max: number): string {
     return clean.length > max ? clean.slice(0, max - 3) + '...' : clean;
 }
 
+/** Split **markdown bold** markers into a pdfmake rich-text array (bold+italic). */
+function parseEmphasis(s: string): Content {
+    const parts = sanitize(s).split('**');
+    const out: any[] = [];
+    parts.forEach((p, i) => {
+        if (!p) return;
+        out.push(i % 2 === 1 ? { text: p, bold: true, italics: true } : { text: p });
+    });
+    return out.length ? out : [{ text: sanitize(s) }];
+}
+
 function sortByCategory(cards: OnepagerCard[]): OnepagerCard[] {
     const tagOrder = new Map<string, number>();
     let idx = 0;
@@ -132,7 +143,7 @@ function buildCardContent(card: OnepagerCard, categoryColor: string, detailed: b
         stack.push({
             columns: [
                 { text: '×', width: 8, fontSize: 8, color: COLORS.bulletMarker, bold: true },
-                { text: truncate(b, 160), fontSize: detailed ? 8 : 7.5, color: COLORS.textDark },
+                { text: parseEmphasis(truncate(b, 170)), fontSize: detailed ? 8 : 7.5, color: COLORS.textDark },
             ],
             columnGap: 3,
             margin: [0, 1, 0, 1] as any,

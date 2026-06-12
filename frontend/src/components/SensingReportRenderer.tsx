@@ -128,6 +128,29 @@ const SourceLinks: React.FC<{ urls?: string[] }> = ({ urls }) => {
   );
 };
 
+// Higher-level domain buckets for one-pager "auto-select by domain".
+const ONEPAGER_DOMAIN_RULES: [string, RegExp][] = [
+  ['Image', /\b(image|diffusion|text-to-image|dall[- ]?e|midjourney|stable diffusion|photo|inpainting)\b/i],
+  ['Video', /\b(video|text-to-video|sora|veo|animation|film)\b/i],
+  ['Audio/Speech', /\b(audio|speech|voice|tts|text-to-speech|music|whisper|sound)\b/i],
+  ['Agents', /\b(agent|agentic|autonomous|tool[- ]?use|mcp)\b/i],
+  ['Coding', /\b(code|coding|developer|swe[- ]?bench|copilot|programming|ide)\b/i],
+  ['Chips/HW', /\b(chip|gpu|tpu|silicon|hardware|wafer|accelerator|semiconductor)\b/i],
+  ['Robotics', /\b(robot|humanoid|embodied|drone)\b/i],
+  ['Models/LLM', /\b(llm|language model|foundation model|reasoning model|gpt|claude|gemini|llama|qwen|mistral|deepseek)\b/i],
+  ['Infra/Cloud', /\b(cloud|infrastructure|datacenter|inference|serving|deployment|kubernetes)\b/i],
+  ['Security', /\b(security|safety|privacy|alignment|jailbreak|guardrail)\b/i],
+  ['Funding/M&A', /\b(funding|raise|series [a-z]\b|valuation|investment|acquisition|ipo|merger)\b/i],
+];
+
+function categorizeOnepagerEvent(ev: SensingTopEvent): string {
+  const text = `${ev.headline || ''} ${(ev.related_technologies || []).join(' ')} ${ev.segment || ''} ${ev.event_type || ''}`;
+  for (const [label, re] of ONEPAGER_DOMAIN_RULES) {
+    if (re.test(text)) return label;
+  }
+  return 'Other';
+}
+
 const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, meta, highlightTechnology, onDeepDive, topicPreferences, onTopicInterest, onSourceFeedback, annotations, onAnnotate }) => {
   const [expandedTrends, setExpandedTrends] = useState<Set<number>>(new Set());
   const [expandedRadarDetails, setExpandedRadarDetails] = useState<Set<number>>(new Set());
@@ -193,6 +216,36 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
         next.delete(idx);
       } else if (next.size + onepagerCustomTopics.length < 8) {
         next.add(idx);
+      }
+      return next;
+    });
+  };
+
+  // Group top events into higher-level domains for one-click "auto-select".
+  const onepagerDomainGroups: [string, number[]][] = (() => {
+    const m = new Map<string, number[]>();
+    (report.top_events || []).forEach((ev, idx) => {
+      const cat = categorizeOnepagerEvent(ev);
+      if (!m.has(cat)) m.set(cat, []);
+      m.get(cat)!.push(idx);
+    });
+    return Array.from(m.entries()).sort((a, b) => b[1].length - a[1].length);
+  })();
+
+  // Click a domain chip: select all its events (or clear them if all selected),
+  // respecting the combined 8-item cap.
+  const toggleDomainSelection = (indices: number[]) => {
+    setOnepagerSelected(prev => {
+      const next = new Set(prev);
+      const allSelected = indices.every(i => next.has(i));
+      if (allSelected) {
+        indices.forEach(i => next.delete(i));
+      } else {
+        for (const i of indices) {
+          if (next.has(i)) continue;
+          if (next.size + onepagerCustomTopics.length >= 8) break;
+          next.add(i);
+        }
       }
       return next;
     });
@@ -1335,6 +1388,33 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
               </div>
             )}
           </div>
+          {onepagerDomainGroups.length > 1 && (
+            <div className="space-y-1.5 border-b pb-3 shrink-0">
+              <label className="text-xs font-medium text-muted-foreground">
+                Auto-select by domain
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {onepagerDomainGroups.map(([cat, idxs]) => {
+                  const allSel = idxs.every(i => onepagerSelected.has(i));
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => toggleDomainSelection(idxs)}
+                      disabled={onepagerLoading}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                        allSel
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background text-muted-foreground border-border hover:bg-muted/60'
+                      }`}
+                    >
+                      {cat} ({idxs.length})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto space-y-1 pr-2">
             {report.top_events?.map((event: SensingTopEvent, idx: number) => {
               const isSelected = onepagerSelected.has(idx);

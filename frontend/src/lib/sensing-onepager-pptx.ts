@@ -50,6 +50,14 @@ function truncate(s: string, max: number): string {
     return clean.length > max ? clean.slice(0, max - 3) + '...' : clean;
 }
 
+/** Split a string on **markdown bold** markers into emphasized/normal segments. */
+function parseEmphasis(s: string): { text: string; em: boolean }[] {
+    const parts = sanitize(s).split('**');
+    const out: { text: string; em: boolean }[] = [];
+    parts.forEach((p, i) => { if (p) out.push({ text: p, em: i % 2 === 1 }); });
+    return out.length ? out : [{ text: sanitize(s), em: false }];
+}
+
 function sortByCategory(cards: OnepagerCard[]): OnepagerCard[] {
     const tagOrder = new Map<string, number>();
     let idx = 0;
@@ -190,7 +198,12 @@ function renderCard(
     for (let b = 0; b < maxBullets; b++) {
         if (b > 0) bulletTexts.push({ text: '\n', options: { fontSize: 2, breakType: 'none' } });
         bulletTexts.push({ text: '×  ', options: { fontSize: 8.5, color: COLORS.bulletMarker, bold: true } });
-        bulletTexts.push({ text: truncate(card.bullets[b], 160), options: { fontSize: detailed ? 9 : 8, color: COLORS.textDark } });
+        for (const seg of parseEmphasis(truncate(card.bullets[b], 170))) {
+            bulletTexts.push({
+                text: seg.text,
+                options: { fontSize: detailed ? 9 : 8, color: COLORS.textDark, bold: seg.em, italic: seg.em },
+            });
+        }
     }
     const bulletH = (cardY + rowH - 0.2) - y;
     if (bulletTexts.length && bulletH > 0.1) {
