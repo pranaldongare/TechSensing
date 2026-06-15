@@ -73,27 +73,45 @@ DOMAIN_RSS_FEEDS = {
     ],
 }
 
+# AI-relevant domains that should pick up the "ai" feed set (incl. Marktechpost,
+# the in-house team's primary analysis source) even when the literal substring
+# "ai" isn't present in the domain name.
+AI_RELEVANT_KEYWORDS = [
+    "ai", "ml", "machine learning", "deep learning", "llm", "language model",
+    "genai", "generative", "agent", "agentic", "nlp", "natural language",
+    "computer vision", "diffusion", "foundation model", "neural", "transformer",
+    "multimodal", "rag", "reasoning model",
+]
+
 
 def get_feeds_for_domain(domain: str) -> List[str]:
     """
     Return RSS feeds relevant to the user's domain.
     Always includes general tech feeds + domain-specific feeds if matched.
+    AI-relevant domains additionally pick up the AI feed set (incl. Marktechpost).
     """
     feeds = list(GENERAL_RSS_FEEDS)
     domain_lower = domain.lower()
 
+    matched = False
     for keyword, domain_feeds in DOMAIN_RSS_FEEDS.items():
         if keyword in domain_lower:
             feeds.extend(domain_feeds)
+            matched = True
 
-    # If no domain-specific match, add AI feeds as fallback only if
-    # domain contains generic tech terms
-    if len(feeds) == len(GENERAL_RSS_FEEDS):
-        # Add HackerNews broad search for the domain
+    # Broaden: AI-relevant domains that didn't match a DOMAIN_RSS_FEEDS key still
+    # get the AI feed set (Marktechpost, arXiv cs.*, the-decoder, etc.).
+    if not matched and any(k in domain_lower for k in AI_RELEVANT_KEYWORDS):
+        feeds.extend(DOMAIN_RSS_FEEDS["ai"])
+        matched = True
+
+    # If still nothing domain-specific, add a HackerNews broad search.
+    if not matched:
         safe_domain = domain.replace(" ", "+")
         feeds.append(f"https://hnrss.org/newest?q={safe_domain}")
 
-    return feeds
+    # De-duplicate while preserving order.
+    return list(dict.fromkeys(feeds))
 
 
 def get_search_queries_for_domain(
@@ -110,6 +128,11 @@ def get_search_queries_for_domain(
         f"{domain} industry trends this week",
         f"{domain} open source news this week",
     ]
+
+    # For AI-relevant domains, also pull from Marktechpost (the in-house team's
+    # primary analysis source) via a site-targeted query.
+    if any(k in domain.lower() for k in AI_RELEVANT_KEYWORDS):
+        queries.append(f"site:marktechpost.com {domain}")
 
     # Add must-include keyword queries
     if must_include:
