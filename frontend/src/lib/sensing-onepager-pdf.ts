@@ -45,15 +45,31 @@ function truncate(s: string, max: number): string {
     return clean.length > max ? clean.slice(0, max - 3) + '...' : clean;
 }
 
-/** Split **markdown bold** markers into a pdfmake rich-text array (bold+italic). */
+// Auto-emphasis fallback: highlight quantitative high points when no ** markers.
+const EMPHASIS_RE = /\$?\d[\d.,]*(?:[%×x]|[KMBT]\b|bn|billion|million|trillion|GB|TB|ms|fps|tokens|params|pts)?/gi;
+
+/** pdfmake rich-text array: explicit **markdown bold** if present, else
+ * auto-emphasize numeric high points (bold + italic). */
 function parseEmphasis(s: string): Content {
-    const parts = sanitize(s).split('**');
-    const out: any[] = [];
-    parts.forEach((p, i) => {
-        if (!p) return;
-        out.push(i % 2 === 1 ? { text: p, bold: true, italics: true } : { text: p });
-    });
-    return out.length ? out : [{ text: sanitize(s) }];
+    const clean = sanitize(s);
+    const segs: { text: string; em: boolean }[] = [];
+    if (clean.includes('**')) {
+        clean.split('**').forEach((p, i) => { if (p) segs.push({ text: p, em: i % 2 === 1 }); });
+    }
+    if (!segs.length) {
+        const re = new RegExp(EMPHASIS_RE.source, 'gi');
+        let last = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(clean)) !== null) {
+            if (m.index > last) segs.push({ text: clean.slice(last, m.index), em: false });
+            segs.push({ text: m[0], em: true });
+            last = m.index + m[0].length;
+            if (m.index === re.lastIndex) re.lastIndex++;
+        }
+        if (last < clean.length) segs.push({ text: clean.slice(last), em: false });
+    }
+    const out: any[] = segs.map(seg => (seg.em ? { text: seg.text, bold: true, italics: true } : { text: seg.text }));
+    return out.length ? out : [{ text: clean }];
 }
 
 function sortByCategory(cards: OnepagerCard[]): OnepagerCard[] {

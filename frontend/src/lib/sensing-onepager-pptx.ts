@@ -50,12 +50,32 @@ function truncate(s: string, max: number): string {
     return clean.length > max ? clean.slice(0, max - 3) + '...' : clean;
 }
 
-/** Split a string on **markdown bold** markers into emphasized/normal segments. */
+// Auto-emphasis fallback: highlight quantitative "high points" (numbers, %, $,
+// ×, magnitudes, units) when the LLM didn't provide explicit ** markers.
+const EMPHASIS_RE = /\$?\d[\d.,]*(?:[%×x]|[KMBT]\b|bn|billion|million|trillion|GB|TB|ms|fps|tokens|params|pts)?/gi;
+
+/** Split into emphasized/normal segments: explicit **markdown bold** if present,
+ * else auto-emphasize numeric high points. */
 function parseEmphasis(s: string): { text: string; em: boolean }[] {
-    const parts = sanitize(s).split('**');
+    const clean = sanitize(s);
+    if (clean.includes('**')) {
+        const parts = clean.split('**');
+        const out: { text: string; em: boolean }[] = [];
+        parts.forEach((p, i) => { if (p) out.push({ text: p, em: i % 2 === 1 }); });
+        if (out.length) return out;
+    }
     const out: { text: string; em: boolean }[] = [];
-    parts.forEach((p, i) => { if (p) out.push({ text: p, em: i % 2 === 1 }); });
-    return out.length ? out : [{ text: sanitize(s), em: false }];
+    const re = new RegExp(EMPHASIS_RE.source, 'gi');
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(clean)) !== null) {
+        if (m.index > last) out.push({ text: clean.slice(last, m.index), em: false });
+        out.push({ text: m[0], em: true });
+        last = m.index + m[0].length;
+        if (m.index === re.lastIndex) re.lastIndex++;
+    }
+    if (last < clean.length) out.push({ text: clean.slice(last), em: false });
+    return out.length ? out : [{ text: clean, em: false }];
 }
 
 function sortByCategory(cards: OnepagerCard[]): OnepagerCard[] {

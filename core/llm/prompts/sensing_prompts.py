@@ -1210,6 +1210,8 @@ def onepager_verify_card_prompt(
                 "- REMOVE any bullet that is vague/rhetorical, or whose specifics are not in the SOURCES.\n"
                 "- REMOVE any person not named in the SOURCES.\n"
                 "- KEEP card_title, category_tag, and organization.\n"
+                "- PRESERVE any **double-asterisk** emphasis markers inside bullets you keep "
+                "(do not strip the markdown).\n"
                 "- Do NOT add, rewrite, or invent any facts — ONLY keep or remove. "
                 "If nothing in a list survives, return it empty.\n\n"
                 "OUTPUT RULES:\n"
