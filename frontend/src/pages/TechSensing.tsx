@@ -57,6 +57,12 @@ import AppNavbar from '@/components/AppNavbar';
 
 type DateRangePreset = 'last_week' | 'last_month' | 'custom' | 'no_range';
 
+// Temporarily hidden from the UI (functionality, handlers, and dialogs are
+// retained — flip a flag to true to restore the control).
+const SHOW_ASK_BAR = false;
+const SHOW_SCHEDULE = false;
+const SHOW_ORG_PROFILE = false;
+
 const TechSensing: React.FC = () => {
   const { user } = useAuth();
 
@@ -686,13 +692,17 @@ const TechSensing: React.FC = () => {
         <div className="flex items-center gap-3">
           <Radar className="w-6 h-6 text-primary" />
           <h2 className="text-2xl font-bold">Tech Sensing</h2>
-          <Button variant="outline" size="sm" onClick={() => setShowScheduleDialog(true)} className="ml-3">
-            <Calendar className="w-4 h-4 mr-1" /> Schedule
-            {schedules.length > 0 && <Badge variant="secondary" className="ml-1 text-xs">{schedules.length}</Badge>}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowOrgDialog(true)}>
-            Org Profile
-          </Button>
+          {SHOW_SCHEDULE && (
+            <Button variant="outline" size="sm" onClick={() => setShowScheduleDialog(true)} className="ml-3">
+              <Calendar className="w-4 h-4 mr-1" /> Schedule
+              {schedules.length > 0 && <Badge variant="secondary" className="ml-1 text-xs">{schedules.length}</Badge>}
+            </Button>
+          )}
+          {SHOW_ORG_PROFILE && (
+            <Button variant="outline" size="sm" onClick={() => setShowOrgDialog(true)}>
+              Org Profile
+            </Button>
+          )}
         </div>
         {reportData && (
           <div className="flex items-center gap-2">
@@ -765,40 +775,44 @@ const TechSensing: React.FC = () => {
         {/* Config card */}
         <Card className="flex-1 flex flex-col min-h-0">
           <CardContent className="p-4 space-y-3 overflow-y-auto flex-1 min-h-0">
-            {/* Ask your radar */}
-            <div className="flex gap-2">
-              <Input
-                value={nlQuery}
-                onChange={(e) => setNlQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleNlQuery(); }}
-                placeholder={`Ask about ${reportData?.meta?.domain || reportData?.report?.domain || domain || 'all reports'}...`}
-                disabled={queryLoading}
-                className="text-sm"
-              />
-              <Button size="sm" onClick={handleNlQuery} disabled={queryLoading || !nlQuery.trim()}>
-                {queryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ask'}
-              </Button>
-              <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
-                <Badge variant="outline" className="text-xs">{reportData?.meta?.domain || reportData?.report?.domain || domain || 'all'}</Badge>
-              </span>
-            </div>
-            {queryAnswer && (
-              <Card className="border-l-4 border-l-blue-500 p-4">
-                <div className="text-sm prose prose-sm max-w-none dark:prose-invert prose-headings:mt-3 prose-headings:mb-1.5 prose-h2:text-base prose-h2:font-semibold prose-h3:text-sm prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5">
-                  <SafeMarkdownRenderer content={queryAnswer.answer} />
+            {/* Ask your radar (temporarily hidden — SHOW_ASK_BAR) */}
+            {SHOW_ASK_BAR && (
+              <>
+                <div className="flex gap-2">
+                  <Input
+                    value={nlQuery}
+                    onChange={(e) => setNlQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleNlQuery(); }}
+                    placeholder={`Ask about ${reportData?.meta?.domain || reportData?.report?.domain || domain || 'all reports'}...`}
+                    disabled={queryLoading}
+                    className="text-sm"
+                  />
+                  <Button size="sm" onClick={handleNlQuery} disabled={queryLoading || !nlQuery.trim()}>
+                    {queryLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Ask'}
+                  </Button>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
+                    <Badge variant="outline" className="text-xs">{reportData?.meta?.domain || reportData?.report?.domain || domain || 'all'}</Badge>
+                  </span>
                 </div>
-                <div className="flex gap-2 mt-3 pt-3 border-t flex-wrap items-center">
-                  <Badge variant={queryAnswer.confidence === 'high' ? 'default' : queryAnswer.confidence === 'medium' ? 'secondary' : 'destructive'}>
-                    {queryAnswer.confidence} confidence
-                  </Badge>
-                  {queryAnswer.technologies_mentioned.length > 0 && (
-                    <span className="text-xs text-muted-foreground">Technologies:</span>
-                  )}
-                  {queryAnswer.technologies_mentioned.map((t) => (
-                    <Badge key={t} variant="outline" className="text-xs">{t}</Badge>
-                  ))}
-                </div>
-              </Card>
+                {queryAnswer && (
+                  <Card className="border-l-4 border-l-blue-500 p-4">
+                    <div className="text-sm prose prose-sm max-w-none dark:prose-invert prose-headings:mt-3 prose-headings:mb-1.5 prose-h2:text-base prose-h2:font-semibold prose-h3:text-sm prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5">
+                      <SafeMarkdownRenderer content={queryAnswer.answer} />
+                    </div>
+                    <div className="flex gap-2 mt-3 pt-3 border-t flex-wrap items-center">
+                      <Badge variant={queryAnswer.confidence === 'high' ? 'default' : queryAnswer.confidence === 'medium' ? 'secondary' : 'destructive'}>
+                        {queryAnswer.confidence} confidence
+                      </Badge>
+                      {queryAnswer.technologies_mentioned.length > 0 && (
+                        <span className="text-xs text-muted-foreground">Technologies:</span>
+                      )}
+                      {queryAnswer.technologies_mentioned.map((t) => (
+                        <Badge key={t} variant="outline" className="text-xs">{t}</Badge>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </>
             )}
             {/* Primary fields: Domain, Date Range, Custom Requirements, YouTube, Audience */}
             <div className="space-y-3">
