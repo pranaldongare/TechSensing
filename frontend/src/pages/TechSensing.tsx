@@ -62,6 +62,7 @@ type DateRangePreset = 'last_week' | 'last_month' | 'custom' | 'no_range';
 const SHOW_ASK_BAR = false;
 const SHOW_SCHEDULE = false;
 const SHOW_ORG_PROFILE = false;
+const SHOW_COMPANIES_TAB = false;
 
 const TechSensing: React.FC = () => {
   const { user } = useAuth();
@@ -638,7 +639,9 @@ const TechSensing: React.FC = () => {
           <div className="px-6 pt-2 shrink-0">
             <TabsList>
               <TabsTrigger value="report">Report</TabsTrigger>
-              <TabsTrigger value="companies" disabled={!reportData}>Companies</TabsTrigger>
+              {SHOW_COMPANIES_TAB && (
+                <TabsTrigger value="companies" disabled={!reportData}>Companies</TabsTrigger>
+              )}
             </TabsList>
           </div>
           <TabsContent value="report" className="flex-1 min-h-0 px-6 pb-4 mt-2">
