@@ -114,6 +114,7 @@ const TechSensing: React.FC = () => {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [includeVideos, setIncludeVideos] = useState(false);
   const [chinaFocus, setChinaFocus] = useState(false);
+  const [indiaFocus, setIndiaFocus] = useState(false);
 
   // Company report state
   const [companyName, setCompanyName] = useState('');
@@ -271,6 +272,7 @@ const TechSensing: React.FC = () => {
           lookbackDays,
           includeVideos,
           chinaFocus,
+          indiaFocus,
         );
       } else {
         await api.sensingGenerate(
@@ -283,6 +285,7 @@ const TechSensing: React.FC = () => {
           searchQueries.length > 0 ? searchQueries : undefined,
           includeVideos,
           chinaFocus,
+          indiaFocus,
         );
       }
       toast({ title: 'Report submitted', description: 'Generation is running in the background. It will appear in history when ready.' });
@@ -897,11 +900,22 @@ const TechSensing: React.FC = () => {
                   <Switch
                     id="china-focus"
                     checked={chinaFocus}
-                    onCheckedChange={setChinaFocus}
+                    onCheckedChange={(v) => { setChinaFocus(v); if (v) setIndiaFocus(false); }}
                     disabled={isSubmitting}
                   />
                   <label htmlFor="china-focus" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
                     China Focus
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 pt-5">
+                  <Switch
+                    id="india-focus"
+                    checked={indiaFocus}
+                    onCheckedChange={(v) => { setIndiaFocus(v); if (v) setChinaFocus(false); }}
+                    disabled={isSubmitting}
+                  />
+                  <label htmlFor="india-focus" className="text-xs font-medium text-muted-foreground whitespace-nowrap cursor-pointer">
+                    India Focus
                   </label>
                 </div>
                 <div className="pt-3">

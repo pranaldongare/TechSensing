@@ -25,12 +25,15 @@ from core.sensing.ingest import RawArticle
 logger = logging.getLogger("sensing.classify")
 
 
-def _pick_classify_prompt(china_focus: bool):
-    """Return the China-focused classify prompt builder when in China mode,
+def _pick_classify_prompt(china_focus: bool, india_focus: bool = False):
+    """Return the region-focused classify prompt builder when in a region mode,
     otherwise the general one. Kept fully separate for reliability."""
     if china_focus:
         from core.llm.prompts.china_prompts import china_classify_prompt
         return china_classify_prompt
+    if india_focus:
+        from core.llm.prompts.india_prompts import india_classify_prompt
+        return india_classify_prompt
     return sensing_classify_prompt
 
 # When routing through the corporate INTERNAL LLM, large batches occasionally
@@ -49,6 +52,7 @@ async def classify_articles(
     preset=None,
     date_range: str = "",
     china_focus: bool = False,
+    india_focus: bool = False,
 ) -> List[ClassifiedArticle]:
     """
     Classify articles into Technology Radar quadrants/rings via LLM.
@@ -129,7 +133,7 @@ async def classify_articles(
         batch = uncached_articles[i : i + effective_batch_size]
         articles_text = _format_batch_for_prompt(batch)
 
-        prompt = _pick_classify_prompt(china_focus)(
+        prompt = _pick_classify_prompt(china_focus, india_focus)(
             articles_text=articles_text,
             domain=domain,
             custom_requirements=custom_requirements,
@@ -205,6 +209,7 @@ async def _classify_one_batch(
     preset,
     date_range: str,
     china_focus: bool = False,
+    india_focus: bool = False,
     label: str = "",
 ) -> List[ClassifiedArticle]:
     """Send a single batch through ``invoke_llm`` and return the classified
@@ -219,7 +224,7 @@ async def _classify_one_batch(
         Other exceptions — also propagate; cascade catches generically.
     """
     articles_text = _format_batch_for_prompt(batch)
-    prompt = _pick_classify_prompt(china_focus)(
+    prompt = _pick_classify_prompt(china_focus, india_focus)(
         articles_text=articles_text,
         domain=domain,
         custom_requirements=custom_requirements,
@@ -306,6 +311,7 @@ async def _classify_with_filter_cascade(
     preset,
     date_range: str,
     china_focus: bool = False,
+    india_focus: bool = False,
 ) -> List[ClassifiedArticle]:
     """Three-phase classifier that survives INTERNAL content-filter blocks.
 
@@ -346,7 +352,7 @@ async def _classify_with_filter_cascade(
                 custom_quadrant_names=custom_quadrant_names,
                 preset=preset,
                 date_range=date_range,
-                china_focus=china_focus,
+                china_focus=china_focus, india_focus=india_focus,
                 label=f"[ClassifyCascade Pass 1] batch {idx}/{total}",
             )
             classified.extend(results)
@@ -388,7 +394,7 @@ async def _classify_with_filter_cascade(
                 custom_quadrant_names=custom_quadrant_names,
                 preset=preset,
                 date_range=date_range,
-                china_focus=china_focus,
+                china_focus=china_focus, india_focus=india_focus,
                 label=f"[ClassifyCascade Pass 2] retry {idx}/{len(deferred)}",
             )
             classified.extend(results)
@@ -438,7 +444,7 @@ async def _classify_with_filter_cascade(
                     custom_quadrant_names=custom_quadrant_names,
                     preset=preset,
                     date_range=date_range,
-                    china_focus=china_focus,
+                    china_focus=china_focus, india_focus=india_focus,
                     label=f"{label_prefix} 3a (single-article)",
                 )
                 classified.extend(results)
@@ -467,7 +473,7 @@ async def _classify_with_filter_cascade(
                     custom_quadrant_names=custom_quadrant_names,
                     preset=preset,
                     date_range=date_range,
-                    china_focus=china_focus,
+                    china_focus=china_focus, india_focus=india_focus,
                     label=f"{label_prefix} 3b (content-stripped)",
                 )
                 classified.extend(results)

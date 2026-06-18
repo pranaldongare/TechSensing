@@ -87,6 +87,7 @@ async def generate_report(
     prompt_patches: dict | None = None,
     feedback_block: str = "",
     china_focus: bool = False,
+    india_focus: bool = False,
 ) -> TechSensingReport:
     """
     Generate the complete Tech Sensing Report from classified articles.
@@ -137,6 +138,13 @@ async def generate_report(
             china_report_radar_prompt as _radar_prompt,
             china_report_insights_prompt as _insights_prompt,
             china_details_prompt as _details_prompt,
+        )
+    elif india_focus:
+        from core.llm.prompts.india_prompts import (
+            india_report_core_prompt as _core_prompt,
+            india_report_radar_prompt as _radar_prompt,
+            india_report_insights_prompt as _insights_prompt,
+            india_details_prompt as _details_prompt,
         )
     else:
         _core_prompt = sensing_report_core_prompt

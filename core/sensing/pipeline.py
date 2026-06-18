@@ -149,6 +149,7 @@ async def run_sensing_pipeline(
     key_people: Optional[List[str]] = None,
     include_videos: bool = False,
     china_focus: bool = False,
+    india_focus: bool = False,
 ) -> SensingPipelineResult:
     """
     Full tech sensing pipeline execution.
@@ -294,6 +295,18 @@ async def run_sensing_pipeline(
             f"[ChinaFocus] China-scoped ingestion: {len(effective_feeds)} feeds, "
             f"{len(effective_queries)} queries"
         )
+    elif india_focus:
+        from core.sensing.india_sources import (
+            INDIA_REGION_TERMS, get_india_feeds, get_india_search_queries,
+        )
+        effective_feeds = get_india_feeds(domain)
+        effective_queries = get_india_search_queries(domain)
+        search_must_include = list(search_must_include or []) + INDIA_REGION_TERMS
+        effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include)
+        logger.info(
+            f"[IndiaFocus] India-scoped ingestion: {len(effective_feeds)} feeds, "
+            f"{len(effective_queries)} queries"
+        )
 
     (
         rss_articles,
@@ -403,6 +416,7 @@ async def run_sensing_pipeline(
         preset=preset,
         date_range=date_range,
         china_focus=china_focus,
+        india_focus=india_focus,
     )
     await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
@@ -513,6 +527,7 @@ async def run_sensing_pipeline(
         prompt_patches=prompt_patches,
         feedback_block=feedback_block,
         china_focus=china_focus,
+        india_focus=india_focus,
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(
@@ -705,7 +720,7 @@ async def run_sensing_pipeline(
         report.trending_videos = []
 
     # --- Model Releases (GenAI domains only) ---
-    if _is_ai_domain(domain) and not china_focus:
+    if _is_ai_domain(domain) and not china_focus and not india_focus:
         logger.info(f"Searching for model releases... [{_elapsed()}]")
         await _emit("model_releases", 99, "Finding recent model releases...")
         try:
@@ -757,6 +772,26 @@ async def run_sensing_pipeline(
                 report.china_focus = cf
         except Exception as e:
             logger.warning(f"China Focus generation failed (non-fatal): {e}")
+
+    # --- India Focus (opt-in) ---
+    if india_focus:
+        logger.info(f"[IndiaFocus] Generating India-focused section... [{_elapsed()}]")
+        await _emit("india_focus", 99, "Generating India-focused analysis...")
+        try:
+            from core.sensing.india_focus import generate_india_focus
+
+            inf = await generate_india_focus(
+                report=report,
+                classified=classified,
+                domain=domain,
+                date_range=date_range,
+                lookback_days=lookback_days,
+                url_content_map=url_content_map,
+            )
+            if inf is not None:
+                report.india_focus = inf
+        except Exception as e:
+            logger.warning(f"India Focus generation failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
     await _run_self_learning(report, classified, domain, user_id, _emit, _elapsed)
@@ -1181,6 +1216,7 @@ async def run_sensing_pipeline_from_document(
     key_people: Optional[List[str]] = None,
     include_videos: bool = False,
     china_focus: bool = False,
+    india_focus: bool = False,
 ) -> SensingPipelineResult:
     """Hybrid sensing pipeline: parse an uploaded document, extract key themes
     via LLM, then use those themes to drive the full web search pipeline.
@@ -1410,6 +1446,18 @@ async def run_sensing_pipeline_from_document(
             f"[ChinaFocus] China-scoped ingestion: {len(effective_feeds)} feeds, "
             f"{len(effective_search_queries)} queries"
         )
+    elif india_focus:
+        from core.sensing.india_sources import (
+            INDIA_REGION_TERMS, get_india_feeds, get_india_search_queries,
+        )
+        effective_feeds = get_india_feeds(search_domain)
+        effective_search_queries = get_india_search_queries(search_domain)
+        search_must_include = list(search_must_include or []) + INDIA_REGION_TERMS
+        effective_patent_kw = _merge_patent_keywords(domain_ref, search_must_include or None)
+        logger.info(
+            f"[IndiaFocus] India-scoped ingestion: {len(effective_feeds)} feeds, "
+            f"{len(effective_search_queries)} queries"
+        )
 
     (
         rss_articles,
@@ -1519,6 +1567,7 @@ async def run_sensing_pipeline_from_document(
         preset=preset,
         date_range=date_range,
         china_focus=china_focus,
+        india_focus=india_focus,
     )
     await _emit("classify", 55, f"{len(classified)} articles classified")
     logger.info(
@@ -1622,6 +1671,7 @@ async def run_sensing_pipeline_from_document(
         prompt_patches=prompt_patches,
         feedback_block=feedback_block,
         china_focus=china_focus,
+        india_focus=india_focus,
     )
     await _emit("report", 85, "Report generated, verifying relevance...")
     logger.info(f"[Stage 8/9] REPORT COMPLETE [{_elapsed()}]")
@@ -1781,7 +1831,7 @@ async def run_sensing_pipeline_from_document(
         report.trending_videos = []
 
     # --- Model Releases (GenAI domains only) ---
-    if _is_ai_domain(domain) and not china_focus:
+    if _is_ai_domain(domain) and not china_focus and not india_focus:
         logger.info(f"Searching for model releases... [{_elapsed()}]")
         await _emit("model_releases", 99, "Finding recent model releases...")
         try:
@@ -1833,6 +1883,26 @@ async def run_sensing_pipeline_from_document(
                 report.china_focus = cf
         except Exception as e:
             logger.warning(f"China Focus generation failed (non-fatal): {e}")
+
+    # --- India Focus (opt-in) ---
+    if india_focus:
+        logger.info(f"[IndiaFocus] Generating India-focused section... [{_elapsed()}]")
+        await _emit("india_focus", 99, "Generating India-focused analysis...")
+        try:
+            from core.sensing.india_focus import generate_india_focus
+
+            inf = await generate_india_focus(
+                report=report,
+                classified=classified,
+                domain=domain,
+                date_range=date_range,
+                lookback_days=lookback_days,
+                url_content_map=url_content_map,
+            )
+            if inf is not None:
+                report.india_focus = inf
+        except Exception as e:
+            logger.warning(f"India Focus generation failed (non-fatal): {e}")
 
     # --- Self-learning: evaluate and remember ---
     await _run_self_learning(report, classified, domain, user_id, _emit, _elapsed)

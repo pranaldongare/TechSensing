@@ -253,6 +253,38 @@ export interface ChinaFocus {
   problem_categories?: ChinaProblemCategory[];
 }
 
+export interface IndiaStreamItem {
+  title: string;
+  detail?: string;
+  organizations?: string[];
+  source_url?: string;
+}
+
+export interface IndiaProblemCategory {
+  category: string;
+  description?: string;
+  examples?: string[];
+}
+
+export interface IndiaVsGlobalComparison {
+  summary?: string;
+  india_strengths?: string[];
+  global_strengths?: string[];
+  models_comparison?: string;
+  ecosystem_comparison?: string;
+  sources?: string[];
+}
+
+export interface IndiaFocus {
+  overview?: string;
+  business?: IndiaStreamItem[];
+  technology?: IndiaStreamItem[];
+  implementation?: IndiaStreamItem[];
+  research?: IndiaStreamItem[];
+  india_vs_global?: IndiaVsGlobalComparison;
+  problem_categories?: IndiaProblemCategory[];
+}
+
 export interface SensingReport {
   schema_version?: string; // '1.0' (legacy) or '2.0' (with top_events/blind_spots)
   report_title: string;
@@ -276,6 +308,7 @@ export interface SensingReport {
   weak_signals?: WeakSignal[];
   model_releases?: ModelRelease[];
   china_focus?: ChinaFocus | null;
+  india_focus?: IndiaFocus | null;
   relationships?: TechRelationshipMap | null;
   report_confidence?: string;
   confidence_note?: string;
@@ -1085,6 +1118,7 @@ export const api = {
     searchQueries?: string[],
     includeVideos: boolean = false,
     chinaFocus: boolean = false,
+    indiaFocus: boolean = false,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const response = await fetch(`${API_URL}/sensing/generate`, {
@@ -1103,6 +1137,7 @@ export const api = {
         search_queries: searchQueries || null,
         include_videos: includeVideos,
         china_focus: chinaFocus,
+        india_focus: indiaFocus,
       }),
     });
     const data = await response.json();
@@ -1121,6 +1156,7 @@ export const api = {
     lookbackDays: number = 7,
     includeVideos: boolean = false,
     chinaFocus: boolean = false,
+    indiaFocus: boolean = false,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const formData = new FormData();
@@ -1132,6 +1168,7 @@ export const api = {
     formData.append('lookback_days', String(lookbackDays));
     formData.append('include_videos', String(includeVideos));
     formData.append('china_focus', String(chinaFocus));
+    formData.append('india_focus', String(indiaFocus));
 
     const response = await fetch(`${API_URL}/sensing/generate-from-document`, {
       method: 'POST',

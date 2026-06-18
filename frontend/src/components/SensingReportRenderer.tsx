@@ -21,7 +21,7 @@ import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
   TopicPreferences, ModelRelease, Annotation,
-  ChinaFocus, ChinaStreamItem,
+  ChinaFocus, ChinaStreamItem, IndiaFocus,
 } from '@/lib/api';
 import { downloadOnepagerPptx } from '@/lib/sensing-onepager-pptx';
 import { downloadOnepagerPdf } from '@/lib/sensing-onepager-pdf';
@@ -595,6 +595,7 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
 
         {/* China Focus (opt-in) */}
         {report.china_focus && <ChinaFocusSection cf={report.china_focus} />}
+        {report.india_focus && <IndiaFocusSection cf={report.india_focus} />}
 
         {/* Latest Model Releases (GenAI domains only) */}
         {report.model_releases && report.model_releases.length > 0 && (
@@ -1653,6 +1654,120 @@ function ChinaFocusSection({ cf }: { cf: ChinaFocus }) {
           <div className="space-y-2 border-t pt-4">
             <h4 className="text-sm font-semibold flex items-center gap-2">
               <Target className="w-4 h-4 text-muted-foreground" />Problems China is focusing on
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {cf.problem_categories.map((pc, i) => (
+                <div key={i} className="rounded-md border p-3">
+                  <span className="text-sm font-medium">{pc.category}</span>
+                  {pc.description && <p className="text-xs text-muted-foreground mt-1">{pc.description}</p>}
+                  {pc.examples && pc.examples.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {pc.examples.map((ex, j) => <Badge key={j} variant="outline" className="text-[10px]">{ex}</Badge>)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function IndiaFocusSection({ cf }: { cf: IndiaFocus }) {
+  const cvg = cf.india_vs_global;
+  const hasComparison = !!cvg && !!(
+    cvg.summary || cvg.india_strengths?.length || cvg.global_strengths?.length ||
+    cvg.models_comparison || cvg.ecosystem_comparison
+  );
+  return (
+    <Card className="border-l-4 border-l-amber-500">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Globe2 className="w-5 h-5 text-amber-600" />
+          India Focus
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {cf.overview && (
+          <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+            <SafeMarkdownRenderer content={cf.overview} />
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <ChinaStreamBlock title="Business" icon={<Building2 className="w-4 h-4 text-muted-foreground" />} items={cf.business} />
+          <ChinaStreamBlock title="Technology" icon={<Cpu className="w-4 h-4 text-muted-foreground" />} items={cf.technology} />
+          <ChinaStreamBlock title="Implementation" icon={<Zap className="w-4 h-4 text-muted-foreground" />} items={cf.implementation} />
+          <ChinaStreamBlock title="Research" icon={<FileText className="w-4 h-4 text-muted-foreground" />} items={cf.research} />
+        </div>
+
+        {hasComparison && cvg && (
+          <div className="space-y-3 border-t pt-4">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Target className="w-4 h-4 text-muted-foreground" />India vs Global
+            </h4>
+            {cvg.summary && (
+              <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                <SafeMarkdownRenderer content={cvg.summary} />
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {cvg.india_strengths && cvg.india_strengths.length > 0 && (
+                <div className="rounded-md border p-3">
+                  <span className="text-xs font-semibold text-amber-600">India strengths</span>
+                  <ul className="list-disc pl-4 mt-1 space-y-0.5 text-xs text-muted-foreground">
+                    {cvg.india_strengths.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              )}
+              {cvg.global_strengths && cvg.global_strengths.length > 0 && (
+                <div className="rounded-md border p-3">
+                  <span className="text-xs font-semibold text-blue-600">Global frontier strengths</span>
+                  <ul className="list-disc pl-4 mt-1 space-y-0.5 text-xs text-muted-foreground">
+                    {cvg.global_strengths.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+            {cvg.models_comparison && (
+              <div>
+                <span className="text-xs font-semibold">GenAI models</span>
+                <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                  <SafeMarkdownRenderer content={cvg.models_comparison} />
+                </div>
+              </div>
+            )}
+            {cvg.ecosystem_comparison && (
+              <div>
+                <span className="text-xs font-semibold">Ecosystem</span>
+                <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                  <SafeMarkdownRenderer content={cvg.ecosystem_comparison} />
+                </div>
+              </div>
+            )}
+            {cvg.sources && cvg.sources.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <span className="text-xs font-semibold text-muted-foreground">Sources:</span>
+                {cvg.sources.slice(0, 8).map((u, i) => {
+                  let host = 'link';
+                  try { host = new URL(u).hostname.replace('www.', ''); } catch { /* keep default */ }
+                  return (
+                    <a key={i} href={u} target="_blank" rel="noopener noreferrer" className="text-xs text-primary inline-flex items-center gap-0.5">
+                      <Link2 className="w-3 h-3" />{host}
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {cf.problem_categories && cf.problem_categories.length > 0 && (
+          <div className="space-y-2 border-t pt-4">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Target className="w-4 h-4 text-muted-foreground" />Problems India is focusing on
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {cf.problem_categories.map((pc, i) => (

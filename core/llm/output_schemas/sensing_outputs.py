@@ -923,6 +923,105 @@ class ChinaFocus(BaseModel):
     )
 
 
+# --- India Focus (optional, opt-in section) ---
+
+
+class IndiaStreamItem(BaseModel):
+    """A single development within one of the four India-focus streams."""
+
+    title: str = Field(description="Short headline of the development.")
+    detail: str = Field(
+        default="",
+        description="1-3 sentence explanation grounded in the source articles.",
+    )
+    organizations: List[str] = Field(
+        default_factory=list,
+        description="Indian companies, labs, or institutions involved (e.g., 'Sarvam AI', 'TCS', 'IIT Bombay').",
+    )
+    source_url: str = Field(
+        default="",
+        description="Supporting article URL, if one exists.",
+    )
+
+
+class IndiaProblemCategory(BaseModel):
+    """A category of problems / strategic priorities India is focusing on."""
+
+    category: str = Field(
+        description="Short name of the problem area (e.g., 'Sovereign / Indic-language AI')."
+    )
+    description: str = Field(
+        default="",
+        description="1-2 sentences on what the focus is and why it matters.",
+    )
+    examples: List[str] = Field(
+        default_factory=list,
+        description="Concrete initiatives, companies, or technologies illustrating this focus.",
+    )
+
+
+class IndiaVsGlobalComparison(BaseModel):
+    """Brief India vs global-frontier comparison, focused on GenAI models + ecosystem."""
+
+    summary: str = Field(
+        default="",
+        description="2-4 sentence overall comparison narrative (markdown).",
+    )
+    india_strengths: List[str] = Field(
+        default_factory=list,
+        description="Areas where India currently leads or is highly competitive.",
+    )
+    global_strengths: List[str] = Field(
+        default_factory=list,
+        description="Areas where global frontier leaders (US, China) currently lead.",
+    )
+    models_comparison: str = Field(
+        default="",
+        description="Comparison specific to GenAI models (frontier + open-weight).",
+    )
+    ecosystem_comparison: str = Field(
+        default="",
+        description="Comparison of the broader ecosystem: chips/compute, capital, talent, open-source, and deployment.",
+    )
+    sources: List[str] = Field(
+        default_factory=list,
+        description="URLs of the (India + global) sources the comparison is grounded in.",
+    )
+
+
+class IndiaFocus(BaseModel):
+    """Optional India-focused analysis appended to the report when India Focus is enabled."""
+
+    overview: str = Field(
+        default="",
+        description="2-4 sentence overview of India developments this period (markdown).",
+    )
+    business: List[IndiaStreamItem] = Field(
+        default_factory=list,
+        description="Business stream — funding, commercialization, partnerships, policy/market moves.",
+    )
+    technology: List[IndiaStreamItem] = Field(
+        default_factory=list,
+        description="Technology stream — model releases, hardware/chips, infrastructure.",
+    )
+    implementation: List[IndiaStreamItem] = Field(
+        default_factory=list,
+        description="Implementation stream — agentic AI and other real-world deployments, products, applications.",
+    )
+    research: List[IndiaStreamItem] = Field(
+        default_factory=list,
+        description="Research stream — novel/incremental papers, open-source/GitHub, benchmarks.",
+    )
+    india_vs_global: IndiaVsGlobalComparison = Field(
+        default_factory=IndiaVsGlobalComparison,
+        description="Brief India vs global-frontier comparison, focused on GenAI models and ecosystem.",
+    )
+    problem_categories: List[IndiaProblemCategory] = Field(
+        default_factory=list,
+        description="Categorization of the problems/priorities India is focusing on.",
+    )
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
@@ -1016,6 +1115,13 @@ class TechSensingReport(LLMOutputBase):
         description=(
             "Optional China-focused analysis (4 streams + China vs US + problem "
             "categories). Present only when China Focus is enabled for the run."
+        ),
+    )
+    india_focus: Optional[IndiaFocus] = Field(
+        default=None,
+        description=(
+            "Optional India-focused analysis (4 streams + India vs Global + problem "
+            "categories). Present only when India Focus is enabled for the run."
         ),
     )
 

@@ -78,6 +78,10 @@ class SensingGenerateRequest(BaseModel):
         default=False,
         description="Add a China-focused section (4 streams + China vs US + problem categories)",
     )
+    india_focus: bool = Field(
+        default=False,
+        description="Add an India-focused section (4 streams + India vs Global + problem categories)",
+    )
 
 
 # --- Helpers ---
@@ -145,6 +149,7 @@ async def generate_sensing_report(
                 user_id=user_id,
                 include_videos=body.include_videos,
                 china_focus=body.china_focus,
+                india_focus=body.india_focus,
             )
 
             report_data = {
@@ -369,6 +374,7 @@ async def generate_sensing_from_document(
     lookback_days: int = Form(7),
     include_videos: bool = Form(False),
     china_focus: bool = Form(False),
+    india_focus: bool = Form(False),
 ):
     """Start async tech sensing from an uploaded document instead of web
     sources."""
@@ -439,6 +445,7 @@ async def generate_sensing_from_document(
                 lookback_days=lookback_days,
                 include_videos=include_videos,
                 china_focus=china_focus,
+                india_focus=india_focus,
                 progress_callback=_progress_cb,
                 user_id=user_id,
             )
