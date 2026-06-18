@@ -191,7 +191,15 @@ API_KEYS = [
     settings.API_KEY_6,
 ]
 
-openai_client = AsyncOpenAI(api_key=settings.OPENAI_API)
+# Construct the OpenAI client only when a key is configured. Importing this
+# module must not fail just because OPENAI_API is unset (e.g. local-LLM-only
+# setups): the pipeline falls back Ollama -> Gemini -> OpenAI, so a missing
+# OpenAI key simply means that last fallback is unavailable.
+if settings.OPENAI_API:
+    openai_client = AsyncOpenAI(api_key=settings.OPENAI_API)
+else:
+    openai_client = None
+    logger.warning("OPENAI_API not set — OpenAI fallback disabled.")
 MAX_RETRIES = 4
 
 # Thread-safe API key cycling
@@ -749,7 +757,7 @@ CRITICAL OUTPUT RULES:
                     await asyncio.sleep(0.2)
 
         # === OPENAI FALLBACK ===
-        if SWITCHES["FALLBACK_TO_OPENAI"]:
+        if SWITCHES["FALLBACK_TO_OPENAI"] and openai_client is not None:
             eff_openai_model = openai_model or FALLBACK_OPENAI_MODEL
             openai_raw = None
             s = time.time()
