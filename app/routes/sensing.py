@@ -82,6 +82,10 @@ class SensingGenerateRequest(BaseModel):
         default=False,
         description="Add an India-focused section (4 streams + India vs Global + problem categories)",
     )
+    profile_id: Optional[str] = Field(
+        default=None,
+        description="Active personalization profile id (defaults to 'default').",
+    )
 
 
 # --- Helpers ---
@@ -150,6 +154,7 @@ async def generate_sensing_report(
                 include_videos=body.include_videos,
                 china_focus=body.china_focus,
                 india_focus=body.india_focus,
+                profile_id=body.profile_id,
             )
 
             report_data = {
@@ -157,6 +162,7 @@ async def generate_sensing_report(
                 "meta": {
                     "tracking_id": tracking_id,
                     "domain": body.domain,
+                    "profile_id": body.profile_id or "default",
                     "raw_article_count": result.raw_article_count,
                     "deduped_article_count": result.deduped_article_count,
                     "classified_article_count": result.classified_article_count,
@@ -375,6 +381,7 @@ async def generate_sensing_from_document(
     include_videos: bool = Form(False),
     china_focus: bool = Form(False),
     india_focus: bool = Form(False),
+    profile_id: Optional[str] = Form(None),
 ):
     """Start async tech sensing from an uploaded document instead of web
     sources."""
@@ -448,6 +455,7 @@ async def generate_sensing_from_document(
                 india_focus=india_focus,
                 progress_callback=_progress_cb,
                 user_id=user_id,
+                profile_id=profile_id,
             )
 
             report_data = {
@@ -460,6 +468,7 @@ async def generate_sensing_from_document(
                     "classified_article_count": result.classified_article_count,
                     "execution_time_seconds": result.execution_time_seconds,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "profile_id": profile_id or "default",
                     "source_document": safe_filename,
                     "custom_requirements": custom_requirements,
                     "must_include": must_list,
@@ -704,8 +713,8 @@ async def sensing_search(
 
 
 @router.get("/history")
-async def sensing_history(request: Request):
-    """List past sensing reports for the current user."""
+async def sensing_history(request: Request, profile_id: Optional[str] = None):
+    """List past sensing reports for the current user (optionally filtered by profile)."""
     payload = request.state.user
     if not payload:
         raise HTTPException(status_code=401, detail="User not authenticated")
@@ -726,6 +735,8 @@ async def sensing_history(request: Request):
                     data = json.loads(await f.read())
                 meta = data.get("meta", {})
                 report = data.get("report", {})
+                if profile_id and (meta.get("profile_id") or "default") != profile_id:
+                    continue
                 tid = meta.get("tracking_id")
                 if tid:
                     seen_ids.add(tid)
@@ -1086,6 +1097,62 @@ async def update_org_context(
     )
     await save_org_context(payload.userId, context)
     return JSONResponse(content=context.model_dump())
+
+
+# --- User Profiles (personalization tenancy; no login yet) ---
+
+
+@router.get("/profiles")
+async def list_user_profiles(request: Request):
+    """List all personalization profiles for the current user."""
+    from core.sensing.profile import list_profiles
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    profiles = await list_profiles(payload.userId)
+    return JSONResponse(content={"profiles": [p.model_dump() for p in profiles]})
+
+
+@router.get("/profile/{profile_id}")
+async def get_user_profile(request: Request, profile_id: str):
+    """Load a single profile by id."""
+    from core.sensing.profile import load_profile
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    profile = await load_profile(payload.userId, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return JSONResponse(content=profile.model_dump())
+
+
+@router.put("/profile")
+async def save_user_profile(request: Request, body: dict = Body(...)):
+    """Create or update a profile (upsert by id)."""
+    from core.sensing.profile import UserProfile, save_profile, slugify_profile_name
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    profile = UserProfile(**body)
+    if not profile.id:
+        profile.id = slugify_profile_name(profile.name)
+    saved = await save_profile(payload.userId, profile)
+    return JSONResponse(content=saved.model_dump())
+
+
+@router.delete("/profile/{profile_id}")
+async def delete_user_profile(request: Request, profile_id: str):
+    """Delete a profile (the 'default' profile cannot be deleted)."""
+    from core.sensing.profile import delete_profile
+
+    payload = request.state.user
+    if not payload:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    ok = await delete_profile(payload.userId, profile_id)
+    return JSONResponse(content={"status": "ok" if ok else "not_deleted"})
 
 
 # --- One-Pager Export ---

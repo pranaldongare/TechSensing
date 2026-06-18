@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from '@/lib/theme-context';
+import { ProfileProvider } from '@/lib/profile-context';
 import { Toaster } from '@/components/ui/toaster';
 import TechSensing from '@/pages/TechSensing';
 import CompanyAnalysisPage from '@/pages/CompanyAnalysisPage';
@@ -12,6 +13,7 @@ import SettingsPage from '@/pages/SettingsPage';
 function App() {
   return (
     <ThemeProvider>
+      <ProfileProvider>
       <Router>
         <Routes>
           <Route path="/" element={<TechSensing />} />
@@ -24,6 +26,7 @@ function App() {
         </Routes>
         <Toaster />
       </Router>
+      </ProfileProvider>
     </ThemeProvider>
   );
 }

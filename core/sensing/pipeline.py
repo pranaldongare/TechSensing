@@ -146,6 +146,7 @@ async def run_sensing_pipeline(
     lookback_days: int = LOOKBACK_DAYS,
     progress_callback: Optional[Callable] = None,
     user_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
     key_people: Optional[List[str]] = None,
     include_videos: bool = False,
     china_focus: bool = False,
@@ -204,24 +205,30 @@ async def run_sensing_pipeline(
             key_people = list(domain_ref.key_people)
             logger.info(f"Using dynamic key_people: {key_people}")
 
-    # --- Topic Preferences: boost interested, suppress not-interested ---
+    # --- Active profile: interests -> must_include, avoid -> dont_include ---
+    profile = None
+    personalization_pct = 0
     if user_id:
         try:
-            from core.sensing.topic_preferences import load_topic_preferences
+            from core.sensing.profile import load_profile, resolve_profile_prefs
 
-            topic_prefs = await load_topic_preferences(user_id, domain)
-            if topic_prefs.interested:
-                boosted = [t for t in topic_prefs.interested if t not in (must_include or [])]
-                if boosted:
-                    must_include = list(must_include or []) + boosted
-                    logger.info(f"Topic prefs: boosted {len(boosted)} interested topics")
-            if topic_prefs.not_interested:
-                suppressed = [t for t in topic_prefs.not_interested if t not in (dont_include or [])]
-                if suppressed:
-                    dont_include = list(dont_include or []) + suppressed
-                    logger.info(f"Topic prefs: suppressed {len(suppressed)} not-interested topics")
+            profile = await load_profile(user_id, profile_id)
+            if profile:
+                personalization_pct = profile.personalization or 0
+                if personalization_pct > 0:
+                    _prefs = resolve_profile_prefs(profile, domain)
+                    boosted = [t for t in _prefs["interests"] if t not in (must_include or [])]
+                    if boosted:
+                        must_include = list(must_include or []) + boosted
+                    suppressed = [t for t in _prefs["avoid"] if t not in (dont_include or [])]
+                    if suppressed:
+                        dont_include = list(dont_include or []) + suppressed
+                    logger.info(
+                        f"[Profile] '{profile.name}' (p={personalization_pct}): "
+                        f"+{len(boosted)} interests, -{len(suppressed)} avoid"
+                    )
         except Exception as e:
-            logger.warning(f"Topic preferences load failed (non-fatal): {e}")
+            logger.warning(f"Profile load failed (non-fatal): {e}")
 
     # --- Load experience memory for self-learning ---
     experience_block = ""
@@ -375,26 +382,21 @@ async def run_sensing_pipeline(
             f"(removed {before_date_filter - len(unique_articles)} old articles)"
         )
 
-    # Load org context early so custom quadrant names are available for classification
+    # Personalization framing from the active profile (role, stack, priorities).
     org_context_str = ""
     custom_quadrant_names = None
     stakeholder_role = "general"
-    if user_id:
+    if profile:
         try:
-            from core.sensing.org_context import build_org_context_prompt, load_org_context
-            org_ctx = await load_org_context(user_id)
-            if org_ctx:
-                org_context_str = build_org_context_prompt(org_ctx)
-                logger.info(f"Org context loaded for {user_id}")
-                if org_ctx.radar_customization and org_ctx.radar_customization.quadrants:
-                    custom_quadrant_names = [
-                        q.name for q in org_ctx.radar_customization.quadrants
-                    ]
-                    logger.info(f"Custom radar quadrants: {custom_quadrant_names}")
-                if org_ctx.stakeholder_role:
-                    stakeholder_role = org_ctx.stakeholder_role
+            from core.sensing.profile import build_profile_prompt
+
+            org_context_str = build_profile_prompt(profile)
+            if profile.radar_customization and profile.radar_customization.quadrants:
+                custom_quadrant_names = [q.name for q in profile.radar_customization.quadrants]
+            if profile.role:
+                stakeholder_role = profile.role
         except Exception as e:
-            logger.warning(f"Failed to load org context: {e}")
+            logger.warning(f"Profile framing failed (non-fatal): {e}")
 
     # Compute date range early (used by classifier recency rules and report generation)
     now = datetime.now(timezone.utc)
@@ -809,6 +811,17 @@ async def run_sensing_pipeline(
         f"Radar items={len(report.radar_items)}"
     )
 
+    # --- Personalized curation (For You / This might interest you) ---
+    if profile and personalization_pct > 0:
+        try:
+            from core.sensing.personalize import build_personalized_sections
+
+            report.personalized = build_personalized_sections(
+                report, profile, domain, personalization_pct
+            )
+        except Exception as e:
+            logger.warning(f"Personalization pass failed (non-fatal): {e}")
+
     return SensingPipelineResult(
         report=report,
         raw_article_count=len(all_raw),
@@ -1213,6 +1226,7 @@ async def run_sensing_pipeline_from_document(
     lookback_days: int = LOOKBACK_DAYS,
     progress_callback: Optional[Callable] = None,
     user_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
     key_people: Optional[List[str]] = None,
     include_videos: bool = False,
     china_focus: bool = False,
@@ -1368,23 +1382,27 @@ async def run_sensing_pipeline_from_document(
         f"Found {len(effective_must_include)} technology keywords"
     )
 
-    # --- Topic Preferences: boost interested, suppress not-interested ---
+    # --- Active profile: interests -> must_include, avoid -> dont_include ---
+    profile = None
+    personalization_pct = 0
     if user_id:
         try:
-            from core.sensing.topic_preferences import load_topic_preferences
+            from core.sensing.profile import load_profile, resolve_profile_prefs
 
-            topic_prefs = await load_topic_preferences(user_id, domain)
-            if topic_prefs.interested:
-                for t in topic_prefs.interested:
-                    if t not in effective_must_include:
-                        effective_must_include.append(t)
-            if topic_prefs.not_interested:
-                dont_include = list(dont_include or [])
-                for t in topic_prefs.not_interested:
-                    if t not in dont_include:
-                        dont_include.append(t)
+            profile = await load_profile(user_id, profile_id)
+            if profile:
+                personalization_pct = profile.personalization or 0
+                if personalization_pct > 0:
+                    _prefs = resolve_profile_prefs(profile, domain)
+                    for t in _prefs["interests"]:
+                        if t not in effective_must_include:
+                            effective_must_include.append(t)
+                    dont_include = list(dont_include or [])
+                    for t in _prefs["avoid"]:
+                        if t not in dont_include:
+                            dont_include.append(t)
         except Exception as e:
-            logger.warning(f"Topic preferences load failed (non-fatal): {e}")
+            logger.warning(f"Profile load failed (non-fatal): {e}")
 
     # Build keyword filter instructions
     keyword_instructions = _build_keyword_instructions(
@@ -1525,24 +1543,21 @@ async def run_sensing_pipeline_from_document(
             f"(removed {before_date_filter - len(unique_articles)} old articles)"
         )
 
-    # Load org context for custom quadrant names
+    # Personalization framing from the active profile (role, stack, priorities).
     org_context_str = ""
     custom_quadrant_names = None
     stakeholder_role = "general"
-    if user_id:
+    if profile:
         try:
-            from core.sensing.org_context import build_org_context_prompt, load_org_context
-            org_ctx = await load_org_context(user_id)
-            if org_ctx:
-                org_context_str = build_org_context_prompt(org_ctx)
-                if org_ctx.radar_customization and org_ctx.radar_customization.quadrants:
-                    custom_quadrant_names = [
-                        q.name for q in org_ctx.radar_customization.quadrants
-                    ]
-                if org_ctx.stakeholder_role:
-                    stakeholder_role = org_ctx.stakeholder_role
+            from core.sensing.profile import build_profile_prompt
+
+            org_context_str = build_profile_prompt(profile)
+            if profile.radar_customization and profile.radar_customization.quadrants:
+                custom_quadrant_names = [q.name for q in profile.radar_customization.quadrants]
+            if profile.role:
+                stakeholder_role = profile.role
         except Exception as e:
-            logger.warning(f"Failed to load org context: {e}")
+            logger.warning(f"Profile framing failed (non-fatal): {e}")
 
     # Compute date range early (used by classifier recency rules and report generation)
     now = datetime.now(timezone.utc)
@@ -1919,6 +1934,17 @@ async def run_sensing_pipeline_from_document(
         f"Deduped={len(unique_articles)} | Classified={len(classified)} | "
         f"Radar items={len(report.radar_items)}"
     )
+
+    # --- Personalized curation (For You / This might interest you) ---
+    if profile and personalization_pct > 0:
+        try:
+            from core.sensing.personalize import build_personalized_sections
+
+            report.personalized = build_personalized_sections(
+                report, profile, domain, personalization_pct
+            )
+        except Exception as e:
+            logger.warning(f"Personalization pass failed (non-fatal): {e}")
 
     return SensingPipelineResult(
         report=report,

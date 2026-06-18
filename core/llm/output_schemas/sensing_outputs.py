@@ -1022,6 +1022,32 @@ class IndiaFocus(BaseModel):
     )
 
 
+# --- Personalization (profile-driven curation; code-generated, not LLM) ---
+
+
+class PersonalizedItem(BaseModel):
+    """A report item curated for (or suggested to) the reader's profile."""
+
+    title: str = Field(description="Technology / event / trend name.")
+    kind: str = Field(default="", description="'radar' | 'event' | 'trend'.")
+    summary: str = Field(default="", description="1-2 sentence why-it-matters.")
+    why: List[str] = Field(
+        default_factory=list,
+        description="Profile terms this matched (for 'For You'); empty for serendipity items.",
+    )
+    source_url: str = Field(default="", description="Optional source link.")
+    impact: str = Field(default="", description="Impact/signal hint, if known.")
+
+
+class PersonalizedSections(BaseModel):
+    """Profile-personalized curation of the report."""
+
+    for_you: List[PersonalizedItem] = Field(default_factory=list)
+    might_interest: List[PersonalizedItem] = Field(default_factory=list)
+    profile_name: str = Field(default="")
+    personalization: int = Field(default=0)
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
@@ -1123,6 +1149,10 @@ class TechSensingReport(LLMOutputBase):
             "Optional India-focused analysis (4 streams + India vs Global + problem "
             "categories). Present only when India Focus is enabled for the run."
         ),
+    )
+    personalized: Optional[PersonalizedSections] = Field(
+        default=None,
+        description="Profile-personalized curation (For You + This might interest you).",
     )
 
 

@@ -42,6 +42,7 @@ import { io, Socket } from 'socket.io-client';
 import { api, getAuthToken } from '@/lib/api';
 import type { SensingReportData, SensingHistoryItem, SensingSchedule, OrgTechContext, TopicPreferences, ReportSearchResult, Annotation } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useProfile } from '@/lib/profile-context';
 import { API_URL } from '../../config';
 import SensingReportRenderer from '@/components/SensingReportRenderer';
 import SafeMarkdownRenderer from '@/components/SafeMarkdownRenderer';
@@ -66,6 +67,7 @@ const SHOW_COMPANIES_TAB = false;
 
 const TechSensing: React.FC = () => {
   const { user } = useAuth();
+  const { activeProfileId } = useProfile();
 
   // Config state
   const [domain, setDomain] = useState('Generative AI');
@@ -161,6 +163,12 @@ const TechSensing: React.FC = () => {
     loadOrgContext();
   }, []);
 
+  // Reload history when the active profile changes (profile-tagged reports).
+  useEffect(() => {
+    loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProfileId]);
+
   // Load topic preferences when report domain changes
   useEffect(() => {
     if (reportData?.report?.domain) {
@@ -231,7 +239,7 @@ const TechSensing: React.FC = () => {
   const loadHistory = async () => {
     setHistoryLoading(true);
     try {
-      const res = await api.sensingHistory();
+      const res = await api.sensingHistory(activeProfileId);
       setHistory(res.reports || []);
     } catch {
       // Silently handle
@@ -273,6 +281,7 @@ const TechSensing: React.FC = () => {
           includeVideos,
           chinaFocus,
           indiaFocus,
+          activeProfileId,
         );
       } else {
         await api.sensingGenerate(
@@ -286,6 +295,7 @@ const TechSensing: React.FC = () => {
           includeVideos,
           chinaFocus,
           indiaFocus,
+          activeProfileId,
         );
       }
       toast({ title: 'Report submitted', description: 'Generation is running in the background. It will appear in history when ready.' });

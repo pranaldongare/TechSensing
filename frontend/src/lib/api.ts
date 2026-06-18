@@ -309,6 +309,7 @@ export interface SensingReport {
   model_releases?: ModelRelease[];
   china_focus?: ChinaFocus | null;
   india_focus?: IndiaFocus | null;
+  personalized?: PersonalizedSections | null;
   relationships?: TechRelationshipMap | null;
   report_confidence?: string;
   confidence_note?: string;
@@ -491,6 +492,42 @@ export interface RadarQuadrantConfig {
 
 export interface RadarCustomization {
   quadrants: RadarQuadrantConfig[];
+}
+
+export interface DomainPrefs {
+  interested?: string[];
+  not_interested?: string[];
+}
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  role?: string;
+  tech_stack?: string[];
+  priorities?: string[];
+  competitors?: string[];
+  interests?: string[];
+  avoid?: string[];
+  domain_overrides?: Record<string, DomainPrefs>;
+  personalization?: number;
+  radar_customization?: { quadrants: { name: string; color?: string }[] } | null;
+  updated_at?: string;
+}
+
+export interface PersonalizedItem {
+  title: string;
+  kind?: string;
+  summary?: string;
+  why?: string[];
+  source_url?: string;
+  impact?: string;
+}
+
+export interface PersonalizedSections {
+  for_you?: PersonalizedItem[];
+  might_interest?: PersonalizedItem[];
+  profile_name?: string;
+  personalization?: number;
 }
 
 export interface OrgTechContext {
@@ -1119,6 +1156,7 @@ export const api = {
     includeVideos: boolean = false,
     chinaFocus: boolean = false,
     indiaFocus: boolean = false,
+    profileId?: string,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const response = await fetch(`${API_URL}/sensing/generate`, {
@@ -1138,6 +1176,7 @@ export const api = {
         include_videos: includeVideos,
         china_focus: chinaFocus,
         india_focus: indiaFocus,
+        profile_id: profileId || null,
       }),
     });
     const data = await response.json();
@@ -1157,6 +1196,7 @@ export const api = {
     includeVideos: boolean = false,
     chinaFocus: boolean = false,
     indiaFocus: boolean = false,
+    profileId?: string,
   ): Promise<{ status: string; tracking_id: string; message: string }> {
     const token = getAuthToken();
     const formData = new FormData();
@@ -1169,6 +1209,7 @@ export const api = {
     formData.append('include_videos', String(includeVideos));
     formData.append('china_focus', String(chinaFocus));
     formData.append('india_focus', String(indiaFocus));
+    if (profileId) formData.append('profile_id', profileId);
 
     const response = await fetch(`${API_URL}/sensing/generate-from-document`, {
       method: 'POST',
@@ -1196,9 +1237,10 @@ export const api = {
     return data;
   },
 
-  async sensingHistory(): Promise<{ reports: SensingHistoryItem[] }> {
+  async sensingHistory(profileId?: string): Promise<{ reports: SensingHistoryItem[] }> {
     const token = getAuthToken();
-    const response = await fetch(`${API_URL}/sensing/history`, {
+    const qs = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : '';
+    const response = await fetch(`${API_URL}/sensing/history${qs}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await response.json();
@@ -1402,6 +1444,36 @@ export const api = {
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Failed to update org context');
     return data;
+  },
+
+  async sensingListProfiles(): Promise<{ profiles: UserProfile[] }> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/profiles`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to load profiles');
+    return data;
+  },
+
+  async sensingSaveProfile(profile: UserProfile): Promise<UserProfile> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_URL}/sensing/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(profile),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Failed to save profile');
+    return data;
+  },
+
+  async sensingDeleteProfile(profileId: string): Promise<void> {
+    const token = getAuthToken();
+    await fetch(`${API_URL}/sensing/profile/${encodeURIComponent(profileId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
   },
 
   async sensingOnepager(

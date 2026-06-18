@@ -14,14 +14,14 @@ import {
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
   ArrowDown, Minus, Info, Zap, Network, Database, Edit3, LayoutGrid, Download, Globe2,
-  Plus, X,
+  Plus, X, Sparkles,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
   TopicPreferences, ModelRelease, Annotation,
-  ChinaFocus, ChinaStreamItem, IndiaFocus,
+  ChinaFocus, ChinaStreamItem, IndiaFocus, PersonalizedSections,
 } from '@/lib/api';
 import { downloadOnepagerPptx } from '@/lib/sensing-onepager-pptx';
 import { downloadOnepagerPdf } from '@/lib/sensing-onepager-pdf';
@@ -596,6 +596,9 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
         {/* China Focus (opt-in) */}
         {report.china_focus && <ChinaFocusSection cf={report.china_focus} />}
         {report.india_focus && <IndiaFocusSection cf={report.india_focus} />}
+        {report.personalized && ((report.personalized.for_you?.length || 0) > 0 || (report.personalized.might_interest?.length || 0) > 0) && (
+          <PersonalizedSectionsView p={report.personalized} />
+        )}
 
         {/* Latest Model Releases (GenAI domains only) */}
         {report.model_releases && report.model_releases.length > 0 && (
@@ -1781,6 +1784,58 @@ function IndiaFocusSection({ cf }: { cf: IndiaFocus }) {
                   )}
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PersonalizedSectionsView({ p }: { p: PersonalizedSections }) {
+  const fy = p.for_you || [];
+  const mi = p.might_interest || [];
+  if (!fy.length && !mi.length) return null;
+
+  const itemCard = (it: { title: string; summary?: string; why?: string[]; source_url?: string }, i: number) => (
+    <div key={i} className="rounded-md border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-sm font-medium">{it.title}</span>
+        {it.source_url && (
+          <a href={it.source_url} target="_blank" rel="noopener noreferrer" className="text-primary shrink-0">
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        )}
+      </div>
+      {it.summary && <p className="text-xs text-muted-foreground mt-1">{it.summary}</p>}
+      {it.why && it.why.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5 items-center">
+          <span className="text-[10px] text-muted-foreground">matched:</span>
+          {it.why.map((w, j) => <Badge key={j} variant="secondary" className="text-[10px]">{w}</Badge>)}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <Card className="border-l-4 border-l-primary">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Sparkles className="w-5 h-5 text-primary" />
+          For You{p.profile_name ? ` · ${p.profile_name}` : ''}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {fy.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {fy.map(itemCard)}
+          </div>
+        )}
+        {mi.length > 0 && (
+          <div className="space-y-2 border-t pt-3">
+            <h4 className="text-sm font-semibold text-muted-foreground">This might interest you</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {mi.map(itemCard)}
             </div>
           </div>
         )}
