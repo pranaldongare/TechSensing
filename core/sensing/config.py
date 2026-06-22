@@ -114,6 +114,13 @@ def get_feeds_for_domain(domain: str) -> List[str]:
     return list(dict.fromkeys(feeds))
 
 
+# How many must_include keywords (incl. profile interests/priorities) get their
+# own targeted retrieval query / patent keyword. Bounded for cost, but generous
+# enough that a rich reader profile isn't silently truncated.
+_MAX_KEYWORD_QUERIES = 8
+_MAX_PATENT_KEYWORDS = 5
+
+
 def get_search_queries_for_domain(
     domain: str,
     must_include: List[str] | None = None,
@@ -134,9 +141,12 @@ def get_search_queries_for_domain(
     if any(k in domain.lower() for k in AI_RELEVANT_KEYWORDS):
         queries.append(f"site:marktechpost.com {domain}")
 
-    # Add must-include keyword queries
+    # Add must-include keyword queries. Profile interests/priorities are folded
+    # into must_include upstream, so this cap also bounds how many of the
+    # reader's interests get their own targeted query — keep it generous enough
+    # that a rich profile isn't silently truncated, but bounded for cost.
     if must_include:
-        for kw in must_include[:5]:  # Cap at 5 extra queries
+        for kw in must_include[:_MAX_KEYWORD_QUERIES]:
             queries.append(f"{domain} {kw} news this week")
 
     return queries
@@ -195,7 +205,7 @@ def get_patent_queries_for_domain(
 
     # Append must_include keywords
     if must_include:
-        keywords.extend(must_include[:3])
+        keywords.extend(must_include[:_MAX_PATENT_KEYWORDS])
 
     return keywords
 

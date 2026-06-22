@@ -238,8 +238,84 @@ def build_profile_prompt(profile: UserProfile) -> str:
     return (
         "READER PROFILE — tailor the report to this reader. "
         + ". ".join(parts) + ". "
-        "Emphasize developments relevant to their interests, stack, and priorities; "
-        "flag technologies that complement or threaten their stack; tie recommendations "
-        "to their priorities. Do NOT omit major developments just because they fall "
-        "outside these interests."
+        "COVERAGE REQUIREMENTS: lead the executive summary with the developments most "
+        "relevant to the reader's interest areas and stack; flag technologies that "
+        "complement or threaten their stack. For EACH strategic priority listed above, "
+        "surface the most relevant development this period, or explicitly state that "
+        "there was no significant movement. Do NOT omit major developments just because "
+        "they fall outside these interests."
     )
+
+
+def build_profile_directives(profile: UserProfile) -> str:
+    """Explicit alignment directives routed through ``custom_requirements``.
+
+    Unlike :func:`build_profile_prompt` (which only reaches the core phase via
+    ``org_context``), this string is folded into ``custom_requirements`` and so
+    reaches BOTH classification (relevance weighting) and every report phase —
+    including the insights phase where recommendations are written.
+    """
+    if not profile:
+        return ""
+    bits = []
+    if profile.interests:
+        bits.append(f"interest areas ({', '.join(profile.interests)})")
+    if profile.priorities:
+        bits.append(f"strategic priorities ({', '.join(profile.priorities)})")
+    if profile.tech_stack:
+        bits.append(f"tech stack ({', '.join(profile.tech_stack)})")
+    if profile.competitors:
+        bits.append(f"watchlist ({', '.join(profile.competitors)})")
+    if not bits:
+        return ""
+    parts = [
+        "READER ALIGNMENT — the reader's " + "; ".join(bits) + ".",
+        "Score and prioritize developments that touch these notably higher "
+        "(do not invent relevance for genuinely off-topic items).",
+    ]
+    if profile.priorities:
+        parts.append(
+            "Frame each recommendation as a concrete action tied to a specific "
+            "strategic priority above, naming the priority it serves."
+        )
+    return " ".join(parts)
+
+
+def profile_match_terms(profile: UserProfile, domain: str = "") -> List[str]:
+    """Ordered, de-duplicated terms the report should align to: interests
+    (incl. per-domain overrides + competitors), priorities, and tech stack."""
+    if not profile:
+        return []
+    prefs = resolve_profile_prefs(profile, domain)
+    terms = list(prefs.get("interests") or [])
+    terms += list(profile.priorities or [])
+    terms += list(profile.tech_stack or [])
+    out: List[str] = []
+    seen = set()
+    for t in terms:
+        t = (t or "").strip()
+        key = t.lower()
+        if len(t) >= 2 and key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
+_TERM_RE_CACHE: Dict[str, "re.Pattern"] = {}
+
+
+def term_matches(term: str, text_lower: str) -> bool:
+    """Word-boundary match of ``term`` within an already-lowercased ``text``.
+
+    Word boundaries avoid the substring false-positives of naive matching
+    (e.g. "Go" matching "Google", "AI" matching "rain") while still letting
+    short, valid acronyms like "AI"/"ML" match the standalone word.
+    """
+    t = (term or "").strip().lower()
+    if not t:
+        return False
+    rx = _TERM_RE_CACHE.get(t)
+    if rx is None:
+        rx = re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)")
+        _TERM_RE_CACHE[t] = rx
+    return rx.search(text_lower) is not None

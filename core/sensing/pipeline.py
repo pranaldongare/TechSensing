@@ -275,6 +275,17 @@ async def run_sensing_pipeline(
             else keyword_instructions
         )
 
+    # Reader-alignment directives (relevance weighting + priority-tied
+    # recommendations) routed through custom_requirements so they reach
+    # classification AND every report phase, including insights/recommendations.
+    if profile and personalization_pct > 0:
+        from core.sensing.profile import build_profile_directives
+        _directives = build_profile_directives(profile)
+        if _directives:
+            full_requirements = (
+                f"{full_requirements}\n\n{_directives}" if full_requirements else _directives
+            )
+
     # Extract focus keywords from free-form custom_requirements for search
     focus_keywords = _extract_focus_keywords(custom_requirements)
     search_must_include = list(must_include or []) + focus_keywords
@@ -428,6 +439,14 @@ async def run_sensing_pipeline(
     # Boost relevance for articles matching custom_requirements focus keywords
     if focus_keywords:
         classified = _boost_focus_matches(classified, focus_keywords)
+
+    # Profile-aware re-ranking: boost articles matching the reader's interests/
+    # priorities so they survive the top-N relevance cut in report generation.
+    if profile and personalization_pct > 0:
+        from core.sensing.profile import profile_match_terms
+        classified = _boost_profile_matches(
+            classified, profile_match_terms(profile, domain), personalization_pct
+        )
 
     # Post-classification date filter: catch articles with dates assigned by the LLM
     # from article content (e.g., DuckDuckGo results that had no RawArticle date)
@@ -1039,6 +1058,42 @@ def _boost_focus_matches(
     return classified
 
 
+def _boost_profile_matches(
+    classified: list,
+    match_terms: list[str],
+    personalization_pct: int = 80,
+) -> list:
+    """Boost relevance for articles matching the active profile's interests /
+    priorities / tech stack so they survive the top-N relevance cut that the
+    report generator applies before writing the report.
+
+    Boost-only (no penalty): off-interest news is never suppressed here, which
+    preserves coverage of major developments (anti-filter-bubble). Boost
+    magnitude scales with the personalization slider.
+    """
+    if not match_terms:
+        return classified
+    from core.sensing.profile import term_matches
+
+    weight = max(0, min(100, int(personalization_pct or 0))) / 100.0
+    per_hit = 0.20 * weight
+    cap = 0.35 * weight
+    matched = 0
+    for article in classified:
+        text = f"{getattr(article, 'title', '')} {getattr(article, 'summary', '')}".lower()
+        hits = sum(1 for t in match_terms if term_matches(t, text))
+        if hits:
+            article.relevance_score = min(
+                1.0, (article.relevance_score or 0.0) + min(per_hit * hits, cap)
+            )
+            matched += 1
+    logger.info(
+        f"[Profile] relevance boost: {matched}/{len(classified)} articles matched "
+        f"({len(match_terms)} terms, weight={weight:.2f})"
+    )
+    return classified
+
+
 RING_ORDER = ["Adopt", "Trial", "Assess", "Hold"]
 
 
@@ -1412,6 +1467,14 @@ async def run_sensing_pipeline_from_document(
     if keyword_instructions:
         full_requirements += f"\n\n{keyword_instructions}"
 
+    # Reader-alignment directives (relevance weighting + priority-tied
+    # recommendations) — see web pipeline above for rationale.
+    if profile and personalization_pct > 0:
+        from core.sensing.profile import build_profile_directives
+        _directives = build_profile_directives(profile)
+        if _directives:
+            full_requirements += f"\n\n{_directives}"
+
     # Extract focus keywords from custom_requirements for search + boost
     focus_keywords = _extract_focus_keywords(custom_requirements or "")
     if focus_keywords:
@@ -1592,6 +1655,14 @@ async def run_sensing_pipeline_from_document(
     # Boost relevance for articles matching custom_requirements focus keywords
     if focus_keywords:
         classified = _boost_focus_matches(classified, focus_keywords)
+
+    # Profile-aware re-ranking: boost articles matching the reader's interests/
+    # priorities so they survive the top-N relevance cut in report generation.
+    if profile and personalization_pct > 0:
+        from core.sensing.profile import profile_match_terms
+        classified = _boost_profile_matches(
+            classified, profile_match_terms(profile, domain), personalization_pct
+        )
 
     # Post-classification date filter: catch articles with dates assigned by the LLM
     # from article content (e.g., DuckDuckGo results that had no RawArticle date)
