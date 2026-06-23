@@ -301,6 +301,30 @@ def profile_match_terms(profile: UserProfile, domain: str = "") -> List[str]:
     return out
 
 
+def profile_retrieval_terms(profile: UserProfile) -> List[str]:
+    """Terms that should additionally widen RETRIEVAL queries (search): strategic
+    priorities and tech stack.
+
+    Interests + competitors already enter retrieval via ``resolve_profile_prefs``
+    (folded into ``must_include``). Priorities/stack are kept OUT of
+    ``must_include`` on purpose — that is a mandatory classification filter — and
+    are used here only to fetch more candidate articles; classification and
+    synthesis weight them softly via the profile directives.
+    """
+    if not profile:
+        return []
+    terms = list(profile.priorities or []) + list(profile.tech_stack or [])
+    out: List[str] = []
+    seen = set()
+    for t in terms:
+        t = (t or "").strip()
+        key = t.lower()
+        if len(t) >= 2 and key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
 _TERM_RE_CACHE: Dict[str, "re.Pattern"] = {}
 
 

@@ -292,6 +292,22 @@ async def run_sensing_pipeline(
     if focus_keywords:
         logger.info(f"Focus keywords from custom_requirements: {focus_keywords}")
 
+    # Tech stack + strategic priorities widen RETRIEVAL only (so relevant
+    # articles get fetched). Deliberately NOT added to must_include — that is a
+    # mandatory classification filter; classification/synthesis already weight
+    # these softly via the profile directives.
+    if profile and personalization_pct > 0:
+        from core.sensing.profile import profile_retrieval_terms
+        _retrieval_extra = [
+            t for t in profile_retrieval_terms(profile) if t not in search_must_include
+        ]
+        if _retrieval_extra:
+            search_must_include = list(search_must_include) + _retrieval_extra
+            logger.info(
+                f"[Profile] retrieval widened with {len(_retrieval_extra)} "
+                f"priority/stack terms: {_retrieval_extra}"
+            )
+
     # --- Stage 1: Ingest (all 8 sources in parallel) ---
     logger.info(f"[Stage 1/7] INGEST — launching all sources in parallel... [{_elapsed()}]")
     await _emit("ingest", 10, "Fetching all sources in parallel...")
@@ -1501,6 +1517,20 @@ async def run_sensing_pipeline_from_document(
         search_must_include = list(effective_must_include or []) + focus_keywords
     else:
         search_must_include = effective_must_include
+
+    # Tech stack + strategic priorities widen RETRIEVAL only — see web pipeline.
+    if profile and personalization_pct > 0:
+        from core.sensing.profile import profile_retrieval_terms
+        _retrieval_extra = [
+            t for t in profile_retrieval_terms(profile)
+            if t not in (search_must_include or [])
+        ]
+        if _retrieval_extra:
+            search_must_include = list(search_must_include or []) + _retrieval_extra
+            logger.info(
+                f"[Profile] retrieval widened with {len(_retrieval_extra)} "
+                f"priority/stack terms: {_retrieval_extra}"
+            )
 
     # --- Stage 3: Split document into pseudo-articles ---
     logger.info(f"[Stage 3/9] SPLIT — creating pseudo-articles... [{_elapsed()}]")
