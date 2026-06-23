@@ -277,6 +277,7 @@ def sensing_report_core_prompt(
     experience_block: str = "",
     prompt_patch: str = "",
     feedback_block: str = "",
+    audience_label: str = "the reader",
 ) -> list[dict]:
     """
     Phase 1 prompt: executive summary, headline moves, and key trends.
@@ -312,7 +313,9 @@ def sensing_report_core_prompt(
                 + people_block
                 + "SECTION GUIDELINES:\n"
                 "- Bottom line: Write a 2-3 sentence 'bottom line' — the single most important "
-                "takeaway a CTO should know this week. Be direct and actionable.\n\n"
+                f"takeaway {audience_label} should know this period, framed for that audience's "
+                "concerns. Be direct and actionable. Do NOT name a different role than the "
+                "intended audience.\n\n"
                 "- Top events: Identify the TOP 10 most impactful events of the week, "
                 "ranked by significance across ALL segments. For each event provide:\n"
                 "  * headline: 1-2 sentence description of what happened\n"

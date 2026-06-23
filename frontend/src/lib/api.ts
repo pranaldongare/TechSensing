@@ -310,6 +310,7 @@ export interface SensingReport {
   china_focus?: ChinaFocus | null;
   india_focus?: IndiaFocus | null;
   personalized?: PersonalizedSections | null;
+  technical_picks?: TechnicalPicks | null;
   relationships?: TechRelationshipMap | null;
   report_confidence?: string;
   confidence_note?: string;
@@ -528,6 +529,20 @@ export interface PersonalizedSections {
   might_interest?: PersonalizedItem[];
   profile_name?: string;
   personalization?: number;
+}
+
+export interface TechnicalItem {
+  title: string;
+  url?: string;
+  summary?: string;
+  meta?: string;
+  published?: string;
+}
+
+export interface TechnicalPicks {
+  github?: TechnicalItem[];
+  arxiv?: TechnicalItem[];
+  huggingface?: TechnicalItem[];
 }
 
 export interface OrgTechContext {

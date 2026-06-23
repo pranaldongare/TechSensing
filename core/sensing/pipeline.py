@@ -841,6 +841,24 @@ async def run_sensing_pipeline(
         except Exception as e:
             logger.warning(f"Personalization pass failed (non-fatal): {e}")
 
+    # --- Technical Picks (latest GitHub / arXiv / HuggingFace) for builders ---
+    if profile:
+        try:
+            from core.sensing.technical_picks import is_technical_role, build_technical_picks
+
+            if is_technical_role(profile.role):
+                hf_articles: list = []
+                try:
+                    from core.sensing.sources.huggingface_models import fetch_huggingface_models
+                    hf_articles = await fetch_huggingface_models(domain, lookback_days=lookback_days)
+                except Exception as e:
+                    logger.warning(f"HuggingFace fetch failed (non-fatal): {e}")
+                report.technical_picks = build_technical_picks(
+                    github_articles, arxiv_articles, hf_articles
+                )
+        except Exception as e:
+            logger.warning(f"Technical picks build failed (non-fatal): {e}")
+
     return SensingPipelineResult(
         report=report,
         raw_article_count=len(all_raw),
@@ -2016,6 +2034,24 @@ async def run_sensing_pipeline_from_document(
             )
         except Exception as e:
             logger.warning(f"Personalization pass failed (non-fatal): {e}")
+
+    # --- Technical Picks (latest GitHub / arXiv / HuggingFace) for builders ---
+    if profile:
+        try:
+            from core.sensing.technical_picks import is_technical_role, build_technical_picks
+
+            if is_technical_role(profile.role):
+                hf_articles: list = []
+                try:
+                    from core.sensing.sources.huggingface_models import fetch_huggingface_models
+                    hf_articles = await fetch_huggingface_models(domain, lookback_days=lookback_days)
+                except Exception as e:
+                    logger.warning(f"HuggingFace fetch failed (non-fatal): {e}")
+                report.technical_picks = build_technical_picks(
+                    github_articles, arxiv_articles, hf_articles
+                )
+        except Exception as e:
+            logger.warning(f"Technical picks build failed (non-fatal): {e}")
 
     return SensingPipelineResult(
         report=report,

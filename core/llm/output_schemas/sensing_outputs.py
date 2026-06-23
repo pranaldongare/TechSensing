@@ -558,7 +558,7 @@ class ReportCore(LLMOutputBase):
     report_title: str = Field(description="Report title including date range.")
     bottom_line: str = Field(
         default="",
-        description="2-3 sentence 'so what' — the single most important takeaway for a CTO this week.",
+        description="2-3 sentence 'so what' — the single most important takeaway for the report's intended reader this period.",
     )
     executive_summary: str = Field(
         description=(
@@ -1048,6 +1048,25 @@ class PersonalizedSections(BaseModel):
     personalization: int = Field(default=0)
 
 
+class TechnicalItem(BaseModel):
+    """A single builder-oriented artifact (repo / paper / model)."""
+
+    title: str = Field(default="", description="Repo name, paper title, or model id.")
+    url: str = Field(default="", description="Link to the artifact.")
+    summary: str = Field(default="", description="Short description.")
+    meta: str = Field(default="", description="Compact metadata (stars/language, authors, downloads).")
+    published: str = Field(default="", description="Published / last-updated date, if known.")
+
+
+class TechnicalPicks(BaseModel):
+    """Latest GitHub repos, arXiv papers, and HuggingFace models — surfaced for
+    builder-oriented roles (developer / engineering lead)."""
+
+    github: List[TechnicalItem] = Field(default_factory=list)
+    arxiv: List[TechnicalItem] = Field(default_factory=list)
+    huggingface: List[TechnicalItem] = Field(default_factory=list)
+
+
 class TechSensingReport(LLMOutputBase):
     """Full report (assembled from Phase 1 core + Phase 2 radar + Phase 3 insights + Phase 4 details)."""
 
@@ -1153,6 +1172,10 @@ class TechSensingReport(LLMOutputBase):
     personalized: Optional[PersonalizedSections] = Field(
         default=None,
         description="Profile-personalized curation (For You + This might interest you).",
+    )
+    technical_picks: Optional[TechnicalPicks] = Field(
+        default=None,
+        description="Latest GitHub repos / arXiv papers / HuggingFace models for technical roles.",
     )
 
 

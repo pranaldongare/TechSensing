@@ -14,14 +14,14 @@ import {
   Lightbulb, FileText, Building2, Cpu, Target, Newspaper, Link2, Play,
   ThumbsUp, ThumbsDown, RefreshCw, Loader2, AlertTriangle, ArrowUp,
   ArrowDown, Minus, Info, Zap, Network, Database, Edit3, LayoutGrid, Download, Globe2,
-  Plus, X, Sparkles,
+  Plus, X, Sparkles, Github, Boxes,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   SensingReport, SensingRadarItem, SensingRadarItemDetail, SensingMarketSignal,
   SensingHeadlineMove, SensingTrendingVideo, SensingTopEvent, SensingBlindSpot,
   TopicPreferences, ModelRelease, Annotation,
-  ChinaFocus, ChinaStreamItem, IndiaFocus, PersonalizedSections,
+  ChinaFocus, ChinaStreamItem, IndiaFocus, PersonalizedSections, TechnicalPicks,
 } from '@/lib/api';
 import { downloadOnepagerPptx } from '@/lib/sensing-onepager-pptx';
 import { downloadOnepagerPdf } from '@/lib/sensing-onepager-pdf';
@@ -598,6 +598,9 @@ const SensingReportRenderer: React.FC<SensingReportRendererProps> = ({ report, m
         {report.india_focus && <IndiaFocusSection cf={report.india_focus} />}
         {report.personalized && ((report.personalized.for_you?.length || 0) > 0 || (report.personalized.might_interest?.length || 0) > 0) && (
           <PersonalizedSectionsView p={report.personalized} />
+        )}
+        {report.technical_picks && ((report.technical_picks.github?.length || 0) > 0 || (report.technical_picks.arxiv?.length || 0) > 0 || (report.technical_picks.huggingface?.length || 0) > 0) && (
+          <TechnicalPicksView tp={report.technical_picks} />
         )}
 
         {/* Latest Model Releases (GenAI domains only) */}
@@ -1839,6 +1842,52 @@ function PersonalizedSectionsView({ p }: { p: PersonalizedSections }) {
             </div>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TechnicalPicksView({ tp }: { tp: TechnicalPicks }) {
+  const buckets: { key: keyof TechnicalPicks; label: string; icon: React.ReactNode }[] = [
+    { key: 'github', label: 'GitHub repos', icon: <Github className="w-4 h-4" /> },
+    { key: 'arxiv', label: 'arXiv papers', icon: <FileText className="w-4 h-4" /> },
+    { key: 'huggingface', label: 'HuggingFace models', icon: <Boxes className="w-4 h-4" /> },
+  ];
+  const nonEmpty = buckets.filter((b) => (tp[b.key]?.length || 0) > 0);
+  if (!nonEmpty.length) return null;
+
+  return (
+    <Card className="border-l-4 border-l-emerald-500">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Cpu className="w-5 h-5 text-emerald-600" />
+          For Builders — Latest Repos, Papers &amp; Models
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {nonEmpty.map((b) => (
+            <div key={b.key} className="space-y-2">
+              <h4 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+                {b.icon}{b.label}
+              </h4>
+              <ul className="space-y-2">
+                {(tp[b.key] || []).map((it, i) => (
+                  <li key={i} className="rounded-md border p-2">
+                    {it.url ? (
+                      <a href={it.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-primary hover:underline break-words inline-flex items-start gap-1">
+                        {it.title}<ExternalLink className="w-3 h-3 mt-1 shrink-0" />
+                      </a>
+                    ) : (
+                      <span className="text-sm font-medium break-words">{it.title}</span>
+                    )}
+                    {it.meta && <p className="text-[11px] text-muted-foreground mt-0.5">{it.meta}</p>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );

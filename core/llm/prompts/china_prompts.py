@@ -124,6 +124,7 @@ def china_report_core_prompt(
     experience_block: str = "",
     prompt_patch: str = "",
     feedback_block: str = "",
+    audience_label: str = "the reader",  # accepted for call-site parity; region framing is fixed
 ) -> list[dict]:
     """Phase 1 (China): title, bottom line, executive summary, top events, key trends."""
     people_block = ""

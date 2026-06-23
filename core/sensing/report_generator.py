@@ -70,6 +70,19 @@ ROLE_PROMPTS = {
 }
 
 
+# Human-readable audience label per role — used to frame role-specific output
+# (e.g. the Bottom Line) instead of a hardcoded "CTO".
+ROLE_AUDIENCE = {
+    "cto": "a CTO / technology strategy leader",
+    "engineering_lead": "an engineering lead / architect",
+    "developer": "a software developer / builder",
+    "product_manager": "a product manager",
+    "analyst": "a technology analyst",
+    "exec": "a business executive",
+    "general": "the reader",
+}
+
+
 async def generate_report(
     classified_articles: List[ClassifiedArticle],
     domain: str = "Technology",
@@ -102,6 +115,9 @@ async def generate_report(
     role_prompt = ROLE_PROMPTS.get(stakeholder_role, "")
     if role_prompt:
         custom_requirements = f"{role_prompt}\n\n{custom_requirements}" if custom_requirements else role_prompt
+
+    # Audience label frames role-specific output (e.g. the Bottom Line).
+    audience_label = ROLE_AUDIENCE.get(stakeholder_role, "the reader")
 
     # Truncate to top 50 by relevance if too many (avoid context overflow)
     sorted_articles = sorted(
@@ -169,6 +185,7 @@ async def generate_report(
         experience_block=experience_block,
         prompt_patch=_core_patch,
         feedback_block=feedback_block,
+        audience_label=audience_label,
     )
 
     phase1_start = time.time()
