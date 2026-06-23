@@ -24,6 +24,16 @@ _MIGHT_INTEREST_CAP = 4
 _FOR_YOU_MAX = 8
 
 
+def _clip(text: str, limit: int) -> str:
+    """Trim to ``limit`` chars on a word boundary, adding an ellipsis when cut —
+    so titles/summaries never end mid-word."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(",.;:—- ")
+    return f"{cut}…"
+
+
 def _candidates(report) -> list[dict]:
     """Flatten radar items, top events, and key trends into scored candidates."""
     out: list[dict] = []
@@ -111,9 +121,9 @@ def build_personalized_sections(
 
     def _mk(c: dict) -> PersonalizedItem:
         return PersonalizedItem(
-            title=c["title"][:120],
+            title=_clip(c["title"], 200),
             kind=c["kind"],
-            summary=(c["summary"] or "")[:240],
+            summary=_clip(c["summary"], 300),
             why=c["why"][:5],
             source_url=c["source_url"],
             impact=c["impact"],
