@@ -45,42 +45,9 @@ from core.sensing.novelty_validator import validate_novelty
 logger = logging.getLogger("sensing.report")
 
 
-ROLE_PROMPTS = {
-    "cto": (
-        "AUDIENCE: Chief Technology Officer. "
-        "Emphasize strategic implications, competitive positioning, build-vs-buy decisions, "
-        "technology bets, organizational readiness, and 12-24 month horizon."
-    ),
-    "engineering_lead": (
-        "AUDIENCE: Engineering Lead / Architect. "
-        "Emphasize technical architecture, integration complexity, migration paths, "
-        "team skill requirements, and 3-12 month adoption timelines."
-    ),
-    "developer": (
-        "AUDIENCE: Software Developer. "
-        "Emphasize getting-started guides, API quality, documentation maturity, "
-        "community ecosystem, and practical hands-on evaluation."
-    ),
-    "product_manager": (
-        "AUDIENCE: Product Manager. "
-        "Emphasize user impact, market differentiation, competitor adoption, "
-        "time-to-value, and feature parity analysis."
-    ),
-    "general": "",
-}
-
-
-# Human-readable audience label per role — used to frame role-specific output
-# (e.g. the Bottom Line) instead of a hardcoded "CTO".
-ROLE_AUDIENCE = {
-    "cto": "a CTO / technology strategy leader",
-    "engineering_lead": "an engineering lead / architect",
-    "developer": "a software developer / builder",
-    "product_manager": "a product manager",
-    "analyst": "a technology analyst",
-    "exec": "a business executive",
-    "general": "the reader",
-}
+# Role tailoring (emphasis, horizon, depth, metrics, recommendation style, and
+# the Bottom Line audience label) is centralized in core.sensing.roles.
+from core.sensing.roles import build_role_directive, role_audience
 
 
 async def generate_report(
@@ -111,13 +78,14 @@ async def generate_report(
       Phase 3 — Insights (signals, sections, recommendations, notable articles)
       Phase 4 — Details (detailed write-up for each radar item, batched)
     """
-    # Inject stakeholder role prompt into custom_requirements
-    role_prompt = ROLE_PROMPTS.get(stakeholder_role, "")
+    # Inject the structured role directive (emphasis, horizon, depth, metrics,
+    # recommendation style, BLUF) into custom_requirements.
+    role_prompt = build_role_directive(stakeholder_role)
     if role_prompt:
         custom_requirements = f"{role_prompt}\n\n{custom_requirements}" if custom_requirements else role_prompt
 
     # Audience label frames role-specific output (e.g. the Bottom Line).
-    audience_label = ROLE_AUDIENCE.get(stakeholder_role, "the reader")
+    audience_label = role_audience(stakeholder_role)
 
     # Truncate to top 50 by relevance if too many (avoid context overflow)
     sorted_articles = sorted(

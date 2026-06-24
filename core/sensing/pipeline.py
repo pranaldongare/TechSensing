@@ -464,6 +464,11 @@ async def run_sensing_pipeline(
             classified, profile_match_terms(profile, domain), personalization_pct
         )
 
+    # Role-aware re-ranking: nudge toward the kinds of developments this role
+    # cares about. Applies whenever a role is set (independent of the slider).
+    if profile and getattr(profile, "role", "general") not in ("", "general"):
+        classified = _boost_role_matches(classified, profile.role)
+
     # Post-classification date filter: catch articles with dates assigned by the LLM
     # from article content (e.g., DuckDuckGo results that had no RawArticle date)
     before_post_filter = len(classified)
@@ -1128,6 +1133,32 @@ def _boost_profile_matches(
     return classified
 
 
+def _boost_role_matches(classified: list, role: str, boost: float = 0.10) -> list:
+    """Nudge relevance toward the kinds of developments a role cares about
+    (analyst -> papers/benchmarks, exec -> funding/market, developer ->
+    releases/tooling, etc.). Boost-only, so nothing important is suppressed.
+    """
+    from core.sensing.roles import role_boost_terms, role_boost_sources
+    from core.sensing.profile import term_matches
+
+    terms = role_boost_terms(role)
+    sources = {s.lower() for s in role_boost_sources(role)}
+    if not terms and not sources:
+        return classified
+
+    matched = 0
+    for article in classified:
+        text = f"{getattr(article, 'title', '')} {getattr(article, 'summary', '')}".lower()
+        hits = sum(1 for t in terms if term_matches(t, text))
+        if sources and (getattr(article, "source", "") or "").lower() in sources:
+            hits += 1
+        if hits:
+            article.relevance_score = min(1.0, (article.relevance_score or 0.0) + min(boost * hits, 0.20))
+            matched += 1
+    logger.info(f"[Role:{role}] relevance boost: {matched}/{len(classified)} articles matched")
+    return classified
+
+
 RING_ORDER = ["Adopt", "Trial", "Assess", "Hold"]
 
 
@@ -1711,6 +1742,11 @@ async def run_sensing_pipeline_from_document(
         classified = _boost_profile_matches(
             classified, profile_match_terms(profile, domain), personalization_pct
         )
+
+    # Role-aware re-ranking: nudge toward the kinds of developments this role
+    # cares about. Applies whenever a role is set (independent of the slider).
+    if profile and getattr(profile, "role", "general") not in ("", "general"):
+        classified = _boost_role_matches(classified, profile.role)
 
     # Post-classification date filter: catch articles with dates assigned by the LLM
     # from article content (e.g., DuckDuckGo results that had no RawArticle date)
