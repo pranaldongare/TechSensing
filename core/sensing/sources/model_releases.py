@@ -450,10 +450,15 @@ async def fetch_artificial_analysis_releases(
                             continue
                         try:
                             # Media dates can be YYYY-MM (no day) or YYYY-MM-DD.
-                            # For YYYY-MM, treat as the LAST day of that month
-                            # (the model was released sometime in that month —
-                            # parsing as the 1st would wrongly exclude releases
-                            # whose true date falls inside the lookback window).
+                            # Keep two dates:
+                            #  - rdt: used ONLY for the lookback cutoff test. For a
+                            #    YYYY-MM value we use the LAST day of that month so a
+                            #    month-only release whose true date falls inside the
+                            #    window isn't wrongly excluded.
+                            #  - display_dt: the date we actually surface. We only know
+                            #    the month, so use the FIRST of the month — never a
+                            #    fabricated end-of-month date (which, for the current
+                            #    month, would be in the future, e.g. "2026-06-30").
                             if len(rd) <= 7:
                                 base = datetime.strptime(rd, "%Y-%m")
                                 if base.month == 12:
@@ -461,10 +466,19 @@ async def fetch_artificial_analysis_releases(
                                 else:
                                     next_month_start = datetime(base.year, base.month + 1, 1)
                                 rdt = next_month_start - timedelta(days=1)
+                                display_dt = base
                             else:
                                 rdt = datetime.fromisoformat(rd)
+                                display_dt = rdt
                             if rdt.tzinfo is not None:
                                 rdt = rdt.replace(tzinfo=None)
+                            if display_dt.tzinfo is not None:
+                                display_dt = display_dt.replace(tzinfo=None)
+                            # Safety: never surface a release date in the future
+                            # (month-only precision or an upstream data error).
+                            _today = datetime.now(timezone.utc).replace(tzinfo=None)
+                            if display_dt > _today:
+                                display_dt = _today
                             if rdt < cutoff:
                                 m_old_date += 1
                                 continue
@@ -500,7 +514,7 @@ async def fetch_artificial_analysis_releases(
                         bucket.append(ModelRelease(
                             model_name=mm_name,
                             organization=mm_org,
-                            release_date=rdt.strftime("%Y-%m-%d"),
+                            release_date=display_dt.strftime("%Y-%m-%d"),
                             release_status="Released",
                             parameters="",
                             license="",
